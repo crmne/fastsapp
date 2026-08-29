@@ -466,18 +466,74 @@ impl Archive {
         Ok(())
     }
 
-    /// The newest `limit` messages of a chat older than `before` (all of
-    /// them when `None`), oldest first.
-    pub fn messages(&self, chat: &str, before: Option<i64>, limit: usize) -> Result<Vec<Message>> {
+    /// The newest `limit` messages of a chat older than `before`, the time
+    /// and id of a message (all of them when `None`), oldest first. Several
+    /// messages can share a second (an album), so the boundary is the
+    /// message itself, not its time.
+    pub fn messages(
+        &self,
+        chat: &str,
+        before: Option<(i64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<Message>> {
         let mut statement = self.connection.prepare(
             "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded
              FROM messages
-             WHERE chat = ?1 AND timestamp < ?2
+             WHERE chat = ?1 AND (timestamp < ?2 OR (timestamp = ?2 AND rowid <
+                 (SELECT rowid FROM messages WHERE chat = ?1 AND id = ?3)))
              ORDER BY timestamp DESC, rowid DESC
-             LIMIT ?3",
+             LIMIT ?4",
+        )?;
+        let (before_time, before_id) = before.unwrap_or((i64::MAX, ""));
+        let rows =
+            statement.query_map(params![chat, before_time, before_id, limit as i64], |row| {
+                let content: String = row.get(5)?;
+                let quoted: Option<String> = row.get(7)?;
+                let reactions: String = row.get(8)?;
+                let mentions: String = row.get(11)?;
+                Ok(Message {
+                    id: row.get(0)?,
+                    chat: chat.to_owned(),
+                    sender: row.get(1)?,
+                    sender_name: row.get(2)?,
+                    from_me: row.get(3)?,
+                    timestamp: row.get(4)?,
+                    content: serde_json::from_str(&content).unwrap_or(Content::Unsupported {
+                        what: "unreadable".into(),
+                    }),
+                    status: status_from_rank(row.get(6)?),
+                    quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
+                    reactions: serde_json::from_str(&reactions).unwrap_or_default(),
+                    edited: row.get(9)?,
+                    mentions: serde_json::from_str(&mentions).unwrap_or_default(),
+                    forwarded: row.get(12)?,
+                    thumbnail: row.get(10)?,
+                })
+            })?;
+        let mut messages: Vec<Message> = rows.collect::<Result<_>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// Every message from `from` (inclusive) up to `before` (exclusive),
+    /// oldest first, capped at `limit`.
+    pub fn messages_range(
+        &self,
+        chat: &str,
+        from: i64,
+        before: (i64, &str),
+        limit: usize,
+    ) -> Result<Vec<Message>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded
+             FROM messages
+             WHERE chat = ?1 AND timestamp >= ?2 AND (timestamp < ?3 OR (timestamp = ?3 AND rowid <
+                 (SELECT rowid FROM messages WHERE chat = ?1 AND id = ?4)))
+             ORDER BY timestamp ASC, rowid ASC
+             LIMIT ?5",
         )?;
         let rows = statement.query_map(
-            params![chat, before.unwrap_or(i64::MAX), limit as i64],
+            params![chat, from, before.0, before.1, limit as i64],
             |row| {
                 let content: String = row.get(5)?;
                 let quoted: Option<String> = row.get(7)?;
@@ -503,51 +559,6 @@ impl Archive {
                 })
             },
         )?;
-        let mut messages: Vec<Message> = rows.collect::<Result<_>>()?;
-        messages.reverse();
-        Ok(messages)
-    }
-
-    /// Every message from `from` (inclusive) up to `before` (exclusive),
-    /// oldest first, capped at `limit`.
-    pub fn messages_range(
-        &self,
-        chat: &str,
-        from: i64,
-        before: i64,
-        limit: usize,
-    ) -> Result<Vec<Message>> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded
-             FROM messages
-             WHERE chat = ?1 AND timestamp >= ?2 AND timestamp < ?3
-             ORDER BY timestamp ASC, rowid ASC
-             LIMIT ?4",
-        )?;
-        let rows = statement.query_map(params![chat, from, before, limit as i64], |row| {
-            let content: String = row.get(5)?;
-            let quoted: Option<String> = row.get(7)?;
-            let reactions: String = row.get(8)?;
-            let mentions: String = row.get(11)?;
-            Ok(Message {
-                id: row.get(0)?,
-                chat: chat.to_owned(),
-                sender: row.get(1)?,
-                sender_name: row.get(2)?,
-                from_me: row.get(3)?,
-                timestamp: row.get(4)?,
-                content: serde_json::from_str(&content).unwrap_or(Content::Unsupported {
-                    what: "unreadable".into(),
-                }),
-                status: status_from_rank(row.get(6)?),
-                quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
-                reactions: serde_json::from_str(&reactions).unwrap_or_default(),
-                edited: row.get(9)?,
-                mentions: serde_json::from_str(&mentions).unwrap_or_default(),
-                forwarded: row.get(12)?,
-                thumbnail: row.get(10)?,
-            })
-        })?;
         rows.collect()
     }
 
@@ -1109,10 +1120,49 @@ mod tests {
             newest.iter().map(|m| m.timestamp).collect::<Vec<_>>(),
             vec![107, 108, 109]
         );
-        let older = archive.messages(chat, Some(107), 3).expect("messages");
+        let older = archive
+            .messages(chat, Some((107, "m7")), 3)
+            .expect("messages");
         assert_eq!(
             older.iter().map(|m| m.timestamp).collect::<Vec<_>>(),
             vec![104, 105, 106]
+        );
+    }
+
+    #[test]
+    fn paging_keeps_every_message_of_a_second() {
+        // An album: five pictures in one second, paged three at a time.
+        let archive = Archive::in_memory().expect("opens");
+        let chat = "1@s.whatsapp.net";
+        archive.ensure_chat(chat, "A").expect("chat");
+        archive
+            .insert_message(&message(chat, "before", 99, false), None)
+            .expect("insert");
+        for index in 0..5 {
+            archive
+                .insert_message(&message(chat, &format!("a{index}"), 100, false), None)
+                .expect("insert");
+        }
+        let first = archive.messages(chat, None, 3).expect("messages");
+        assert_eq!(
+            first.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["a2", "a3", "a4"]
+        );
+        let oldest = &first[0];
+        let second = archive
+            .messages(chat, Some((oldest.timestamp, &oldest.id)), 3)
+            .expect("messages");
+        assert_eq!(
+            second.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["before", "a0", "a1"],
+            "the rest of the second comes next, not the message before it alone"
+        );
+        let range = archive
+            .messages_range(chat, 100, (100, "a2"), 10)
+            .expect("range");
+        assert_eq!(
+            range.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["a0", "a1"]
         );
     }
 
@@ -1129,7 +1179,9 @@ mod tests {
                 )
                 .expect("insert");
         }
-        let range = archive.messages_range(chat, 102, 105, 10).expect("range");
+        let range = archive
+            .messages_range(chat, 102, (105, "m5"), 10)
+            .expect("range");
         assert_eq!(
             range.iter().map(|m| m.timestamp).collect::<Vec<_>>(),
             vec![102, 103, 104]

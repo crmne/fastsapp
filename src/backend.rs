@@ -45,6 +45,11 @@ impl LinkStatus {
     }
 }
 
+/// Where a page of messages ends: the time and id of the oldest message
+/// loaded, so the next page starts right after it even when several
+/// messages share that second.
+pub type PageKey = (i64, String);
+
 #[derive(Clone, Debug)]
 pub enum Command {
     SendText {
@@ -57,12 +62,16 @@ pub enum Command {
         chat: ChatId,
         composing: bool,
     },
-    /// The chat is on screen: send read receipts for what is unread.
-    MarkRead(ChatId),
+    /// The chat is on screen: clear its unread count, and send read
+    /// receipts for what was unread when `receipts` is on.
+    MarkRead {
+        chat: ChatId,
+        receipts: bool,
+    },
     /// Messages of a chat from the archive, older than `before` when given.
     LoadChat {
         chat: ChatId,
-        before: Option<i64>,
+        before: Option<PageKey>,
     },
     /// Ask the phone for what came before the archive's earliest message.
     FetchOlder(ChatId),
@@ -80,7 +89,17 @@ pub enum Command {
     LoadUntil {
         chat: ChatId,
         id: String,
-        before: i64,
+        before: PageKey,
+    },
+    /// Internal: the phone could not be asked for older messages.
+    OlderFailed {
+        chat: ChatId,
+        error: String,
+    },
+    /// Internal: a group's metadata could not be fetched; it will be asked
+    /// for again.
+    GroupInfoFailed {
+        chat: ChatId,
     },
     EditText {
         chat: ChatId,

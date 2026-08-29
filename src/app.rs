@@ -65,6 +65,11 @@ pub struct Conversation {
     pub phone_exhausted: bool,
     /// When the phone last answered, for the cooldown.
     pub phone_answered: Option<Instant>,
+    /// Requests the phone answered with nothing, in a row; each doubles
+    /// the wait before the next.
+    pub phone_misses: u32,
+    /// Older messages arrived since the phone was last asked.
+    pub phone_delivered: bool,
 }
 
 impl Conversation {
@@ -482,10 +487,14 @@ impl App {
                 }
                 Event::Chats(chats) => {
                     self.chats = chats;
-                    if let Some(open) = self.open_chat.clone()
-                        && self.chat(&open).is_none()
-                    {
-                        self.open_chat = None;
+                    if let Some(open) = self.open_chat.clone() {
+                        if self.chat(&open).is_none() {
+                            self.open_chat = None;
+                        } else {
+                            // The chat kept from last time shows its
+                            // archive right away, connected or not.
+                            self.ensure_loaded(&open);
+                        }
                     }
                 }
                 Event::ChatUpdated(chat) => self.handle_chat_updated(*chat),
@@ -497,6 +506,9 @@ impl App {
                 } => {
                     let conversation = self.conversations.entry(chat.clone()).or_default();
                     let was_empty = conversation.messages.is_empty();
+                    if older && !messages.is_empty() {
+                        conversation.phone_delivered = true;
+                    }
                     conversation.merge(messages, older);
                     if older {
                         conversation.loading_older = false;
@@ -603,6 +615,15 @@ impl App {
                     conversation.fetching_phone = false;
                     conversation.phone_exhausted = !more;
                     conversation.phone_answered = Some(Instant::now());
+                    if conversation.phone_delivered {
+                        conversation.phone_misses = 0;
+                    } else {
+                        conversation.phone_misses = (conversation.phone_misses + 1).min(7);
+                    }
+                    conversation.phone_delivered = false;
+                    // Whatever the phone sent is in the archive, even when
+                    // it came late: page the archive again before asking.
+                    conversation.complete = false;
                 }
                 Event::Error(message) => self.toast_error(message),
             }
@@ -638,7 +659,8 @@ impl App {
     }
 
     fn handle_chat_updated(&mut self, chat: Chat) {
-        let is_open = self.open_chat.as_deref() == Some(chat.id.as_str());
+        let is_open =
+            self.open_chat.as_deref() == Some(chat.id.as_str()) && self.page == Page::Chats;
         let mut chat = chat;
         if is_open && chat.unread > 0 && self.window_focused {
             chat.unread = 0;
@@ -701,10 +723,11 @@ impl App {
             return;
         }
         conversation.loading_older = true;
+        let before = (oldest.timestamp, oldest.id.clone());
         self.scroll_anchor = Some(oldest.id.clone());
         self.backend.send(Command::LoadChat {
             chat: chat.to_owned(),
-            before: Some(oldest.timestamp),
+            before: Some(before),
         });
     }
 
@@ -717,9 +740,16 @@ impl App {
         if conversation.fetching_phone || conversation.phone_exhausted {
             return;
         }
+        // Only a linked, connected phone can answer; asking again after an
+        // empty answer waits twice as long each time.
+        if !matches!(self.link, LinkStatus::Connected) {
+            return;
+        }
+        let cooldown =
+            (PHONE_COOLDOWN * 2u32.pow(conversation.phone_misses)).min(Duration::from_secs(600));
         if conversation
             .phone_answered
-            .is_some_and(|answered| answered.elapsed() < PHONE_COOLDOWN)
+            .is_some_and(|answered| answered.elapsed() < cooldown)
         {
             return;
         }
@@ -735,16 +765,20 @@ impl App {
         if let Some(known) = self.chat_mut(chat) {
             known.unread = 0;
         }
-        if self.settings.send_read_receipts {
-            self.backend.send(Command::MarkRead(chat.to_owned()));
-        }
+        // The archive's count clears either way; receipts are a setting.
+        self.backend.send(Command::MarkRead {
+            chat: chat.to_owned(),
+            receipts: self.settings.send_read_receipts,
+        });
     }
 
     fn open_chat(&mut self, id: ChatId) {
         if self.open_chat.as_deref() != Some(id.as_str()) {
             if let Some(previous) = self.open_chat.take() {
                 let draft = std::mem::take(&mut self.composer);
-                if draft.trim().is_empty() {
+                // An edit in progress is dropped, not kept as a draft that
+                // would send the old text again.
+                if self.editing.take().is_some() || draft.trim().is_empty() {
                     self.drafts.remove(&previous);
                 } else {
                     self.drafts.insert(previous.clone(), draft);
@@ -922,7 +956,7 @@ impl App {
                 if let Some(chat) = self.open_chat.take() {
                     self.stop_composing(&chat);
                     let draft = std::mem::take(&mut self.composer);
-                    if !draft.trim().is_empty() {
+                    if self.editing.take().is_none() && !draft.trim().is_empty() {
                         self.drafts.insert(chat, draft);
                     }
                 }
@@ -1141,7 +1175,7 @@ impl App {
                     self.backend.send(Command::LoadUntil {
                         chat,
                         id: id.clone(),
-                        before: oldest.timestamp,
+                        before: (oldest.timestamp, oldest.id.clone()),
                     });
                 }
                 self.scroll_anchor = Some(id);
@@ -1208,7 +1242,17 @@ impl App {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.apply_theme(ctx);
-        self.window_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        // Coming back to the window is reading what arrived meanwhile.
+        if focused
+            && !self.window_focused
+            && self.page == Page::Chats
+            && let Some(open) = self.open_chat.clone()
+            && self.chat(&open).is_some_and(|chat| chat.unread > 0)
+        {
+            self.mark_read(&open);
+        }
+        self.window_focused = focused;
         self.lock_scroll_axis(ctx);
         self.take_drops_and_pastes(ctx);
         crate::ui::show(self, ui);

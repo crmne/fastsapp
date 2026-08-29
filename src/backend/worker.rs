@@ -145,6 +145,7 @@ pub async fn run(
         group_info_requested: HashSet::new(),
         presence_subscribed: HashSet::new(),
         pending_older: HashMap::new(),
+        older_warned: HashSet::new(),
         pending_avatars: HashMap::new(),
         sticker_fetches: HashSet::new(),
         sticker_downloads: HashSet::new(),
@@ -210,7 +211,9 @@ struct Worker {
     presence_subscribed: HashSet<String>,
     /// Requests for older messages the phone has not answered yet, by the
     /// chat asked about: when it was asked and what its oldest message was.
-    pending_older: HashMap<ChatId, (Instant, i64)>,
+    pending_older: HashMap<ChatId, (Instant, super::PageKey)>,
+    /// Chats already told once that the phone is not answering.
+    older_warned: HashSet<ChatId>,
     /// Pictures asked for while the link was down or that failed, with how
     /// often they were tried; retried once connected.
     pending_avatars: HashMap<(String, bool), u32>,
@@ -730,7 +733,10 @@ impl Worker {
                         read_only: metadata.is_announcement && !admin,
                     });
                 }
-                Err(error) => log::debug!("no metadata for {chat}: {error}"),
+                Err(error) => {
+                    log::debug!("no metadata for {chat}: {error}");
+                    let _ = commands.send(Command::GroupInfoFailed { chat });
+                }
             }
         });
     }
@@ -1137,11 +1143,19 @@ impl Worker {
                 }
                 Some(Type::MESSAGE_EDIT) => {
                     if let Some(edited) = protocol.edited_message.as_option()
-                        && let Some(content) = classify(edited.get_base_message())
-                        && let Ok(true) = self.archive.set_content(&chat, &target, &content, true)
+                        && let Some(mut content) = classify(edited.get_base_message())
                     {
-                        self.emit_message(&chat, &target);
-                        self.emit_chat(&chat);
+                        // An edited caption keeps the file already fetched.
+                        if let Ok(Some(existing)) = self.archive.message(&chat, &target)
+                            && let (Some(new), Some(old)) =
+                                (content.media_mut(), existing.content.media())
+                        {
+                            new.path = old.path.clone();
+                        }
+                        if let Ok(true) = self.archive.set_content(&chat, &target, &content, true) {
+                            self.emit_message(&chat, &target);
+                            self.emit_chat(&chat);
+                        }
                     }
                 }
                 _ => {}
@@ -1499,10 +1513,18 @@ impl Worker {
     /// Delivers what the phone sent for a request for older messages.
     fn answer_older(&mut self, filed: Vec<(ChatId, usize, Option<bool>)>) {
         for (chat, count, more_on_phone) in filed {
-            let Some((_, oldest_before)) = self.pending_older.remove(&chat) else {
+            let more = count > 0 && more_on_phone != Some(false);
+            let Some((_, (before_time, before_id))) = self.pending_older.remove(&chat) else {
+                // An answer nobody waits for any more (it came late, or the
+                // request was given up on): what it brought is in the
+                // archive, and the app pages the archive again on this.
+                self.emit(Event::OlderFetched { chat, more });
                 continue;
             };
-            match self.archive.messages(&chat, Some(oldest_before), 500) {
+            match self
+                .archive
+                .messages(&chat, Some((before_time, &before_id)), 500)
+            {
                 Ok(mut messages) => {
                     for message in &mut messages {
                         self.polish(message);
@@ -1516,10 +1538,7 @@ impl Worker {
                 }
                 Err(error) => log::warn!("could not read older messages: {error}"),
             }
-            self.emit(Event::OlderFetched {
-                chat,
-                more: count > 0 && more_on_phone != Some(false),
-            });
+            self.emit(Event::OlderFetched { chat, more });
         }
     }
 
@@ -1533,10 +1552,17 @@ impl Worker {
             .collect();
         for chat in expired {
             self.pending_older.remove(&chat);
-            self.emit(Event::OlderFetched { chat, more: true });
-            self.emit(Event::Error(
-                "Your phone did not send older messages; is it online?".to_owned(),
-            ));
+            self.emit(Event::OlderFetched {
+                chat: chat.clone(),
+                more: true,
+            });
+            // Once per chat: the app backs off on its own, the reader does
+            // not need telling every time.
+            if self.older_warned.insert(chat) {
+                self.emit(Event::Error(
+                    "Your phone did not send older messages; is it online?".to_owned(),
+                ));
+            }
         }
     }
 
@@ -1545,16 +1571,19 @@ impl Worker {
             return;
         }
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            // Offline: nothing to say, the banner says it; the app asks
+            // again once connected.
             self.emit(Event::OlderFetched { chat, more: true });
-            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
         };
         let Ok(Some(oldest)) = self.archive.oldest(&chat) else {
             self.emit(Event::OlderFetched { chat, more: false });
             return;
         };
-        self.pending_older
-            .insert(chat.clone(), (Instant::now(), oldest.timestamp));
+        self.pending_older.insert(
+            chat.clone(),
+            (Instant::now(), (oldest.timestamp, oldest.id.clone())),
+        );
         let commands = self.commands.clone();
         tokio::spawn(async move {
             if let Err(error) = client
@@ -1568,12 +1597,9 @@ impl Worker {
                 .await
             {
                 log::warn!("older messages not requested: {error}");
-                let _ = commands.send(Command::Sent {
+                let _ = commands.send(Command::OlderFailed {
                     chat: chat.clone(),
-                    id: String::new(),
-                    error: Some(format!(
-                        "could not ask the phone for older messages: {error}"
-                    )),
+                    error: format!("could not ask the phone for older messages: {error}"),
                 });
             }
         });
@@ -1603,7 +1629,7 @@ impl Worker {
                     }
                 });
             }
-            Command::MarkRead(chat) => self.mark_read(chat),
+            Command::MarkRead { chat, receipts } => self.mark_read(chat, receipts),
             Command::LoadChat { chat, before } => self.load_chat(chat, before),
             Command::FetchOlder(chat) => self.fetch_older(chat),
             Command::LoadUntil { chat, id, before } => self.load_until(chat, id, before),
@@ -1747,12 +1773,17 @@ impl Worker {
                 }
             }
             Command::Shutdown => {}
+            Command::OlderFailed { chat, error } => {
+                self.pending_older.remove(&chat);
+                self.emit(Event::OlderFetched { chat, more: true });
+                self.emit(Event::Error(error));
+            }
+            Command::GroupInfoFailed { chat } => {
+                self.group_info_requested.remove(&chat);
+            }
             Command::Sent { chat, id, error } => {
                 if id.is_empty() {
                     // Not a message: an errand in the chat failed.
-                    if self.pending_older.remove(&chat).is_some() {
-                        self.emit(Event::OlderFetched { chat, more: true });
-                    }
                     if let Some(error) = error {
                         self.emit(Event::Error(error));
                     }
@@ -1870,13 +1901,13 @@ impl Worker {
         });
     }
 
-    fn mark_read(&mut self, chat: ChatId) {
+    fn mark_read(&mut self, chat: ChatId, receipts: bool) {
         let Ok(Some(row)) = self.archive.chat(&chat) else {
             return;
         };
         let _ = self.archive.mark_read(&chat);
         self.emit_chat(&chat);
-        if row.unread == 0 {
+        if row.unread == 0 || !receipts {
             return;
         }
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
@@ -1920,8 +1951,12 @@ impl Worker {
         }
     }
 
-    fn load_chat(&mut self, chat: ChatId, before: Option<i64>) {
-        match self.archive.messages(&chat, before, PAGE + 1) {
+    fn load_chat(&mut self, chat: ChatId, before: Option<super::PageKey>) {
+        match self.archive.messages(
+            &chat,
+            before.as_ref().map(|(time, id)| (*time, id.as_str())),
+            PAGE + 1,
+        ) {
             Ok(mut messages) => {
                 let complete = messages.len() <= PAGE;
                 if !complete {
@@ -2280,7 +2315,7 @@ impl Worker {
 
     /// Everything between a quoted message and what is loaded, so the view
     /// can scroll to it.
-    fn load_until(&mut self, chat: ChatId, id: String, before: i64) {
+    fn load_until(&mut self, chat: ChatId, id: String, before: super::PageKey) {
         let Ok(Some(target)) = self.archive.message(&chat, &id) else {
             self.emit(Event::Messages {
                 chat: chat.clone(),
@@ -2295,7 +2330,7 @@ impl Worker {
         };
         match self
             .archive
-            .messages_range(&chat, target.timestamp, before, 2000)
+            .messages_range(&chat, target.timestamp, (before.0, &before.1), 2000)
         {
             Ok(mut messages) => {
                 for message in &mut messages {
@@ -3664,6 +3699,7 @@ mod receipt_tests {
             group_info_requested: HashSet::new(),
             presence_subscribed: HashSet::new(),
             pending_older: HashMap::new(),
+            older_warned: HashSet::new(),
             pending_avatars: HashMap::new(),
             sticker_fetches: HashSet::new(),
             sticker_downloads: HashSet::new(),
