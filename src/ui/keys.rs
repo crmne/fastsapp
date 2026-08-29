@@ -31,7 +31,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     });
     // Escape backs out of whatever is on top: a dialog, a reply, then the
     // settings page.
-    let escape = ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
+    // An open menu takes Escape itself; taking it here would leave the
+    // menu up and act on whatever is underneath.
+    let menu_open = egui::Popup::is_any_open(ctx);
+    let escape =
+        !menu_open && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
     if escape {
         if app.dialog.is_some() {
             actions.push(Action::CloseDialog);

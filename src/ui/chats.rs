@@ -157,7 +157,9 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
                     continue;
                 }
                 let chat = &chats[index - usize::from(show_archive_row)];
-                row(app, ui, chat);
+                // Keyed by the chat, not the row: an open menu follows its
+                // chat when the list reorders under it.
+                ui.push_id(("chat", &chat.id), |ui| row(app, ui, chat));
             }
         });
 }

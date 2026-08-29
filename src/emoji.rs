@@ -331,18 +331,28 @@ pub fn pieces(text: &str) -> Vec<Piece<'_>> {
 /// emoji presentation, or anything asked for one with a variation
 /// selector, keycap, or joiner.
 pub fn is_emoji(cluster: &str) -> bool {
-    let mut chars = cluster.chars();
-    let Some(first) = chars.next() else {
+    let Some(first) = cluster.chars().next() else {
         return false;
     };
-    let asks = cluster
-        .chars()
-        .any(|c| matches!(c, '\u{FE0F}' | '\u{20E3}' | '\u{200D}') || is_skin_tone(c));
     if (first as u32) < 0xA9 {
         // A digit, '#' or '*' is only an emoji as a keycap.
         return cluster.contains('\u{20E3}');
     }
-    asks || ((first as u32) >= 0x2000 && is_presentation(first))
+    if is_presentation(first) {
+        return true;
+    }
+    // A character that is text by default becomes a picture when the
+    // sequence asks (a variation selector, joiner, or skin tone), but only
+    // if it is one of the symbols that can be pictures: the letters of
+    // scripts that use joiners in ordinary words (Devanagari, Bengali,
+    // Sinhala, Malayalam) stay text.
+    let capable = matches!(first, '\u{A9}' | '\u{AE}')
+        || ('\u{2000}'..='\u{33FF}').contains(&first)
+        || ('\u{1F000}'..='\u{1FAFF}').contains(&first);
+    capable
+        && cluster
+            .chars()
+            .any(|c| matches!(c, '\u{FE0F}' | '\u{20E3}' | '\u{200D}') || is_skin_tone(c))
 }
 
 fn is_skin_tone(c: char) -> bool {
@@ -383,10 +393,16 @@ pub fn only_emoji(text: &str) -> Option<usize> {
 
 /// Appends text to a layout job, routing each emoji through a placeholder
 /// and remembering which sequence it stands for.
-pub fn append(job: &mut LayoutJob, placements: &mut Vec<String>, text: &str, format: &TextFormat) {
+pub fn append(
+    job: &mut LayoutJob,
+    placements: &mut Vec<String>,
+    text: &str,
+    format: &TextFormat,
+) -> usize {
+    let start = job.text.len();
     if !available() {
         job.append(text, 0.0, format.clone());
-        return;
+        return job.text[start..].chars().count();
     }
     for piece in pieces(text) {
         match piece {
@@ -401,6 +417,7 @@ pub fn append(job: &mut LayoutJob, placements: &mut Vec<String>, text: &str, for
             }
         }
     }
+    job.text[start..].chars().count()
 }
 
 /// Paints the pictures over a laid-out galley's placeholders.
@@ -529,5 +546,39 @@ mod tests {
         let glyph = font.glyph(&font_ref, &['😀']).expect("glyph");
         let image = font.image(&font_ref, glyph).expect("picture");
         assert_eq!(image.size[0], TEXTURE_WIDTH as usize);
+    }
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::*;
+
+    #[test]
+    fn joiners_in_ordinary_words_are_not_emoji() {
+        // Sinhala "Sri", Bengali "rya", Malayalam chillu: all carry a ZWJ.
+        for word in [
+            "\u{0DC1}\u{0DCA}\u{200D}\u{0DBB}\u{0DD3}",
+            "\u{09B0}\u{200D}\u{09CD}\u{09AF}",
+            "\u{0D28}\u{0D4D}\u{200D}",
+        ] {
+            assert!(!is_emoji(word), "{word:?} is text");
+            assert_eq!(only_emoji(word), None);
+        }
+    }
+
+    #[test]
+    fn sequences_that_ask_to_be_pictures_still_are() {
+        for picture in [
+            "\u{2764}\u{FE0F}",                    // red heart
+            "\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}",  // rainbow flag
+            "\u{1F9D1}\u{1F3FD}\u{200D}\u{1F4BB}", // technologist, medium skin
+            "\u{23}\u{FE0F}\u{20E3}",              // keycap #
+            "\u{1F1EE}\u{1F1F9}",                  // flag of Italy
+            "\u{A9}\u{FE0F}",                      // copyright as emoji
+        ] {
+            assert!(is_emoji(picture), "{picture:?} is a picture");
+        }
+        assert!(!is_emoji("\u{A9}"), "a bare copyright sign is text");
+        assert!(!is_emoji("a"));
     }
 }

@@ -396,7 +396,7 @@ pub fn setting_row(
 ) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.set_width(ui.available_width() - 260.0);
+            ui.set_width((ui.available_width() - 260.0).max(120.0));
             theme::text(ui, label, theme::medium(14.0), palette.text);
             if !description.is_empty() {
                 ui.add(

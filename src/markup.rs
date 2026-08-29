@@ -111,15 +111,13 @@ pub fn layout(
             },
             ..Default::default()
         };
-        let before = job.text.chars().count();
-        emoji::append(&mut job, &mut placements, &span.text, &format);
-        let after = job.text.chars().count();
+        let before = characters;
+        let after = before + emoji::append(&mut job, &mut placements, &span.text, &format);
         if let Some(url) = span.link {
             links.push((before..after, url));
         }
         characters = after;
     }
-    let _ = characters;
     if job.text.is_empty() {
         job.append(
             " ",
@@ -172,16 +170,10 @@ fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
         }
         first = false;
         let trimmed = line.trim_end();
-        if trimmed.trim_start().starts_with("```") {
-            let rest = trimmed.trim_start().trim_start_matches("```");
+        // A line of nothing but ``` opens or closes a block; ``` with text
+        // on the same line is WhatsApp's inline monospace, handled below.
+        if trimmed.trim() == "```" {
             in_block = !in_block;
-            if !rest.is_empty() {
-                spans.push(Span {
-                    text: rest.to_owned(),
-                    mono: true,
-                    ..Default::default()
-                });
-            }
             continue;
         }
         if in_block {
@@ -250,8 +242,25 @@ fn inline(line: &str) -> Vec<Span> {
         }
     };
     let mut i = 0;
+    let triple = |at: usize| {
+        at + 2 < chars.len() && chars[at] == '`' && chars[at + 1] == '`' && chars[at + 2] == '`'
+    };
     while i < chars.len() {
         let c = chars[i];
+        // ```mono```: WhatsApp's monospace marks, on one line.
+        if triple(i)
+            && let Some(close) = (i + 3..chars.len()).find(|&at| triple(at))
+            && close > i + 3
+        {
+            flush(&mut run, &mut spans, flags);
+            spans.push(Span {
+                text: chars[i + 3..close].iter().collect(),
+                mono: true,
+                ..Default::default()
+            });
+            i = close + 3;
+            continue;
+        }
         if c == '`'
             && let Some(close) = chars[i + 1..].iter().position(|c| *c == '`')
         {
@@ -344,7 +353,11 @@ fn link_and_mention(span: Span, mentions: &[Mention]) -> Vec<Span> {
                 i = end;
                 continue;
             }
-            if let Some((end, url)) = link_at(text, i) {
+            // A link starts with a letter or digit; a run of dashes or
+            // dots is not scanned again at every one of them.
+            if bytes[i].is_ascii_alphanumeric()
+                && let Some((end, url)) = link_at(text, i)
+            {
                 push_plain(&mut out, &span, &text[plain_start..i]);
                 out.push(Span {
                     text: text[i..end].to_owned(),
@@ -683,5 +696,46 @@ mod tests {
             "hi @+49 176 31141665"
         );
         assert_eq!(plain("hi @123", &mentions), "hi @123");
+    }
+}
+
+#[cfg(test)]
+mod monospace_tests {
+    use super::*;
+
+    fn mono(text: &str) -> Vec<(String, bool)> {
+        parse(text, &[])
+            .into_iter()
+            .map(|span| (span.text, span.mono))
+            .collect()
+    }
+
+    #[test]
+    fn triple_backticks_mark_monospace_on_a_line() {
+        assert_eq!(
+            mono("say ```hello``` now"),
+            vec![
+                ("say ".into(), false),
+                ("hello".into(), true),
+                (" now".into(), false),
+            ]
+        );
+        assert_eq!(mono("```hello```"), vec![("hello".into(), true)]);
+        // Nothing after it is swallowed.
+        assert_eq!(
+            mono("```a```\nb"),
+            vec![
+                ("a".into(), true),
+                ("\n".into(), false),
+                ("b".into(), false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fence_line_still_opens_a_block() {
+        let spans = mono("```\ncode\n```\nafter");
+        assert!(spans.iter().any(|(text, mono)| text == "code" && *mono));
+        assert!(spans.iter().any(|(text, mono)| text == "after" && !*mono));
     }
 }

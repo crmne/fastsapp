@@ -181,7 +181,8 @@ fn emoji_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     if search != app.picker_search {
         app.picker_search = search;
     }
-    if app.picker_search.is_empty() && !response.has_focus() && ui.input(|i| i.time) < 0.0 {
+    if app.picker_focus {
+        app.picker_focus = false;
         response.request_focus();
     }
     // Leave the scroll bar its edge, then fill the rest with whole
@@ -192,11 +193,13 @@ fn emoji_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     let rows = rows_for(app, columns);
     let row_height = CELL;
     let mut picked = None;
+    // The rows are laid out without spacing, and `show_rows` must agree,
+    // or the grid drifts as it scrolls.
+    ui.spacing_mut().item_spacing = Vec2::ZERO;
     egui::ScrollArea::vertical()
         .id_salt("emoji-grid")
         .auto_shrink([false, false])
         .show_rows(ui, row_height, rows.len(), |ui, range| {
-            ui.spacing_mut().item_spacing = Vec2::ZERO;
             for row in &rows[range] {
                 match row {
                     Row::Header(label) => {

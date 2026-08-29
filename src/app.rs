@@ -157,6 +157,8 @@ pub struct App {
     /// Where the picker hangs from: the composer's smiley button.
     pub picker_anchor: Option<egui::Rect>,
     pub picker_search: String,
+    /// The picker just opened: its search field takes the focus once.
+    pub picker_focus: bool,
     pub gif_query: String,
     pub gif_results: Vec<Gif>,
     /// A GIF search is on its way.
@@ -249,6 +251,7 @@ impl App {
             picker: None,
             picker_anchor: None,
             picker_search: String::new(),
+            picker_focus: false,
             gif_query: String::new(),
             gif_results: Vec::new(),
             gif_pending: false,
@@ -1060,6 +1063,7 @@ impl App {
                 } else {
                     self.picker = Some(tab);
                     self.picker_search.clear();
+                    self.picker_focus = tab == PickerTab::Emoji;
                     if tab == PickerTab::Stickers {
                         self.stickers_pending = self.stickers.is_empty();
                         self.backend.send(Command::RecentStickers);

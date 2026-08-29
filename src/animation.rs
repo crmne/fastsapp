@@ -22,6 +22,22 @@ const MAX_WIDTH: u32 = 320;
 const MAX_FRAMES: usize = 150;
 /// How long an animation nobody has drawn stays decoded.
 const IDLE: Duration = Duration::from_secs(20);
+/// Decoders running at once; a sticker-heavy chat queues the rest.
+const MAX_DECODERS: usize = 2;
+/// Frames kept as textures across every animation; the least recently
+/// drawn go first when this is exceeded.
+const MAX_RESIDENT_FRAMES: usize = 450;
+
+static DECODING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Holds one of the decoder slots for as long as it lives.
+struct DecodeSlot;
+
+impl Drop for DecodeSlot {
+    fn drop(&mut self) {
+        DECODING.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
 
 struct Decoded {
     frames: Vec<(ColorImage, Duration)>,
@@ -108,12 +124,36 @@ pub fn frame(ctx: &egui::Context, path: &Path) -> Frame {
         };
         entries.insert(arrived_path, entry);
     }
-    // Forget what nobody looks at any more.
+    // Forget what nobody looks at any more, and beyond the budget, what
+    // was looked at longest ago.
     let now = Instant::now();
     entries.retain(|_, entry| match entry {
         Entry::Ready(playing) => now.duration_since(playing.last_drawn) < IDLE,
         _ => true,
     });
+    let mut resident: usize = entries
+        .values()
+        .map(|entry| match entry {
+            Entry::Ready(playing) => playing.frames.len(),
+            _ => 0,
+        })
+        .sum();
+    while resident > MAX_RESIDENT_FRAMES {
+        let victim = entries
+            .iter()
+            .filter_map(|(entry_path, entry)| match entry {
+                Entry::Ready(playing) if entry_path.as_path() != path => {
+                    Some((entry_path.clone(), playing.last_drawn, playing.frames.len()))
+                }
+                _ => None,
+            })
+            .min_by_key(|(_, last_drawn, _)| *last_drawn);
+        let Some((victim, _, count)) = victim else {
+            break;
+        };
+        entries.remove(&victim);
+        resident -= count;
+    }
     match entries.get_mut(path) {
         Some(Entry::Ready(playing)) => {
             playing.last_drawn = now;
@@ -136,21 +176,35 @@ pub fn frame(ctx: &egui::Context, path: &Path) -> Frame {
         Some(Entry::Decoding) => Frame::Pending,
         Some(Entry::Failed) => Frame::Unavailable,
         None => {
+            if DECODING.load(std::sync::atomic::Ordering::Acquire) >= MAX_DECODERS {
+                // Every decoder is busy; ask again shortly.
+                ctx.request_repaint_after(Duration::from_millis(150));
+                return Frame::Pending;
+            }
+            DECODING.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let slot = DecodeSlot;
             entries.insert(path.to_path_buf(), Entry::Decoding);
-            let path = path.to_path_buf();
+            let file = path.to_path_buf();
             let ctx = ctx.clone();
-            std::thread::Builder::new()
+            let spawned = std::thread::Builder::new()
                 .name("animation-decode".into())
                 .spawn(move || {
-                    let decoded = decode(&path);
+                    let _slot = slot;
+                    // A decoder that panics still answers, with nothing.
+                    let decoded =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&file)))
+                            .unwrap_or(None);
                     inbox
                         .0
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
-                        .push((path, decoded));
+                        .push((file, decoded));
                     ctx.request_repaint();
-                })
-                .ok();
+                });
+            if spawned.is_err() {
+                entries.insert(path.to_path_buf(), Entry::Failed);
+                return Frame::Unavailable;
+            }
             Frame::Pending
         }
     }
