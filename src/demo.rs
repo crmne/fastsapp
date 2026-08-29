@@ -682,6 +682,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 };
             }
             "syncing" => app.syncing = true,
+            "typing" => {
+                app.composer = (1..=9)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                app.focus_composer = true;
+            }
+            "nosidebar" => app.sidebar_visible = false,
             "archived" => app.show_archived = true,
             "picker" => app.picker = Some(crate::model::PickerTab::Emoji),
             "stickers" => {
@@ -825,6 +833,8 @@ mod tests {
             "syncing",
             "picker",
             "stickers",
+            "typing",
+            "nosidebar",
             "gifs",
         ] {
             let mut app = self::app();
@@ -951,6 +961,53 @@ mod tests {
             settled.top() >= 0.0 && settled.bottom() <= 780.0,
             "the last message's hit rect is where it is drawn: {settled:?}"
         );
+    }
+
+    #[test]
+    fn an_opened_chat_stays_at_its_end_until_the_reader_scrolls() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        assert!(app.at_bottom, "opens at the end");
+        // Content that arrives after the open (a tall message) must not
+        // leave the view short of the end.
+        let chat = sample_ids()[0].to_owned();
+        let when = crate::util::now();
+        let tall = message(
+            &chat,
+            "late-tall",
+            false,
+            when,
+            Content::text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl"),
+        );
+        app.conversations
+            .get_mut(&chat)
+            .expect("open chat")
+            .messages
+            .push(tall);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        assert!(app.at_bottom, "still at the end after content grew");
+        assert!(app.scroll_to_bottom, "and still pinned");
+        // A wheel up is the reader taking over.
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(egui::pos2(800.0, 400.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, 300.0),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                },
+            ],
+        );
+        assert!(!app.scroll_to_bottom, "a wheel releases the pin");
     }
 
     #[test]

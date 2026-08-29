@@ -87,6 +87,10 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
+                // Both rows are this tall from the start, so the button,
+                // the picture, and the name centre on the same line rather
+                // than on each row's initial height.
+                ui.set_min_height(HEADER_ROW);
                 if !app.sidebar_visible
                     && theme::icon_button(
                         ui,
@@ -108,6 +112,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 let block = ui
                     .scope(|ui| {
                         ui.horizontal(|ui| {
+                            ui.set_min_height(HEADER_ROW);
                             widgets::avatar(
                                 ui,
                                 &palette,
@@ -297,7 +302,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                     None => app.reply_to = None,
                 }
             }
-            let id = egui::Id::new("composer");
+            let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));
             let enter_sends = app.settings.enter_sends;
             // `consume_key(NONE, Enter)` would also take Shift+Enter, since
@@ -326,7 +331,28 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                     sent
                 });
             let mut send_click = false;
-            ui.horizontal(|ui| {
+            let line_height = ui
+                .painter()
+                .layout_no_wrap("x".to_owned(), theme::regular(BODY_SIZE), palette.text)
+                .size()
+                .y;
+            // The field is one line plus its padding; the send button is a
+            // circle of that height. A longer message grows the field up to
+            // six lines, and the row is laid out from its bottom so the
+            // buttons stay level with the last line, as on the phone.
+            let field_padding = 14.0;
+            let button_width = line_height + field_padding;
+            let text_height = ui
+                .ctx()
+                .read_response(id)
+                .map(|previous| previous.rect.height())
+                .unwrap_or(line_height)
+                .clamp(line_height, line_height * 6.0);
+            let row_height = (text_height + field_padding).max(button_width);
+            ui.allocate_ui_with_layout(
+                vec2(ui.available_width(), row_height),
+                Layout::left_to_right(Align::Max),
+                |ui| {
                 if app.editing.is_none()
                     && theme::icon_button(
                         ui,
@@ -358,13 +384,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                         app.actions.push(Action::TogglePicker(PickerTab::Emoji));
                     }
                 }
-                let button_width = 40.0;
                 let field_width = ui.available_width() - button_width - 10.0;
-                let line_height = ui
-                    .painter()
-                    .layout_no_wrap("x".to_owned(), theme::regular(BODY_SIZE), palette.text)
-                    .size()
-                    .y;
                 Frame::new()
                     .fill(palette.surface)
                     .corner_radius(CornerRadius::same(theme::RADIUS + 4))
@@ -432,7 +452,8 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 {
                     send_click = true;
                 }
-            });
+            },
+            );
             if (send_key || send_click) && !app.composer.trim().is_empty() {
                 let text = std::mem::take(&mut app.composer);
                 app.actions.push(Action::SendText {
@@ -588,10 +609,15 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let mut anchored = false;
     let scroll_to_bottom = app.scroll_to_bottom;
     let app_pictures = app.settings.show_sender_pictures;
+    // Not animated: an animated target lingers as a pending animation, and
+    // every later request only re-aims it, so a request to reach the end
+    // could wait behind a stale one (the reader's own scrolling is smoothed
+    // by the app anyway).
     let output = egui::ScrollArea::vertical()
         .id_salt(("messages", &chat.id))
         .auto_shrink([false, false])
         .stick_to_bottom(true)
+        .animated(false)
         .show(ui, |ui| {
             Frame::new()
                 .inner_margin(Margin::symmetric(18, 10))
@@ -653,6 +679,26 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         });
     let at_bottom =
         output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 24.0;
+    // The view stays pinned to the end (content keeps growing for a few
+    // frames after a chat opens, as pictures and older messages come in)
+    // until the reader scrolls: a wheel or trackpad, or a drag on the bar.
+    let bar = Rect::from_min_max(
+        pos2(output.inner_rect.right() - 16.0, output.inner_rect.top()),
+        output.inner_rect.right_bottom(),
+    );
+    let reader_scrolled = ui.input(|input| {
+        input.smooth_scroll_delta.y != 0.0
+            || input
+                .raw
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::MouseWheel { .. }))
+            || (input.pointer.primary_down()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| bar.contains(pos)))
+    });
     let complete = conversation.complete;
     let loading = conversation.loading_older;
     let fetching = conversation.fetching_phone;
@@ -660,7 +706,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     app.conversations
         .insert(chat.id.clone(), std::mem::take(&mut conversation));
     app.at_bottom = at_bottom;
-    if app.scroll_to_bottom {
+    if app.scroll_to_bottom && reader_scrolled {
         app.scroll_to_bottom = false;
     }
     if anchored {
@@ -1712,6 +1758,8 @@ fn thumbnail_uri(ctx: &egui::Context, chat: &str, id: &str, bytes: &[u8]) -> Str
 const PICTURE_WIDTH: f32 = 340.0;
 const PICTURE_HEIGHT: f32 = 440.0;
 const STICKER_SIDE: f32 = 180.0;
+/// The header's content row: the picture plus a little air.
+const HEADER_ROW: f32 = 44.0;
 
 /// A size for a `width`×`height` picture within the given bounds, never
 /// blown up past its own size and never below a readable minimum.

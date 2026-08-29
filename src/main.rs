@@ -50,12 +50,19 @@ fn main() -> eframe::Result<()> {
     let mut logger =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter));
     // Launched from a desktop, stderr goes nowhere; keep the run's log where
-    // a bug report can find it.
-    match std::fs::File::create(dirs.log_file()) {
-        Ok(file) => {
-            logger.target(env_logger::Target::Pipe(Box::new(Tee(file))));
+    // a bug report can find it. A demo run keeps to stderr: it must not
+    // replace the log of a real session that may be running alongside.
+    #[cfg(feature = "demo")]
+    let demo_run = cli.demo || cli.demo_shot.is_some();
+    #[cfg(not(feature = "demo"))]
+    let demo_run = false;
+    if !demo_run {
+        match std::fs::File::create(dirs.log_file()) {
+            Ok(file) => {
+                logger.target(env_logger::Target::Pipe(Box::new(Tee(file))));
+            }
+            Err(error) => eprintln!("not keeping a log file: {error}"),
         }
-        Err(error) => eprintln!("not keeping a log file: {error}"),
     }
     logger.init();
     if let Err(error) = dirs_ready {
@@ -210,6 +217,15 @@ impl Shell {
 }
 
 impl eframe::App for Shell {
+    /// egui's memory (scroll positions, pending scroll animations, text
+    /// cursors) is not worth keeping across runs, and a pending animation
+    /// restored from a previous run's clock would hold a chat short of its
+    /// end until that clock is reached. The window's size and place are
+    /// kept regardless.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.app.background_frame(ctx);
         #[cfg(feature = "demo")]

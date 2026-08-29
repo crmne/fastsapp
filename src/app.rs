@@ -1220,7 +1220,7 @@ impl App {
 
     /// Puts text into the composer at its cursor, or at the end.
     fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
-        let id = egui::Id::new("composer");
+        let id = egui::Id::new("composer-text");
         let at = egui::TextEdit::load_state(ctx, id)
             .and_then(|state| state.cursor.char_range())
             .map(|range| range.primary.index.0)
@@ -1261,7 +1261,7 @@ impl App {
         if !dropped.is_empty() {
             self.actions.push(Action::SendFiles(dropped));
         }
-        let composing = ctx.memory(|memory| memory.has_focus(egui::Id::new("composer")));
+        let composing = ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text")));
         if paste && composing && self.open_chat.is_some() {
             // egui pastes text on its own; a picture on the clipboard is
             // ours to notice.

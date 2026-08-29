@@ -3617,3 +3617,139 @@ mod tests {
         assert_eq!(seconds(-1), 0);
     }
 }
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+    use crate::model::{Content, Delivery, Message};
+
+    const ME: &str = "15550001111@s.whatsapp.net";
+    const PEER: &str = "4917663430455@s.whatsapp.net";
+    const PEER_LID: &str = "167650256810092@lid";
+
+    /// A worker with an in-memory archive and nothing on the other end of
+    /// its channels; the receivers live as long as the worker.
+    fn worker() -> (
+        Worker,
+        std::sync::mpsc::Receiver<Event>,
+        mpsc::UnboundedReceiver<Command>,
+        mpsc::UnboundedReceiver<Arc<wa_events::Event>>,
+    ) {
+        let (events, events_rx) = std::sync::mpsc::channel();
+        let (commands, inbox) = mpsc::unbounded_channel();
+        let (wa_sender, wa_events) = mpsc::unbounded_channel();
+        let root =
+            std::env::temp_dir().join(format!("fastsapp-worker-test-{}", std::process::id()));
+        let worker = Worker {
+            dirs: AppDirs::under(&root),
+            events,
+            commands,
+            waker: Waker(Arc::new(std::sync::Mutex::new(None))),
+            archive: Archive::in_memory().expect("archive"),
+            client: None,
+            handle: None,
+            wa_sender,
+            me_pn: Some(ME.to_owned()),
+            me_lid: None,
+            me_name: None,
+            me_about: None,
+            lid_to_pn: HashMap::new(),
+            contacts: HashMap::new(),
+            status: LinkStatus::Connected,
+            pairing_phone: None,
+            pair_code: None,
+            qr: None,
+            syncing: false,
+            sync_deadline: None,
+            group_info_requested: HashSet::new(),
+            presence_subscribed: HashSet::new(),
+            pending_older: HashMap::new(),
+            pending_avatars: HashMap::new(),
+            sticker_fetches: HashSet::new(),
+            sticker_downloads: HashSet::new(),
+        };
+        (worker, events_rx, inbox, wa_events)
+    }
+
+    fn own_message(id: &str, timestamp: i64) -> Message {
+        Message {
+            id: id.into(),
+            chat: PEER.into(),
+            sender: ME.into(),
+            sender_name: None,
+            from_me: true,
+            timestamp,
+            content: Content::text("hi"),
+            status: Delivery::Sent,
+            quoted: None,
+            reactions: Vec::new(),
+            edited: false,
+            mentions: Vec::new(),
+            forwarded: false,
+            thumbnail: None,
+        }
+    }
+
+    fn receipt(chat: &str, ids: &[&str], kind: ReceiptType) -> wa_events::Receipt {
+        let chat: Jid = chat.parse().expect("jid");
+        wa_events::Receipt::builder()
+            .message_ids(ids.iter().map(|id| (*id).to_owned()).collect())
+            .source(MessageSource {
+                chat: chat.clone(),
+                sender: chat,
+                ..Default::default()
+            })
+            .timestamp(whatsapp_rust::wacore::time::now_utc())
+            .r#type(kind)
+            .offline(false)
+            .build()
+    }
+
+    #[test]
+    fn a_read_receipt_from_the_peers_privacy_id_moves_our_messages() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.archive.ensure_chat(PEER, "R").expect("chat");
+        for (id, when) in [("A1", 100), ("A2", 200), ("A3", 300)] {
+            worker
+                .archive
+                .insert_message(&own_message(id, when), None)
+                .expect("stored");
+        }
+        worker.learn_lid("167650256810092", "4917663430455");
+        worker.on_receipt(&receipt(PEER_LID, &["A2"], ReceiptType::Read));
+        let status = |id: &str| {
+            worker
+                .archive
+                .message(PEER, id)
+                .expect("read")
+                .expect("row")
+                .status
+        };
+        assert_eq!(status("A2"), Delivery::Read, "the named message");
+        assert_eq!(status("A1"), Delivery::Read, "and everything before it");
+        assert_eq!(status("A3"), Delivery::Sent, "not what came after");
+    }
+
+    #[test]
+    fn a_delivery_receipt_from_the_phone_number_moves_only_the_named_message() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.archive.ensure_chat(PEER, "R").expect("chat");
+        for (id, when) in [("B1", 100), ("B2", 200)] {
+            worker
+                .archive
+                .insert_message(&own_message(id, when), None)
+                .expect("stored");
+        }
+        worker.on_receipt(&receipt(PEER, &["B2"], ReceiptType::Delivered));
+        let status = |id: &str| {
+            worker
+                .archive
+                .message(PEER, id)
+                .expect("read")
+                .expect("row")
+                .status
+        };
+        assert_eq!(status("B2"), Delivery::Delivered);
+        assert_eq!(status("B1"), Delivery::Sent);
+    }
+}
