@@ -77,6 +77,16 @@ Three egui pitfalls this code has already hit:
   the input over its own rect and opens `Popup::menu` itself, so the menu
   comes up anywhere on the message.
 
+## Releasing
+
+Bump `version` in `Cargo.toml`, commit, tag `vX.Y.Z`, and push the tag: the
+release workflow builds every platform and publishes the GitHub release
+with `checksums.txt`. Then update the AUR package in the maintainer's
+`~/Code/aur/fastsapp` clone (new `pkgver`, `pkgrel=1`, the two Linux
+checksums from `checksums.txt`, `makepkg --printsrcinfo > .SRCINFO`,
+`makepkg -f` to prove it builds, commit, push). `fastsapp-git` only needs
+touching when the build recipe or the dependencies change.
+
 ## Definition of done
 
 - Add focused tests for changed behaviour. The `demo` feature carries sample

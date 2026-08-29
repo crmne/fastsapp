@@ -82,6 +82,13 @@ same pattern without carrying WhatsApp's trademark.)
 
 ## Installing
 
+On Arch Linux, Fastsapp is in the AUR:
+
+```sh
+yay -S fastsapp          # the released build
+yay -S fastsapp-git      # built from the latest commit
+```
+
 Builds for every release are on the
 [releases page](https://github.com/crmne/fastsapp/releases):
 
