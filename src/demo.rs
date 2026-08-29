@@ -407,7 +407,7 @@ pub fn populate(app: &mut App) {
                 "ada-reply",
                 true,
                 base + 120,
-                Content::text("Listened — agreed on *all three* points."),
+                Content::text("Listened, agreed on *all three* points."),
             );
             row.quoted = Some(Quoted {
                 id: "ada-voice".into(),

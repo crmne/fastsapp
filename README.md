@@ -12,8 +12,9 @@ same pattern without carrying WhatsApp's trademark.)
 
 ![Fastsapp showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
 
-More: [a group chat](docs/screenshot-group.png) and
-[the linking screen](docs/screenshot-link.png).
+![A group chat with sender names and pictures, a photo with reactions, a reply with a mention, and a poll](docs/screenshot-group.png)
+
+![The linking screen with the QR code](docs/screenshot-link.png)
 
 ## What it does
 
@@ -80,6 +81,21 @@ More: [a group chat](docs/screenshot-group.png) and
   from here in a way the phone sees (those two are kept locally for now).
 
 ## Installing
+
+Builds for every release are on the
+[releases page](https://github.com/crmne/fastsapp/releases):
+
+| Platform | File |
+| --- | --- |
+| Linux x86_64 and arm64 | `fastsapp-vX.Y.Z-<target>.tar.gz`, with the desktop file and icon in `packaging/` |
+| Windows x64 and arm64 | `fastsapp-vX.Y.Z-<target>-setup.exe` (no administrator rights needed), or the `.zip` |
+| macOS, universal | `fastsapp-vX.Y.Z-macos-universal.dmg` |
+
+The macOS app is not notarized unless the release was signed: if macOS
+refuses to open it, right-click the app and choose Open once, or allow it
+under System Settings, Privacy & Security.
+
+### From source
 
 Fastsapp needs a Rust toolchain (`rust-toolchain.toml` pins the exact
 version) and, on Linux, the usual GUI development packages:

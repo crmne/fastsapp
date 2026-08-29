@@ -18,7 +18,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let top = theme::blend(palette.window, palette.accent, 0.10);
             super::widgets::paint_vertical_gradient(ui, rect, top, palette.window);
             let card_width = 460.0_f32.min(rect.width() - 24.0);
-            let card_height = 560.0_f32.min(rect.height() - 24.0);
+            // The card is as tall as what it holds, which differs between the
+            // QR code, the pairing code, and an error; it is centred on the
+            // height it had last frame, and a first frame corrects itself.
+            let height_id = ui.id().with("login-card-height");
+            let known_height = ui
+                .ctx()
+                .data(|data| data.get_temp::<f32>(height_id))
+                .unwrap_or(560.0);
+            let card_height = known_height.min(rect.height() - 24.0);
             let card =
                 egui::Rect::from_center_size(rect.center(), Vec2::new(card_width, card_height));
             let mut card_ui = ui.new_child(
@@ -26,7 +34,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .max_rect(card)
                     .layout(Layout::top_down(Align::Center)),
             );
-            Frame::new()
+            let shown = Frame::new()
                 .fill(palette.panel)
                 .stroke(Stroke::new(1.0, palette.outline))
                 .corner_radius(CornerRadius::same(theme::RADIUS + 8))
@@ -59,6 +67,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.add_space(16.0);
                     body(app, ui);
                 });
+            let height = shown.response.rect.height();
+            if (height - known_height).abs() > 0.5 {
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(height_id, height));
+                ui.ctx().request_repaint();
+            }
         });
 }
 
