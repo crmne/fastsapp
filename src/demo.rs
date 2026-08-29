@@ -894,6 +894,44 @@ mod tests {
     }
 
     #[test]
+    fn right_click_anywhere_on_a_message_opens_its_menu() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        // The last message: a link preview card fills its top, and the
+        // card takes clicks for itself, which is what used to keep the
+        // menu from opening.
+        let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
+        let rect = ctx
+            .read_response(id)
+            .expect("the link message is on screen")
+            .rect;
+        let on_card = rect.left_top() + egui::vec2(rect.width() / 2.0, 40.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: on_card,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(on_card), button(true)],
+        );
+        frame_with(&mut app, &ctx, vec![button(false)]);
+        let popup = id.with("popup");
+        assert!(
+            egui::Popup::is_id_open(&ctx, popup),
+            "a right-click on the preview card opens the message menu"
+        );
+        render(&mut app, &ctx);
+        assert!(egui::Popup::is_id_open(&ctx, popup), "and it stays open");
+    }
+
+    #[test]
     fn editing_puts_the_text_back_and_escape_stops() {
         let mut app = app();
         let ctx = egui::Context::default();

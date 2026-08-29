@@ -854,6 +854,12 @@ fn bubble(
     response
 }
 
+/// The id of a message's bubble, the same on every frame and knowable from
+/// outside, so tests can find the bubble and its menu.
+pub fn bubble_id(chat: &str, message: &str) -> egui::Id {
+    egui::Id::new(("bubble", chat, message))
+}
+
 /// The bubble itself: sender, quote, content, footer, and its menu.
 fn bubble_frame(
     ui: &mut egui::Ui,
@@ -878,7 +884,7 @@ fn bubble_frame(
     // from where it was last frame, so links, quotes, and attachments
     // inside it stay on top and get their clicks; the bubble keeps the
     // right-click for its menu.
-    let bubble_id = ui.id().with(("bubble", &message.id));
+    let bubble_id = bubble_id(&view.chat.id, &message.id);
     let early = ui
         .ctx()
         .read_response(bubble_id)
@@ -949,6 +955,9 @@ fn bubble_frame(
     // The right-click is read from the input rather than from the bubble's
     // response: a quote, a link, or a preview card inside the bubble owns
     // the pointer where it sits, and the menu must open there too.
+    // `layer_id_at` only knows floating areas (menus, dialogs, the
+    // picker): over the plain chat panel it answers `None`, which is the
+    // case that must open the menu; another area on top must not.
     let right_clicked = ui.input(|input| {
         input.pointer.secondary_clicked()
             && input
@@ -957,8 +966,11 @@ fn bubble_frame(
                 .is_some_and(|pos| bubble.rect.contains(pos))
     }) && ui
         .input(|input| input.pointer.interact_pos())
-        .and_then(|pos| ui.ctx().layer_id_at(pos))
-        .is_some_and(|layer| layer == bubble.layer_id);
+        .is_some_and(|pos| {
+            ui.ctx()
+                .layer_id_at(pos)
+                .is_none_or(|layer| layer == bubble.layer_id)
+        });
     let quick = quick_reactions(message).len() as f32;
     let width = widgets::menu_width(
         ui,
