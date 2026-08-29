@@ -1038,6 +1038,14 @@ impl Worker {
     fn on_receipt(&mut self, receipt: &wa_events::Receipt) {
         self.learn_source(&receipt.source);
         let chat = self.canonical(&receipt.source.chat);
+        log::debug!(
+            "receipt {:?} from {} (chat {chat}, from me: {}, offline: {}) for {:?}",
+            receipt.r#type,
+            receipt.source.sender,
+            receipt.source.is_from_me,
+            receipt.offline,
+            receipt.message_ids
+        );
         let status = match receipt.r#type {
             ReceiptType::Delivered => Delivery::Delivered,
             ReceiptType::Read => Delivery::Read,
@@ -1050,14 +1058,24 @@ impl Worker {
             _ => return,
         };
         let mut newest = 0;
+        let mut changed = 0;
         for id in &receipt.message_ids {
-            if let Ok(true) = self.archive.set_status(&chat, id, status) {
-                self.emit_message(&chat, id);
+            match self.archive.set_status(&chat, id, status) {
+                Ok(true) => {
+                    changed += 1;
+                    self.emit_message(&chat, id);
+                }
+                Ok(false) => {}
+                Err(error) => log::warn!("could not file a receipt for {id}: {error}"),
             }
             if let Ok(Some(message)) = self.archive.message(&chat, id) {
                 newest = newest.max(message.timestamp);
             }
         }
+        log::debug!(
+            "receipt moved {changed} of {} messages in {chat} to {status:?}",
+            receipt.message_ids.len()
+        );
         // A read receipt covers everything before it too.
         if status >= Delivery::Read
             && newest > 0

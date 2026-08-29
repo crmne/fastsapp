@@ -898,8 +898,9 @@ mod tests {
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
-        render(&mut app, &ctx);
-        render(&mut app, &ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
         let chat = sample_ids()[0].to_owned();
         // The last message: a link preview card fills its top, and the
         // card takes clicks for itself, which is what used to keep the
@@ -929,6 +930,27 @@ mod tests {
         );
         render(&mut app, &ctx);
         assert!(egui::Popup::is_id_open(&ctx, popup), "and it stays open");
+    }
+
+    #[test]
+    fn bubble_hit_rects_follow_the_layout() {
+        // The chat opens at its end, which moves every message a long way
+        // from where the first frame laid it out; the rect a right-click is
+        // checked against must follow, not stay where the message was first
+        // drawn.
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let chat = sample_ids()[0].to_owned();
+        let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        let settled = ctx.read_response(id).expect("on screen").rect;
+        assert!(
+            settled.top() >= 0.0 && settled.bottom() <= 780.0,
+            "the last message's hit rect is where it is drawn: {settled:?}"
+        );
     }
 
     #[test]

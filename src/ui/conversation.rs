@@ -640,10 +640,13 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                         // content, which leaves the view stuck to the
                         // bottom, so it stays there as pictures and
                         // previews arrive and the content grows.
+                        // Instantly: opening a chat lands at its end, it
+                        // does not fly there.
                         let end = ui.cursor().min + vec2(0.0, 64.0);
-                        ui.scroll_to_rect(
+                        ui.scroll_to_rect_animation(
                             Rect::from_min_size(end, Vec2::ZERO),
                             Some(Align::BOTTOM),
+                            egui::style::ScrollAnimation::none(),
                         );
                     }
                 });
@@ -885,10 +888,12 @@ fn bubble_frame(
     // inside it stay on top and get their clicks; the bubble keeps the
     // right-click for its menu.
     let bubble_id = bubble_id(&view.chat.id, &message.id);
-    let early = ui
-        .ctx()
-        .read_response(bubble_id)
-        .map(|previous| ui.interact(previous.rect, bubble_id, Sense::click()));
+    // Where the bubble was last frame is kept by us: reading back the early
+    // interact itself would only ever repeat the rect of the first frame,
+    // and right-clicks would land on wherever each message was first drawn.
+    let rect_id = bubble_id.with("rect");
+    let previous = ui.ctx().data(|data| data.get_temp::<Rect>(rect_id));
+    let early = previous.map(|rect| ui.interact(rect, bubble_id, Sense::click()));
     let inner = Frame::new()
         .fill(fill)
         .corner_radius(CornerRadius::same(10))
@@ -950,6 +955,8 @@ fn bubble_frame(
             let slot = content(ui, view, message, max_width - 20.0, reserve, actions);
             footer(ui, &palette, message, slot);
         });
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(rect_id, inner.response.rect));
     let bubble =
         early.unwrap_or_else(|| ui.interact(inner.response.rect, bubble_id, Sense::click()));
     // The right-click is read from the input rather than from the bubble's
@@ -992,7 +999,9 @@ fn bubble_frame(
         .show(|ui| {
             context_menu(ui, view, message, actions);
         });
-    bubble
+    // The frame's own response has this frame's rect, which is what a
+    // scroll to the message needs.
+    inner.response
 }
 
 fn quote_block(
