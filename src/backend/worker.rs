@@ -1054,6 +1054,9 @@ impl Worker {
         );
         let status = match receipt.r#type {
             ReceiptType::Delivered => Delivery::Delivered,
+            // Delivered to a device that is inactive: the message reached
+            // it, which is what the second tick says.
+            ReceiptType::Inactive => Delivery::Delivered,
             ReceiptType::Read => Delivery::Read,
             ReceiptType::Played => Delivery::Played,
             ReceiptType::ReadSelf | ReceiptType::PlayedSelf => {
@@ -1061,6 +1064,11 @@ impl Worker {
                 self.emit_chat(&chat);
                 return;
             }
+            // "Delivered to one of our own devices". In the chat with
+            // ourselves that device is the recipient, and the phone shows
+            // the message read; anywhere else it says nothing about the
+            // peer.
+            ReceiptType::Sender if chat == self.me() => Delivery::Read,
             _ => return,
         };
         let mut newest = 0;
@@ -3764,6 +3772,56 @@ mod receipt_tests {
         assert_eq!(status("A2"), Delivery::Read, "the named message");
         assert_eq!(status("A1"), Delivery::Read, "and everything before it");
         assert_eq!(status("A3"), Delivery::Sent, "not what came after");
+    }
+
+    #[test]
+    fn inactive_counts_as_delivered_and_sender_only_in_the_chat_with_ourselves() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.archive.ensure_chat(PEER, "R").expect("chat");
+        worker.archive.ensure_chat(ME, "Me").expect("chat");
+        worker
+            .archive
+            .insert_message(&own_message("C1", 100), None)
+            .expect("stored");
+        let mut to_self = own_message("S1", 100);
+        to_self.chat = ME.into();
+        worker
+            .archive
+            .insert_message(&to_self, None)
+            .expect("stored");
+        worker.on_receipt(&receipt(PEER, &["C1"], ReceiptType::Inactive));
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "C1")
+                .expect("read")
+                .expect("row")
+                .status,
+            Delivery::Delivered,
+            "an inactive device still received it"
+        );
+        worker.on_receipt(&receipt(PEER, &["C1"], ReceiptType::Sender));
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "C1")
+                .expect("read")
+                .expect("row")
+                .status,
+            Delivery::Delivered,
+            "our own other device says nothing about the peer"
+        );
+        worker.on_receipt(&receipt(ME, &["S1"], ReceiptType::Sender));
+        assert_eq!(
+            worker
+                .archive
+                .message(ME, "S1")
+                .expect("read")
+                .expect("row")
+                .status,
+            Delivery::Read,
+            "a message to ourselves is read once the phone has it"
+        );
     }
 
     #[test]

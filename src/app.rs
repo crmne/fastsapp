@@ -695,7 +695,15 @@ impl App {
             }
             Err(error) => {
                 media.state = MediaState::Failed(error.clone());
-                self.toast_error(format!("Download failed: {error}"));
+                // WhatsApp keeps a file for a while only; a 403 or 404 is the
+                // server saying it is gone, not a fault here.
+                let notice = if error.contains("403") || error.contains("404") {
+                    "This file is no longer on WhatsApp's servers; ask for it to be sent again"
+                        .to_owned()
+                } else {
+                    format!("Download failed: {error}")
+                };
+                self.toast_error(notice);
             }
         }
     }
