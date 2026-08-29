@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Fastsapp
+GenericName=WhatsApp Client
+Comment=A fast, native WhatsApp client
+Exec=fastsapp
+Icon=fastsapp
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=whatsapp;chat;messaging;
+StartupWMClass=fastsapp

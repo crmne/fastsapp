@@ -1,0 +1,6 @@
+# Pin the toolchain so local builds and CI use the same compiler, clippy and
+# rustfmt. Upgrades are deliberate: bump this version, then resolve any new
+# formatting or lint changes in the same commit.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

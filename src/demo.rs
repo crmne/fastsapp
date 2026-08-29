@@ -1,0 +1,943 @@
+//! Sample data for screenshots and headless tests: a linked account with a
+//! handful of chats, and nothing on the wire.
+
+use std::collections::HashMap;
+
+use crate::app::{App, Conversation, Presence};
+use crate::backend::LinkStatus;
+use crate::model::{
+    Chat, Contact, Content, Delivery, Dialog, LinkPreview, Media, MentionRef, Message, Page,
+    Quoted, Reaction,
+};
+use crate::settings::ThemeChoice;
+
+const ME: &str = "15550001111@s.whatsapp.net";
+
+struct Sample {
+    id: &'static str,
+    name: &'static str,
+    minutes_ago: i64,
+    unread: u32,
+    pinned: bool,
+    muted: bool,
+    archived: bool,
+    lines: &'static [(bool, &'static str)],
+}
+
+/// A small JPEG, the kind WhatsApp sends ahead of a picture, drawn here
+/// rather than shipped: a soft gradient with a dark shape.
+pub fn sample_thumbnail(seed: u32) -> Vec<u8> {
+    let (width, height) = (64u32, 48u32);
+    let mut image = image::RgbImage::new(width, height);
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        let t = x as f32 / width as f32;
+        let u = y as f32 / height as f32;
+        let hue = ((seed * 37) % 360) as f32;
+        let base = crate::theme::hsl_rgb(hue, 0.45, 0.35 + 0.3 * u);
+        let dark = ((x as i32 - 40).pow(2) + (y as i32 - 30).pow(2)) < 120;
+        *pixel = if dark {
+            image::Rgb([30, 30, 34])
+        } else {
+            image::Rgb([
+                (base[0] as f32 * (0.7 + 0.3 * t)) as u8,
+                (base[1] as f32 * (0.7 + 0.3 * t)) as u8,
+                (base[2] as f32 * (0.7 + 0.3 * t)) as u8,
+            ])
+        };
+    }
+    let mut bytes = Vec::new();
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 70);
+    let _ = encoder.encode_image(&image);
+    bytes
+}
+
+const SAMPLES: &[Sample] = &[
+    Sample {
+        id: "393331234567@s.whatsapp.net",
+        name: "Ada Lovelace",
+        minutes_ago: 3,
+        unread: 2,
+        pinned: true,
+        muted: false,
+        archived: false,
+        lines: &[
+            (false, "Did the analytical engine build finish?"),
+            (true, "Yes! It compiles on stable now, no nightly needed."),
+            (
+                false,
+                "That is wonderful news. Send me the branch when you can.",
+            ),
+            (
+                false,
+                "Also: https://en.wikipedia.org/wiki/Analytical_engine for the bedtime reading 😄",
+            ),
+        ],
+    },
+    Sample {
+        id: "120363012345678901@g.us",
+        name: "Rust Berlin",
+        minutes_ago: 25,
+        unread: 14,
+        pinned: false,
+        muted: true,
+        archived: false,
+        lines: &[
+            (false, "Anyone at the meetup tonight?"),
+            (true, "I'll be there around 19:00"),
+            (false, "Same. Bringing the egui demo"),
+            (false, "Save me a seat 🙏"),
+        ],
+    },
+    Sample {
+        id: "441632960123@s.whatsapp.net",
+        name: "Grace Hopper",
+        minutes_ago: 90,
+        unread: 0,
+        pinned: false,
+        muted: false,
+        archived: false,
+        lines: &[
+            (true, "Found the bug. It was a moth."),
+            (false, "Literally?"),
+            (true, "Literally. Taped it into the logbook."),
+        ],
+    },
+    Sample {
+        id: "4915112345678@s.whatsapp.net",
+        name: "Linus",
+        minutes_ago: 60 * 26,
+        unread: 0,
+        pinned: false,
+        muted: false,
+        archived: false,
+        lines: &[
+            (false, "Talk is cheap. Show me the code."),
+            (true, "Pushed 😌"),
+        ],
+    },
+    Sample {
+        id: "120363098765432109@g.us",
+        name: "Family",
+        minutes_ago: 60 * 50,
+        unread: 0,
+        pinned: false,
+        muted: false,
+        archived: false,
+        lines: &[
+            (false, "Dinner on Sunday at 13:00?"),
+            (true, "We'll be there"),
+            (false, "Bring the good bread 🥖"),
+        ],
+    },
+    Sample {
+        id: "14155550199@s.whatsapp.net",
+        name: "Margaret Hamilton",
+        minutes_ago: 60 * 24 * 4,
+        unread: 0,
+        pinned: false,
+        muted: false,
+        archived: false,
+        lines: &[
+            (false, "The landing software held up."),
+            (true, "Never doubted it."),
+        ],
+    },
+    Sample {
+        id: "120363011122233344@g.us",
+        name: "Section 8 Berlin",
+        minutes_ago: 60 * 5,
+        unread: 0,
+        pinned: false,
+        muted: false,
+        archived: false,
+        lines: &[
+            (
+                false,
+                "*ARTIST CARE Timetable*\n\n20:00 – 21:00 @491701111111 (no pronouns)\n21:00 – 23:00 Melissa (she/they)\n23:00 – 07:00 @491703333333 (she/her)",
+            ),
+            (
+                false,
+                "We'd really appreciate if you could take 3 minutes to check out our *vision & values*. It helps set the tone for a smooth and healthy collaboration 💜\nsection8berlin.com\n\nIn the next days we will drop some more information🔥\n* Guestlist\n* Dresscode\n* Coatcheck",
+            ),
+        ],
+    },
+    Sample {
+        id: "33612345678@s.whatsapp.net",
+        name: "Dentist",
+        minutes_ago: 60 * 24 * 12,
+        unread: 0,
+        pinned: false,
+        muted: false,
+        archived: true,
+        lines: &[(false, "Reminder: your appointment is on Tuesday at 9:30.")],
+    },
+];
+
+fn media(mime: &str, size: u64, width: Option<u32>, height: Option<u32>) -> Media {
+    Media {
+        mime: mime.to_owned(),
+        size,
+        width,
+        height,
+        path: None,
+        state: Default::default(),
+    }
+}
+
+fn message(chat: &str, id: &str, from_me: bool, timestamp: i64, content: Content) -> Message {
+    Message {
+        id: id.to_owned(),
+        chat: chat.to_owned(),
+        sender: if from_me {
+            ME.to_owned()
+        } else {
+            chat.to_owned()
+        },
+        sender_name: None,
+        from_me,
+        timestamp,
+        content,
+        status: if from_me {
+            Delivery::Read
+        } else {
+            Delivery::None
+        },
+        quoted: None,
+        reactions: Vec::new(),
+        edited: false,
+        mentions: Vec::new(),
+        forwarded: false,
+        thumbnail: None,
+    }
+}
+
+/// A larger sample picture on disk, so the view's real picture path is
+/// exercised, plus a two-frame animated sticker.
+fn sample_files(app: &App) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = app.dirs.media_cache_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let photo = dir.join("demo-photo.jpg");
+    if !photo.exists() {
+        let (width, height) = (900u32, 1200u32);
+        let mut image = image::RgbImage::new(width, height);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            let t = y as f32 / height as f32;
+            let base = crate::theme::hsl_rgb(200.0 + 40.0 * t, 0.5, 0.35 + 0.35 * t);
+            let ring = ((x as i32 - 450).pow(2) + (y as i32 - 700).pow(2)) as f32;
+            let on_ring = (ring.sqrt() - 260.0).abs() < 14.0;
+            *pixel = if on_ring {
+                image::Rgb([250, 244, 220])
+            } else {
+                image::Rgb(base)
+            };
+        }
+        let _ = image.save(&photo);
+    }
+    let sticker = dir.join("demo-sticker.gif");
+    if !sticker.exists()
+        && let Ok(file) = std::fs::File::create(&sticker)
+    {
+        let mut encoder = image::codecs::gif::GifEncoder::new(file);
+        let _ = encoder.set_repeat(image::codecs::gif::Repeat::Infinite);
+        for step in 0..8u32 {
+            let mut frame = image::RgbaImage::from_pixel(160, 160, image::Rgba([0, 0, 0, 0]));
+            let angle = step as f32 * std::f32::consts::TAU / 8.0;
+            let (cx, cy) = (80.0 + 40.0 * angle.cos(), 80.0 + 40.0 * angle.sin());
+            for (x, y, pixel) in frame.enumerate_pixels_mut() {
+                let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+                if d < 28.0 {
+                    *pixel = image::Rgba([255, 200, 60, 255]);
+                }
+            }
+            let _ = encoder.encode_frame(image::Frame::from_parts(
+                frame,
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(120, 1),
+            ));
+        }
+    }
+    (photo, sticker)
+}
+
+/// Fills the app with the sample account and opens its first chat.
+pub fn populate(app: &mut App) {
+    app.backend.set_offline(true);
+    // Nothing answers a download here; attachments stay as they arrive.
+    app.settings.auto_download = false;
+    app.link = LinkStatus::Connected;
+    app.me = Some(ME.to_owned());
+    app.me_name = Some("Carmine".to_owned());
+    app.chats.clear();
+    app.conversations.clear();
+    let now = crate::util::now();
+    let group_members = [
+        ("491701111111@s.whatsapp.net", "Jonas"),
+        ("491702222222@s.whatsapp.net", "Mira"),
+        ("491703333333@s.whatsapp.net", "Tom"),
+    ];
+    for (id, name) in group_members {
+        app.contacts.insert(
+            id.to_owned(),
+            Contact {
+                id: id.to_owned(),
+                full_name: Some(name.to_owned()),
+                push_name: None,
+            },
+        );
+    }
+    for sample in SAMPLES {
+        let mut chat = Chat::new(sample.id.to_owned(), sample.name.to_owned());
+        chat.last_activity = now - sample.minutes_ago * 60;
+        chat.unread = sample.unread;
+        chat.pinned = sample.pinned;
+        chat.muted_until = sample.muted.then_some(0);
+        chat.archived = sample.archived;
+        let mut conversation = Conversation {
+            complete: true,
+            requested: true,
+            // There is no phone to ask.
+            phone_exhausted: true,
+            ..Default::default()
+        };
+        let count = sample.lines.len() as i64;
+        for (index, (from_me, text)) in sample.lines.iter().enumerate() {
+            let timestamp = chat.last_activity - (count - index as i64 - 1) * 60 * 7;
+            let mut row = message(
+                sample.id,
+                &format!("{}-{index}", sample.id),
+                *from_me,
+                timestamp,
+                Content::text(*text),
+            );
+            if chat.is_group() && !from_me {
+                let (sender, name) = group_members[index % group_members.len()];
+                row.sender = sender.to_owned();
+                row.sender_name = Some(name.to_owned());
+                row.mentions = group_members
+                    .iter()
+                    .map(|(id, _)| MentionRef {
+                        user: id.split('@').next().unwrap_or_default().to_owned(),
+                        id: (*id).to_owned(),
+                    })
+                    .collect();
+            }
+            conversation.messages.push(row);
+        }
+        if chat.is_group() {
+            chat.participants = group_members
+                .iter()
+                .map(|(id, _)| (*id).to_owned())
+                .chain(std::iter::once(ME.to_owned()))
+                .collect();
+            chat.read_only = sample.name == "Section 8 Berlin";
+        }
+        chat.last = conversation
+            .messages
+            .last()
+            .map(|last| crate::model::LastMessage {
+                from_me: last.from_me,
+                sender: last.sender.clone(),
+                sender_name: last.sender_name.clone(),
+                summary: last.summary(),
+                status: last.status,
+            });
+        app.conversations.insert(sample.id.to_owned(), conversation);
+        app.chats.push(chat);
+    }
+
+    // The first chat gets the full range of what a bubble can hold.
+    let (photo, sticker) = sample_files(app);
+    let ada = SAMPLES[0].id;
+    let base = app.chats[0].last_activity;
+    let older = base - 60 * 60 * 30;
+    // The richest messages come last, so a screenshot of the chat's end
+    // shows them.
+    let latest = vec![
+        {
+            let mut row = message(
+                ada,
+                "ada-photo",
+                false,
+                base + 30,
+                Content::Image {
+                    caption: Some("The difference engine, finally assembled".into()),
+                    media: media("image/jpeg", 1_843_201, Some(1600), Some(1200)),
+                },
+            );
+            row.thumbnail = Some(sample_thumbnail(1));
+            row.reactions.push(Reaction {
+                sender: ME.into(),
+                from_me: true,
+                emoji: "❤️".into(),
+            });
+            row.reactions.push(Reaction {
+                sender: ada.into(),
+                from_me: false,
+                emoji: "😂".into(),
+            });
+            row
+        },
+        message(
+            ada,
+            "ada-doc",
+            true,
+            base + 60,
+            Content::Document {
+                media: media("application/pdf", 482_113, None, None),
+                file_name: "Notes on the Engine.pdf".into(),
+                caption: None,
+                pages: Some(12),
+            },
+        ),
+        message(
+            ada,
+            "ada-voice",
+            false,
+            base + 90,
+            Content::Audio {
+                media: media("audio/ogg; codecs=opus", 71_002, None, None),
+                seconds: Some(42),
+                voice_note: true,
+            },
+        ),
+        {
+            let mut row = message(
+                ada,
+                "ada-reply",
+                true,
+                base + 120,
+                Content::text("Listened — agreed on *all three* points."),
+            );
+            row.quoted = Some(Quoted {
+                id: "ada-voice".into(),
+                sender: ada.into(),
+                sender_name: Some("Ada Lovelace".into()),
+                summary: "Voice message (0:42)".into(),
+            });
+            row.edited = true;
+            row.status = Delivery::Delivered;
+            row
+        },
+        {
+            let mut row = message(
+                ada,
+                "ada-link",
+                true,
+                base + 150,
+                Content::Text {
+                    text: "btw I made my own Spotify app from scratch! https://fastpotify.rocks/".into(),
+                    preview: Some(LinkPreview {
+                        url: "https://fastpotify.rocks/".into(),
+                        title: Some("fastpotify.rocks".into()),
+                        description: Some("Spotify, native and fast. A lightweight Spotify client written in Rust with egui.".into()),
+                    }),
+                },
+            );
+            row.thumbnail = Some(sample_thumbnail(3));
+            row
+        },
+    ];
+    let extra = vec![
+        {
+            let mut row = message(
+                ada,
+                "ada-video",
+                true,
+                older + 60,
+                Content::Video {
+                    caption: None,
+                    media: media("video/mp4", 820_000, Some(1280), Some(720)),
+                    seconds: Some(5),
+                    gif: false,
+                },
+            );
+            row.thumbnail = Some(sample_thumbnail(2));
+            row
+        },
+        message(
+            ada,
+            "ada-format",
+            false,
+            older + 60 * 16,
+            Content::text(
+                "_Reading list_ for the weekend:\n* ~Babbage's memoirs~ done\n* `sketch.rs` from the repo\n> and the essay you sent 🙏\nMail me at ada@analytical.engine or see engine.rocks",
+            ),
+        ),
+        message(
+            ada,
+            "ada-emoji",
+            true,
+            older + 60 * 17,
+            Content::text("😂🎉"),
+        ),
+        {
+            let mut row = message(
+                ada,
+                "ada-tall",
+                false,
+                older + 60 * 18,
+                Content::Image {
+                    caption: None,
+                    media: media("image/jpeg", 402_113, Some(900), Some(1200)),
+                },
+            );
+            row.forwarded = true;
+            if let Content::Image { media, .. } = &mut row.content {
+                media.path = Some(photo.clone());
+            }
+            row
+        },
+        {
+            let mut row = message(
+                ada,
+                "ada-sticker",
+                true,
+                older + 60 * 19,
+                Content::Sticker {
+                    media: media("image/webp", 20_000, Some(160), Some(160)),
+                    animated: true,
+                },
+            );
+            if let Content::Sticker { media, .. } = &mut row.content {
+                media.path = Some(sticker.clone());
+            }
+            row
+        },
+        message(
+            ada,
+            "ada-location",
+            false,
+            older + 60 * 20,
+            Content::Location {
+                latitude: 51.5237,
+                longitude: -0.1585,
+                name: Some("Ada's place".into()),
+                address: Some("12 St James's Square, London".into()),
+            },
+        ),
+        message(ada, "ada-deleted", false, older + 60 * 25, Content::Revoked),
+    ];
+    let conversation = app.conversations.get_mut(ada).expect("sample chat");
+    conversation.messages.splice(0..0, extra);
+    conversation.messages.extend(latest);
+
+    // The group gets a picture, a reply with a mention, and a poll.
+    let group = SAMPLES[1].id;
+    let group_base = app.chats[1].last_activity;
+    let (jonas, mira, tom) = (group_members[0], group_members[1], group_members[2]);
+    let group_extra = vec![
+        {
+            let mut row = message(
+                group,
+                "group-photo",
+                false,
+                group_base + 60,
+                Content::Image {
+                    caption: Some("Tonight's venue, doors at 18:30".into()),
+                    media: media("image/jpeg", 1_204_551, Some(1600), Some(1200)),
+                },
+            );
+            row.sender = tom.0.to_owned();
+            row.sender_name = Some(tom.1.to_owned());
+            row.thumbnail = Some(sample_thumbnail(2));
+            row.reactions.push(Reaction {
+                sender: jonas.0.into(),
+                from_me: false,
+                emoji: "🔥".into(),
+            });
+            row.reactions.push(Reaction {
+                sender: ME.into(),
+                from_me: true,
+                emoji: "🔥".into(),
+            });
+            row
+        },
+        {
+            let mut row = message(
+                group,
+                "group-reply",
+                false,
+                group_base + 120,
+                Content::text(format!(
+                    "@{} will do, front row",
+                    jonas.0.split('@').next().unwrap_or_default()
+                )),
+            );
+            row.sender = mira.0.to_owned();
+            row.sender_name = Some(mira.1.to_owned());
+            row.quoted = Some(Quoted {
+                id: format!("{group}-3"),
+                sender: jonas.0.into(),
+                sender_name: Some(jonas.1.into()),
+                summary: "Save me a seat 🙏".into(),
+            });
+            row.mentions = vec![MentionRef {
+                user: jonas.0.split('@').next().unwrap_or_default().to_owned(),
+                id: jonas.0.to_owned(),
+            }];
+            row
+        },
+        message(
+            group,
+            "group-poll",
+            true,
+            group_base + 180,
+            Content::Poll {
+                question: "Pizza after the talks?".into(),
+                options: vec!["Yes".into(), "Only if it's Neapolitan".into(), "No".into()],
+            },
+        ),
+    ];
+    app.conversations
+        .get_mut(group)
+        .expect("sample group")
+        .messages
+        .extend(group_extra);
+
+    // The chat rows follow their conversations' last message.
+    for chat in &mut app.chats {
+        if let Some(last) = app
+            .conversations
+            .get(&chat.id)
+            .and_then(|conversation| conversation.messages.last())
+        {
+            chat.last_activity = last.timestamp;
+            chat.last = Some(crate::model::LastMessage {
+                from_me: last.from_me,
+                sender: last.sender.clone(),
+                sender_name: last.sender_name.clone(),
+                summary: last.summary(),
+                status: last.status,
+            });
+        }
+    }
+    app.typing.insert(
+        SAMPLES[1].id.to_owned(),
+        vec![(group_members[1].0.to_owned(), std::time::Instant::now())],
+    );
+    app.presence.insert(
+        ada.to_owned(),
+        Presence {
+            online: true,
+            last_seen: None,
+        },
+    );
+    app.open_chat = Some(ada.to_owned());
+    // An open chat has been read.
+    if let Some(chat) = app.chats.iter_mut().find(|chat| chat.id == ada) {
+        chat.unread = 0;
+    }
+    app.scroll_to_bottom = true;
+    app.focus_composer = false;
+}
+
+/// Applies `--demo-page`: which surface to show.
+pub fn apply_flags(app: &mut App, page: Option<&str>) {
+    let Some(page) = page else {
+        return;
+    };
+    for part in page.split(',').map(str::trim) {
+        match part {
+            "chat" | "" => {}
+            "empty" => app.open_chat = None,
+            "settings" => app.page = Page::Settings,
+            "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
+            "about" => app.dialog = Some(Dialog::About),
+            "info" => {
+                app.dialog = app.open_chat.clone().map(Dialog::ChatInfo);
+            }
+            "unlink" => app.dialog = Some(Dialog::ConfirmUnlink),
+            "light" => {
+                app.settings.theme = ThemeChoice::Light;
+            }
+            "login" => {
+                unlink(app);
+                app.link = LinkStatus::Unlinked {
+                    qr: Some(sample_qr()),
+                    pair_code: None,
+                    pairing_phone: None,
+                };
+            }
+            "pair" => {
+                unlink(app);
+                app.link = LinkStatus::Unlinked {
+                    qr: None,
+                    pair_code: Some("FWAP1234".into()),
+                    pairing_phone: Some("15550001111".into()),
+                };
+            }
+            "phone" => {
+                unlink(app);
+                app.link = LinkStatus::Unlinked {
+                    qr: Some(sample_qr()),
+                    pair_code: None,
+                    pairing_phone: None,
+                };
+                app.dialog = Some(Dialog::PairWithPhone);
+            }
+            "offline" => {
+                app.link = LinkStatus::Disconnected {
+                    reason: "stream ended".into(),
+                };
+            }
+            "syncing" => app.syncing = true,
+            "archived" => app.show_archived = true,
+            "picker" => app.picker = Some(crate::model::PickerTab::Emoji),
+            "stickers" => {
+                app.picker = Some(crate::model::PickerTab::Stickers);
+                let (_, sticker) = sample_files(app);
+                app.stickers = vec![sticker; 7];
+            }
+            "gifs" => {
+                app.picker = Some(crate::model::PickerTab::Gifs);
+                app.settings.giphy_key = "demo".into();
+                app.gif_results = (0..6)
+                    .map(|index| crate::model::Gif {
+                        id: format!("demo{index}"),
+                        still: Some(sample_files(app).0),
+                        mp4: String::new(),
+                        width: 200,
+                        height: if index % 2 == 0 { 150 } else { 200 },
+                    })
+                    .collect();
+            }
+            other => {
+                if app.chat(other).is_some() {
+                    app.open_chat = Some(other.to_owned());
+                    if let Some(chat) = app.chats.iter_mut().find(|chat| chat.id == other) {
+                        chat.unread = 0;
+                    }
+                } else {
+                    log::warn!("unknown demo page {other}");
+                }
+            }
+        }
+    }
+}
+
+fn unlink(app: &mut App) {
+    app.chats.clear();
+    app.conversations.clear();
+    app.open_chat = None;
+    app.me = None;
+}
+
+fn sample_qr() -> String {
+    "2@P0wCq0m3R7bC5w8kJgyEUvE8g4mR6qJ1u5o0dQ+K0nH1Lf6xw1GZrJH9fdQmKX3xJfN0oT2XQ5YV8W2v4u7aV1I=,\
+     Q9Y8x7W6v5U4t3S2r1Q0p9O8n7M6l5K4j3I2h1G0f9E8d7C6b5A4z3Y2x1W0=,K8j7H6g5F4d3S2a1Q0w9E8r7T6y5U4i3O2p1L0k9J8h7G6f5D4s3A2z1X0c9V8=,\
+     v7B6n5M4k3J2h1G0f9D8s7A6z5X4c3V2b1N0m9L8k7J6h5G4f3D2s1A0q9W8e7R6="
+        .to_owned()
+}
+
+/// Names of every chat in the sample, for tests.
+pub fn sample_ids() -> Vec<&'static str> {
+    SAMPLES.iter().map(|sample| sample.id).collect()
+}
+
+#[allow(dead_code)]
+fn contacts_by_id(app: &App) -> HashMap<&str, &Contact> {
+    app.contacts
+        .iter()
+        .map(|(id, contact)| (id.as_str(), contact))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paths::AppDirs;
+    use crate::settings::Settings;
+
+    fn app() -> App {
+        let root = std::env::temp_dir().join(format!(
+            "fastsapp-demo-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let (mut app, _events) = App::headless(AppDirs::under(&root), Settings::default());
+        populate(&mut app);
+        app
+    }
+
+    /// Lays the window out a few times without a display; any panic in a
+    /// view surfaces here.
+    fn render(app: &mut App, ctx: &egui::Context) {
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1180.0, 780.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            });
+            // No renderer takes the font atlas off our hands here.
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn the_sample_has_every_kind_of_row() {
+        let app = app();
+        assert!(app.chats.len() >= 5);
+        assert!(app.chats.iter().any(|chat| chat.is_group()));
+        assert!(app.chats.iter().any(|chat| chat.archived));
+        assert!(app.chats.iter().any(|chat| chat.pinned));
+        let ada = app.conversations.get(sample_ids()[0]).expect("first chat");
+        assert!(
+            ada.messages
+                .iter()
+                .any(|m| matches!(m.content, Content::Image { .. }))
+        );
+        assert!(
+            ada.messages
+                .iter()
+                .any(|m| matches!(m.content, Content::Revoked))
+        );
+        assert!(ada.messages.iter().any(|m| m.quoted.is_some()));
+    }
+
+    #[test]
+    fn every_surface_lays_out() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        for id in sample_ids() {
+            apply_flags(&mut app, Some(id));
+            render(&mut app, &ctx);
+        }
+        for page in [
+            "empty",
+            "settings",
+            "shortcuts",
+            "about",
+            "info",
+            "unlink",
+            "light",
+            "archived",
+            "offline",
+            "syncing",
+            "picker",
+            "stickers",
+            "gifs",
+        ] {
+            let mut app = self::app();
+            apply_flags(&mut app, Some(page));
+            render(&mut app, &ctx);
+        }
+        for page in ["login", "pair", "phone"] {
+            let mut app = self::app();
+            apply_flags(&mut app, Some(page));
+            render(&mut app, &ctx);
+            assert!(!app.is_linked());
+        }
+    }
+
+    /// Runs one frame with the given input events.
+    fn frame_with(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1180.0, 780.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn enter_sends_and_shift_enter_breaks_the_line() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.focus_composer = true;
+        render(&mut app, &ctx);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("hello".into())]);
+        assert_eq!(app.composer, "hello");
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(app.composer, "hello\n", "Shift+Enter adds a line");
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("there".into())]);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.composer, "", "Enter sends");
+    }
+
+    #[test]
+    fn editing_puts_the_text_back_and_escape_stops() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        let own = app
+            .conversations
+            .get(&chat)
+            .and_then(|conversation| {
+                conversation.messages.iter().rev().find(|message| {
+                    message.from_me && matches!(message.content, Content::Text { .. })
+                })
+            })
+            .map(|message| message.id.clone())
+            .expect("an own text message");
+        app.actions.push(crate::model::Action::Edit(own.clone()));
+        render(&mut app, &ctx);
+        assert_eq!(app.editing.as_deref(), Some(own.as_str()));
+        assert!(!app.composer.is_empty());
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+        );
+        assert!(app.editing.is_none());
+        assert!(app.composer.is_empty());
+    }
+
+    #[test]
+    fn sidebar_can_be_hidden_and_the_composer_sends() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.actions.push(crate::model::Action::ToggleSidebar);
+        render(&mut app, &ctx);
+        assert!(!app.sidebar_visible);
+        app.composer = "hello".into();
+        app.actions.push(crate::model::Action::SendText {
+            chat: sample_ids()[0].into(),
+            text: "hello".into(),
+            quoting: None,
+        });
+        render(&mut app, &ctx);
+        assert!(app.reply_to.is_none());
+    }
+}
