@@ -625,6 +625,7 @@ struct View<'a> {
     avatars: &'a HashMap<String, Option<PathBuf>>,
     now: i64,
     player: &'a crate::audio::Player,
+    copy_rows: &'a std::sync::Mutex<Vec<crate::transcript::Row>>,
 }
 
 fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
@@ -664,6 +665,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         avatars: &avatars,
         now: crate::util::now(),
         player: &app.player,
+        copy_rows: app.copy_rows.as_ref(),
     };
     let mut actions = Vec::new();
     let mut anchored = false;
@@ -856,7 +858,11 @@ fn top_of_history(
             });
         } else if conversation.messages.is_empty() {
             ui.add_space(24.0);
-            widgets::chip(ui, palette, "No messages here yet");
+            if conversation.fetching_phone {
+                widgets::chip(ui, palette, "Fetching messages from your phone…");
+            } else {
+                widgets::chip(ui, palette, "No messages here yet");
+            }
         } else {
             ui.add_space(6.0);
         }
@@ -1675,14 +1681,28 @@ fn rich_body(
         Some(reserve) => vec2(size.x.max(last_row + 8.0 + reserve), size.y),
         None => size,
     };
-    let sense = if laid.links.is_empty() {
-        Sense::hover()
+    // Remembered for the frame: a copy that runs across messages gets
+    // each one's clock, date, and writer put back (see `transcript`).
+    let who = if message.from_me {
+        (view.mention_names)(&message.sender)
     } else {
-        Sense::click()
+        (view.names_or)(&message.sender, message.sender_name.as_deref())
     };
-    let (rect, response) = ui.allocate_exact_size(allocation, sense);
+    view.copy_rows
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(crate::transcript::Row {
+            header: format!("[{}] {}: ", crate::util::copy_stamp(message.timestamp), who),
+            body: laid.galley.text().to_owned(),
+        });
+    // Clicks open links; the drag is the reader sweeping text to copy.
+    let (rect, response) = ui.allocate_exact_size(allocation, Sense::click_and_drag());
+    // Where the body itself sits, for tests that sweep it.
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(bubble_id(&view.chat.id, &message.id).with("body"), rect);
+    });
     if ui.is_rect_visible(rect) {
-        markup::paint(ui, &laid, rect.min, palette.text);
+        markup::paint_selectable(ui, &laid, &response, rect.min, palette.text);
     }
     if !laid.links.is_empty()
         && let Some(pos) = response.hover_pos()

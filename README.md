@@ -90,6 +90,10 @@ same pattern without carrying WhatsApp's trademark.)
   opens the chat (Linux). Off in Settings.
 - **Light and dark**, or follow the system. Zoom with Ctrl+plus and
   Ctrl+minus.
+- **Text you can take.** Sweep any part of a message and copy it; a
+  selection that runs across messages copies the way the phone shares
+  one, each line stamped `[time, date] Name:`. The name and number on a
+  contact's page select like any text.
 - **Keyboard-first.** `Ctrl+K` searches, `Alt+↑/↓` walks the chats, `Esc`
   backs out of anything, `Ctrl+/` lists the rest.
 - **Yours to keep.** Messages live in one SQLite file in your state

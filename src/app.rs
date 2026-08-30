@@ -171,6 +171,9 @@ pub struct App {
     pub recording: Option<Recorder>,
     /// Voice messages whose sender has been told they were played.
     played_told: HashSet<String>,
+    /// Every message body drawn this frame, in order, for rebuilding a
+    /// copied selection that spans messages (see `transcript`).
+    pub copy_rows: std::sync::Arc<std::sync::Mutex<Vec<crate::transcript::Row>>>,
     pub gif_query: String,
     pub gif_results: Vec<Gif>,
     /// A GIF search is on its way.
@@ -329,6 +332,7 @@ impl App {
             player: Player::new(waker.clone()),
             recording: None,
             played_told: HashSet::new(),
+            copy_rows: Default::default(),
             gif_query: String::new(),
             gif_results: Vec::new(),
             gif_pending: false,
@@ -474,6 +478,11 @@ impl App {
 
     /// Once per window, before the first frame.
     pub fn attach(&mut self, ctx: &egui::Context) {
+        // A copy that swept across messages gets each message's clock,
+        // date, and writer put back; registered once per context.
+        ctx.add_plugin(crate::transcript::CopyAnnotator {
+            rows: std::sync::Arc::clone(&self.copy_rows),
+        });
         crate::theme::install(ctx);
         // Three lines per wheel notch is what egui ships; a chat of short
         // rows wants the pace every other client scrolls at.
@@ -846,11 +855,16 @@ impl App {
                     } else if was_empty {
                         conversation.complete = complete;
                     }
-                    if self.open_chat.as_deref() == Some(chat.as_str())
-                        && !older
-                        && (self.at_bottom || was_empty)
-                    {
-                        self.scroll_to_bottom = true;
+                    // The archive holds nothing for this chat (history sync
+                    // brought only its name): ask the phone straight away.
+                    let bare = !older && complete && conversation.messages.is_empty();
+                    if self.open_chat.as_deref() == Some(chat.as_str()) {
+                        if !older && (self.at_bottom || was_empty) {
+                            self.scroll_to_bottom = true;
+                        }
+                        if bare {
+                            self.fetch_older(&chat);
+                        }
                     }
                 }
                 Event::Incoming { chat, message } => self.maybe_notify(&chat, &message),
@@ -1097,11 +1111,11 @@ impl App {
         {
             return;
         }
-        let Some(oldest) = conversation.messages.first() else {
-            return;
-        };
         conversation.fetching_phone = true;
-        self.scroll_anchor = Some(oldest.id.clone());
+        self.scroll_anchor = conversation
+            .messages
+            .first()
+            .map(|oldest| oldest.id.clone());
         self.backend.send(Command::FetchOlder(chat.to_owned()));
     }
 
@@ -1139,6 +1153,13 @@ impl App {
         self.at_bottom = true;
         self.focus_composer = true;
         self.ensure_loaded(&id);
+        if self
+            .conversations
+            .get(&id)
+            .is_some_and(|conversation| conversation.complete && conversation.messages.is_empty())
+        {
+            self.fetch_older(&id);
+        }
         if self.chat(&id).is_some_and(|chat| chat.unread > 0) {
             self.mark_read(&id);
         }
@@ -1760,6 +1781,10 @@ impl App {
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
+        self.copy_rows
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         self.apply_theme(ctx);
         let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
         // Coming back to the window is reading what arrived meanwhile.

@@ -140,6 +140,27 @@ pub fn paint(ui: &egui::Ui, text: &Text, pos: Pos2, fallback: Color32) {
     emoji::paint(ui, &text.galley, pos, &text.placements);
 }
 
+/// Paints like [`paint`], with the galley handed to egui's text selection,
+/// so the reader can sweep part of a message and copy it. The response must
+/// sense clicks and drags.
+pub fn paint_selectable(
+    ui: &egui::Ui,
+    text: &Text,
+    response: &egui::Response,
+    pos: Pos2,
+    fallback: Color32,
+) {
+    egui::text_selection::LabelSelectionState::label_text_selection(
+        ui,
+        response,
+        pos,
+        text.galley.clone(),
+        fallback,
+        egui::Stroke::NONE,
+    );
+    emoji::paint(ui, &text.galley, pos, &text.placements);
+}
+
 /// The text with markup removed and mentions named, for previews.
 pub fn plain(text: &str, mentions: &[Mention]) -> String {
     parse(text, mentions)

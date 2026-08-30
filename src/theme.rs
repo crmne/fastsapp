@@ -701,6 +701,16 @@ pub fn text(
     )
 }
 
+/// A label whose text can be swept and copied.
+pub fn selectable_text(
+    ui: &mut egui::Ui,
+    text: impl Into<String>,
+    font: egui::FontId,
+    color: Color32,
+) -> Response {
+    ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(color)).selectable(true))
+}
+
 /// Wrapping text in a given font and colour.
 pub fn paragraph(
     ui: &mut egui::Ui,

@@ -1147,6 +1147,128 @@ mod tests {
         assert!(app.pending.is_empty(), "sent with the caption");
     }
 
+    /// Part of a message can be swept with the pointer and copied, like any
+    /// text on a page.
+    #[test]
+    fn message_text_can_be_swept_and_copied() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        // Whichever message body the view has on screen.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
+        let rect = ["ada-format", "ada-link", "ada-reply", "ada-tall"]
+            .iter()
+            .find_map(|id| {
+                let key = crate::ui::conversation::bubble_id(&chat, id).with("body");
+                ctx.data(|data| data.get_temp::<egui::Rect>(key))
+                    .filter(|rect| screen.contains_rect(*rect))
+            })
+            .expect("a text body on screen");
+        let from = egui::pos2(rect.left() + 2.0, rect.center().y);
+        let to = egui::pos2(rect.center().x, rect.center().y);
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut copied = None;
+        for events in [
+            vec![egui::Event::PointerMoved(from), press(from, true)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![press(to, false)],
+            vec![egui::Event::Copy],
+            vec![],
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            });
+            output.textures_delta.clear();
+            for command in output.platform_output.commands {
+                if let egui::OutputCommand::CopyText(text) = command {
+                    copied = Some(text);
+                }
+            }
+        }
+        let copied = copied.expect("the sweep put text on the clipboard");
+        assert!(!copied.trim().is_empty(), "{copied:?}");
+    }
+
+    /// A copy that runs across messages carries each one's clock, date,
+    /// and writer, the way the phone hands a selection on.
+    #[test]
+    fn a_copy_across_messages_names_each_writer() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
+        let ids: Vec<String> = app.conversations[&chat]
+            .messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect();
+        let mut bodies: Vec<egui::Rect> = ids
+            .iter()
+            .filter_map(|id| {
+                let key = crate::ui::conversation::bubble_id(&chat, id).with("body");
+                ctx.data(|data| data.get_temp::<egui::Rect>(key))
+                    .filter(|rect| screen.contains_rect(*rect))
+            })
+            .collect();
+        bodies.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        assert!(bodies.len() >= 2, "two text bodies on screen");
+        let from = egui::pos2(bodies[0].left() + 2.0, bodies[0].center().y);
+        let to = bodies[1].center();
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut copied = None;
+        for events in [
+            vec![egui::Event::PointerMoved(from), press(from, true)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![press(to, false)],
+            vec![egui::Event::Copy],
+            vec![],
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            });
+            output.textures_delta.clear();
+            for command in output.platform_output.commands {
+                if let egui::OutputCommand::CopyText(text) = command {
+                    copied = Some(text);
+                }
+            }
+        }
+        let copied = copied.expect("the sweep put text on the clipboard");
+        assert!(copied.starts_with('['), "{copied:?}");
+        assert!(copied.matches("] ").count() >= 2, "{copied:?}");
+        assert!(copied.lines().count() >= 2, "{copied:?}");
+    }
+
     /// Own bubbles right-align, which once stretched the voice row across
     /// the whole bubble width with the button flung to the far side.
     #[test]

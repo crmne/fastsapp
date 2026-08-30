@@ -69,6 +69,30 @@ pub fn rich_text(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32) ->
     response
 }
 
+/// Like [`rich_text`], and the text can be swept and copied.
+pub fn selectable_rich_text(
+    ui: &mut Ui,
+    text: &str,
+    font: egui::FontId,
+    color: Color32,
+) -> egui::Response {
+    let width = ui.available_width().max(1.0);
+    let line = line(ui, text, font, color, width, 1);
+    let (rect, response) = ui.allocate_exact_size(line.size(), Sense::click_and_drag());
+    if ui.is_rect_visible(rect) {
+        egui::text_selection::LabelSelectionState::label_text_selection(
+            ui,
+            &response,
+            rect.min,
+            line.galley.clone(),
+            color,
+            egui::Stroke::NONE,
+        );
+        crate::emoji::paint(ui, &line.galley, rect.min, &line.placements);
+    }
+    response
+}
+
 /// A round picture, or initials on a colour derived from the id when there
 /// is none. The picture is loaded by egui from its file.
 pub fn avatar(

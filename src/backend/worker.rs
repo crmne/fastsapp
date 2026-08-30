@@ -1719,24 +1719,18 @@ impl Worker {
             self.emit(Event::OlderFetched { chat, more: true });
             return;
         };
-        let Ok(Some(oldest)) = self.archive.oldest(&chat) else {
-            self.emit(Event::OlderFetched { chat, more: false });
-            return;
+        // History sync sometimes brings a chat with no messages at all; the
+        // phone still answers a request anchored at the present.
+        let (id, from_me, timestamp) = match self.archive.oldest(&chat) {
+            Ok(Some(oldest)) => (oldest.id, oldest.from_me, oldest.timestamp),
+            _ => (String::new(), false, crate::util::now()),
         };
-        self.pending_older.insert(
-            chat.clone(),
-            (Instant::now(), (oldest.timestamp, oldest.id.clone())),
-        );
+        self.pending_older
+            .insert(chat.clone(), (Instant::now(), (timestamp, id.clone())));
         let commands = self.commands.clone();
         tokio::spawn(async move {
             if let Err(error) = client
-                .fetch_message_history(
-                    &jid,
-                    &oldest.id,
-                    oldest.from_me,
-                    oldest.timestamp * 1000,
-                    PHONE_BATCH,
-                )
+                .fetch_message_history(&jid, &id, from_me, timestamp * 1000, PHONE_BATCH)
                 .await
             {
                 log::warn!("older messages not requested: {error}");

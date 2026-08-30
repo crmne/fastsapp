@@ -17,6 +17,7 @@ pub mod settings;
 pub mod single_instance;
 pub mod system_fonts;
 pub mod theme;
+pub mod transcript;
 #[cfg(target_os = "linux")]
 pub mod tray;
 #[cfg(not(target_os = "linux"))]

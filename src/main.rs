@@ -243,6 +243,15 @@ fn native_options() -> eframe::NativeOptions {
         .with_title_shown(false);
     eframe::NativeOptions {
         viewport,
+        // A Wayland compositor stops sending frame callbacks to a window on
+        // a hidden workspace; waiting for vsync there would block the event
+        // loop, leave the compositor's pings unanswered, and Hyprland then
+        // offers to terminate the app. Repaints are event-driven, so
+        // nothing spins without vsync.
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: false,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

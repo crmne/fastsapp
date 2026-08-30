@@ -218,9 +218,9 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     ui.vertical_centered(|ui| {
         super::widgets::avatar(ui, &palette, &name, id, 160.0, picture.as_deref());
         ui.add_space(6.0);
-        super::widgets::rich_text(ui, &name, theme::bold(19.0), palette.text);
+        super::widgets::selectable_rich_text(ui, &name, theme::bold(19.0), palette.text);
         if let Some(phone) = chat.phone() {
-            theme::text(
+            theme::selectable_text(
                 ui,
                 crate::util::phone(phone),
                 theme::regular(13.5),

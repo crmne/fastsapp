@@ -50,6 +50,27 @@ protocol. These notes are for coding agents and new contributors.
   optional and only adds the SIMD paths (the AUR recipes leave it out,
   the build works without it). Frames become textures on the interface
   thread and are dropped when unseen.
+- Message bodies paint through `markup::paint_selectable` and single lines
+  through `widgets::selectable_rich_text`: both hand the galley to
+  `egui::text_selection::LabelSelectionState` (which paints it) and only
+  overlay the colour emoji, so text can be swept and copied while
+  `style.interaction.selectable_labels` stays false for every other label.
+  The response must sense clicks and drags. A copy that sweeps across
+  messages is rebuilt by `src/transcript.rs` with `[time, date] Name:`
+  per message (the phone's sharing format): every drawn body lands in
+  `App::copy_rows` each frame, and the `CopyAnnotator` egui plugin
+  rewrites the queued `CopyText` in `output_hook`, the only hook that
+  runs after the selection plugin's own end-of-pass flush (plugins run
+  in registration order and the built-ins come first, so end-pass
+  callbacks fire too early).
+- History sync can bring a chat with a name and no messages at all; a
+  history request for such a chat is anchored at the present with an
+  empty message id (`worker::fetch_older`), and the app asks the phone
+  as soon as such a chat loads or opens, instead of never.
+- `eframe`'s `glow_options` turn vsync off: a Wayland compositor stops
+  sending frame callbacks to a window on a hidden workspace, a vsync wait
+  there blocks the event loop and its ping replies, and Hyprland then
+  calls the app unresponsive. Repaints are event-driven, so nothing spins.
 - `src/voice.rs` is the codec for voice messages: OGG/Opus in and out
   (the `ogg` crate for the container, `opus` with libopus bundled and
   built by cmake for the codec, so cmake is a build dependency), plus

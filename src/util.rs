@@ -20,6 +20,23 @@ pub fn clock(unix_seconds: i64) -> String {
         .unwrap_or_default()
 }
 
+/// The stamp WhatsApp writes before each message when several are copied
+/// together: `22:41, 8/18/2026`.
+pub fn copy_stamp(unix_seconds: i64) -> String {
+    zoned(unix_seconds)
+        .map(|when| {
+            format!(
+                "{}:{:02}, {}/{}/{}",
+                when.hour(),
+                when.minute(),
+                when.month(),
+                when.day(),
+                when.year()
+            )
+        })
+        .unwrap_or_default()
+}
+
 /// The stamp on a chat row: the time today, "Yesterday", a weekday within
 /// the week, and a date beyond it.
 pub fn chat_stamp(unix_seconds: i64) -> String {
