@@ -69,6 +69,10 @@ protocol. These notes are for coding agents and new contributors.
   reader is away from that chat. macOS has no title bar: the content runs
   to the top and `ui::titlebar_strip` leaves `theme::titlebar_inset` for
   the traffic lights and drags the window.
+- The name and icon under the phone's Linked devices come from
+  `DevicePropsOverride` in `start_bot` (`os` is the name shown, the
+  platform type picks the icon); WhatsApp reads them at pairing only, so a
+  change shows after unlinking and linking again.
 - Older history comes from the phone on demand (`Command::FetchOlder` →
   `Client::fetch_message_history` → a `HistorySync` chunk with
   `sync_type == ON_DEMAND`); the archive is paged first, the phone only

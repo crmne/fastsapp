@@ -30,6 +30,7 @@ use whatsapp_rust::types::presence::{ChatPresence, ReceiptType};
 use whatsapp_rust::upload::UploadOptions;
 use whatsapp_rust::wacore::download::Downloadable;
 use whatsapp_rust::wacore::history_sync::{HistorySyncStream, MAX_DECOMPRESSED};
+use whatsapp_rust::wacore::store::DevicePropsOverride;
 use whatsapp_rust::wacore_binary::jid::JidExt;
 use whatsapp_rust::waproto::buffa::Message as _;
 
@@ -83,6 +84,19 @@ impl Downloadable for PhoneSticker {
 
     fn app_info(&self) -> MediaType {
         MediaType::Sticker
+    }
+}
+
+/// This build's version, as WhatsApp's device properties spell it.
+fn app_version() -> wa::device_props::AppVersion {
+    let mut parts = env!("CARGO_PKG_VERSION")
+        .split('.')
+        .map(|part| part.parse::<u32>().ok());
+    wa::device_props::AppVersion {
+        primary: parts.next().flatten(),
+        secondary: parts.next().flatten(),
+        tertiary: parts.next().flatten(),
+        ..Default::default()
     }
 }
 
@@ -468,6 +482,15 @@ impl Worker {
         let sender = self.wa_sender.clone();
         let bot = Bot::builder()
             .with_backend(store)
+            // What the phone lists under Linked devices: the app's name and
+            // version, with the desktop icon. Read at pairing only, so a
+            // device linked earlier keeps what it was linked as.
+            .with_device_props(
+                DevicePropsOverride::new()
+                    .with_os("Fastsapp")
+                    .with_version(app_version())
+                    .with_platform_type(wa::device_props::PlatformType::DESKTOP),
+            )
             .on_event(move |event, _client| {
                 let sender = sender.clone();
                 async move {
