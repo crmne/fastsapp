@@ -287,14 +287,28 @@ impl Worker {
 
     fn emit_chats(&self) {
         match self.archive.chats() {
-            Ok(chats) => self.emit(Event::Chats(chats)),
+            Ok(mut chats) => {
+                for chat in &mut chats {
+                    self.polish_chat(chat);
+                }
+                self.emit(Event::Chats(chats));
+            }
             Err(error) => log::warn!("could not list chats: {error}"),
         }
     }
 
     fn emit_chat(&self, id: &str) {
-        if let Ok(Some(chat)) = self.archive.chat(id) {
+        if let Ok(Some(mut chat)) = self.archive.chat(id) {
+            self.polish_chat(&mut chat);
             self.emit(Event::ChatUpdated(Box::new(chat)));
+        }
+    }
+
+    /// The preview under a chat's name names people by phone number, so
+    /// the interface can put names to them.
+    fn polish_chat(&self, chat: &mut Chat) {
+        if let Some(last) = chat.last.as_mut() {
+            last.summary = self.pn_tokens(&last.summary);
         }
     }
 
@@ -1326,18 +1340,89 @@ impl Worker {
             .as_deref()
             .map(|participant| self.canonical_str(participant))
             .unwrap_or_default();
-        let summary = context
+        let (summary, listed) = context
             .quoted_message
             .as_option()
-            .and_then(|quoted| classify(quoted.get_base_message()))
-            .map(|content| content.summary())
+            .map(|quoted| {
+                let base = quoted.get_base_message();
+                (
+                    classify(base)
+                        .map(|content| content.summary())
+                        .unwrap_or_default(),
+                    self.mentions_of(&mentioned_of(base)),
+                )
+            })
             .unwrap_or_default();
+        // A quoted copy often comes without its mention list; the `@user`
+        // tokens in the text are the next best thing.
+        let summary = self.pn_tokens(&summary);
+        let mentions = if listed.is_empty() {
+            self.mention_tokens(&summary)
+        } else {
+            listed
+        };
         Some(Quoted {
             sender_name: self.name_for(&sender),
             id,
             sender,
             summary,
+            mentions,
         })
+    }
+
+    /// `@user` tokens in a text with privacy ids replaced by the phone
+    /// numbers the archive names people by, where known.
+    fn pn_tokens(&self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(at) = rest.find('@') {
+            out.push_str(&rest[..at]);
+            out.push('@');
+            let after = &rest[at + 1..];
+            let digits = after
+                .char_indices()
+                .find(|(_, c)| !c.is_ascii_digit())
+                .map_or(after.len(), |(index, _)| index);
+            match self.lid_to_pn.get(&after[..digits]) {
+                Some(pn) if digits > 0 => {
+                    out.push_str(pn);
+                    rest = &after[digits..];
+                }
+                _ => rest = after,
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// The people `@user` tokens in a text stand for, by the archive's
+    /// ids, for text that came without a mention list.
+    fn mention_tokens(&self, text: &str) -> Vec<MentionRef> {
+        let mut found = Vec::new();
+        let mut rest = text;
+        while let Some(at) = rest.find('@') {
+            let after = &rest[at + 1..];
+            let digits = after
+                .char_indices()
+                .find(|(_, c)| !c.is_ascii_digit())
+                .map_or(after.len(), |(index, _)| index);
+            let user = &after[..digits];
+            if digits >= 5 {
+                let id = match self.lid_to_pn.get(user) {
+                    Some(pn) => format!("{pn}@s.whatsapp.net"),
+                    None => format!("{user}@s.whatsapp.net"),
+                };
+                let id = self.canonical_str(&id);
+                if !found.iter().any(|known: &MentionRef| known.user == user) {
+                    found.push(MentionRef {
+                        user: user.to_owned(),
+                        id,
+                    });
+                }
+            }
+            rest = after;
+        }
+        found
     }
 
     // --- history ---------------------------------------------------------
@@ -1911,6 +1996,7 @@ impl Worker {
             content: Content::text(text),
             status: Delivery::Pending,
             quoted: quoted_row.map(|row| Quoted {
+                mentions: row.mentions.clone(),
                 id: row.id,
                 sender_name: if row.from_me {
                     Some("You".to_owned())
@@ -1984,6 +2070,13 @@ impl Worker {
             if sender != quoted.sender || quoted.sender_name.is_none() {
                 quoted.sender_name = self.name_for(&sender);
                 quoted.sender = sender;
+            }
+            quoted.summary = self.pn_tokens(&quoted.summary);
+            for mention in &mut quoted.mentions {
+                mention.id = self.canonical_str(&mention.id);
+            }
+            if quoted.mentions.is_empty() {
+                quoted.mentions = self.mention_tokens(&quoted.summary);
             }
         }
         for mention in &mut message.mentions {
@@ -3507,6 +3600,7 @@ fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
         let quoted = context_of(base).and_then(|context| {
             let id = context.stanza_id.clone().filter(|id| !id.is_empty())?;
             Some(Quoted {
+                mentions: Vec::new(),
                 id,
                 sender: context.participant.clone().unwrap_or_default(),
                 sender_name: None,

@@ -209,6 +209,7 @@ fn archive_row(app: &mut App, ui: &mut egui::Ui, count: usize) {
 
 fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let palette = app.palette;
+    let title = app.chat_title(chat);
     let selected = app.open_chat.as_deref() == Some(chat.id.as_str());
     let now = crate::util::now();
     let muted = chat.muted(now);
@@ -229,7 +230,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             ui,
             &palette,
             avatar_rect,
-            &chat.name,
+            &title,
             &chat.id,
             picture.as_deref(),
         );
@@ -262,7 +263,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         } else {
             theme::medium(14.5)
         };
-        let name = widgets::line(ui, &chat.name, name_font, palette.text, name_width, 1);
+        let name = widgets::line(ui, &title, name_font, palette.text, name_width, 1);
         name.paint(ui, pos2(left, name_top), palette.text);
 
         // The second line: what the newest message says, and who it is
@@ -321,10 +322,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 widgets::ticks(ui, &palette, tick_rect, last.status);
                 x += 20.0;
             } else if chat.is_group() {
-                let sender = last
-                    .sender_name
-                    .clone()
-                    .unwrap_or_else(|| app.display_name(&last.sender));
+                let sender = app.display_name_or(&last.sender, last.sender_name.as_deref());
                 let first = sender.split_whitespace().next().unwrap_or(&sender);
                 let sender = widgets::line(
                     ui,
@@ -340,7 +338,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             }
             widgets::line(
                 ui,
-                &crate::markup::plain(&last.summary, &[]),
+                &crate::markup::plain(&app.resolve_mention_tokens(&last.summary), &[]),
                 theme::regular(13.0),
                 preview_color,
                 (badge_right - x).max(0.0),

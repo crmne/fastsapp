@@ -52,7 +52,7 @@ fn drop_target(app: &mut App, ctx: &egui::Context) {
     let palette = app.palette;
     let name = app
         .current_chat()
-        .map(|chat| chat.name.clone())
+        .map(|chat| app.chat_title(chat))
         .unwrap_or_default();
     egui::Area::new(egui::Id::new("drop-target"))
         .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))

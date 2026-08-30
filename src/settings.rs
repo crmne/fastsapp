@@ -57,6 +57,9 @@ pub struct Settings {
     pub keep_running_in_background: bool,
     /// Desktop notifications for messages that arrive while away.
     pub notifications: bool,
+    /// People are named as the address book has them (else as they call
+    /// themselves); off, the other way round. One rule everywhere.
+    pub names_from_contacts: bool,
 }
 
 impl Default for Settings {
@@ -76,6 +79,7 @@ impl Default for Settings {
             giphy_key: String::new(),
             keep_running_in_background: true,
             notifications: true,
+            names_from_contacts: true,
         }
     }
 }

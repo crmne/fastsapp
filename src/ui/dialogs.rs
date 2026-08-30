@@ -212,12 +212,13 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
         .cloned()
         .unwrap_or_else(|| crate::model::Chat::new(id.to_owned(), app.display_name(id)));
     let has_chat = app.chat(id).is_some();
+    let name = app.chat_title(&chat);
     title(ui, app, if chat.is_group() { "Group" } else { "Contact" });
     let picture = app.avatar_full(id).or_else(|| app.avatar(id));
     ui.vertical_centered(|ui| {
-        super::widgets::avatar(ui, &palette, &chat.name, id, 160.0, picture.as_deref());
+        super::widgets::avatar(ui, &palette, &name, id, 160.0, picture.as_deref());
         ui.add_space(6.0);
-        super::widgets::rich_text(ui, &chat.name, theme::bold(19.0), palette.text);
+        super::widgets::rich_text(ui, &name, theme::bold(19.0), palette.text);
         if let Some(phone) = chat.phone() {
             theme::text(
                 ui,

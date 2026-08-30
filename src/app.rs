@@ -412,9 +412,10 @@ impl App {
         if reading {
             return;
         }
-        let (name, is_group) = (chat.name.clone(), chat.is_group());
-        let sender = self.display_name(&message.sender);
-        let (title, body) = crate::notify::lines(&name, is_group, &sender, &message.summary());
+        let (name, is_group) = (self.chat_title(chat), chat.is_group());
+        let sender = self.display_name_or(&message.sender, message.sender_name.as_deref());
+        let (title, body) =
+            crate::notify::lines(&name, is_group, &sender, &self.message_text(message));
         // The chat's picture (the person, or the group), else the sender's;
         // asking for one that is not here yet serves the next time.
         let picture = self
@@ -481,10 +482,53 @@ impl App {
     /// chose for themselves (with a tilde, as WhatsApp does), the phone
     /// number, or "Unknown".
     pub fn display_name(&self, id: &str) -> String {
+        self.display_name_or(id, None)
+    }
+
+    /// One name for a person, the same everywhere: from the address book,
+    /// or what they call themselves on WhatsApp, as the setting says, the
+    /// other source filling in. `hint` is a name a message itself carried,
+    /// for someone the contacts know nothing about. Ourselves are "You".
+    pub fn display_name_or(&self, id: &str, hint: Option<&str>) -> String {
         if self.me.as_deref() == Some(id) {
             return "You".to_owned();
         }
-        if let Some(name) = self.contacts.get(id).and_then(Contact::label) {
+        self.person_name(id, hint)
+    }
+
+    /// A person's name in a mention: our own name rather than "You".
+    pub fn mention_name(&self, id: &str) -> String {
+        if self.me.as_deref() == Some(id) {
+            return self
+                .me_name
+                .clone()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "You".to_owned());
+        }
+        self.person_name(id, None)
+    }
+
+    /// The name a chat is listed under: a group's own, a person's as the
+    /// setting says.
+    pub fn chat_title(&self, chat: &Chat) -> String {
+        if chat.is_group() || self.me.as_deref() == Some(chat.id.as_str()) {
+            return chat.name.clone();
+        }
+        self.person_name(&chat.id, None)
+    }
+
+    fn person_name(&self, id: &str, hint: Option<&str>) -> String {
+        let contact = self.contacts.get(id);
+        let present = |name: Option<&str>| name.filter(|name| !name.is_empty()).map(str::to_owned);
+        let saved = present(contact.and_then(|contact| contact.full_name.as_deref()));
+        let called = present(contact.and_then(|contact| contact.push_name.as_deref()))
+            .or_else(|| present(hint));
+        let (first, second) = if self.settings.names_from_contacts {
+            (saved, called.map(|name| format!("~{name}")))
+        } else {
+            (called, saved)
+        };
+        if let Some(name) = first.or(second) {
             return name;
         }
         if let Some(chat) = self.chat(id)
@@ -496,6 +540,55 @@ impl App {
         match crate::model::phone_of(id) {
             Some(digits) => crate::util::phone(digits),
             None => "Unknown".to_owned(),
+        }
+    }
+
+    /// The people a message names, with their names, for the markup.
+    pub fn mention_list(&self, message: &Message) -> Vec<crate::markup::Mention> {
+        message
+            .mentions
+            .iter()
+            .map(|mention| crate::markup::Mention {
+                user: mention.user.clone(),
+                name: self.mention_name(&mention.id),
+            })
+            .collect()
+    }
+
+    /// `@user` tokens in a plain text as names, for previews that come
+    /// without a message's mention list. Unknown users stay as they are.
+    pub fn resolve_mention_tokens(&self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(at) = rest.find('@') {
+            out.push_str(&rest[..at]);
+            out.push('@');
+            let after = &rest[at + 1..];
+            let digits = after
+                .char_indices()
+                .find(|(_, c)| !c.is_ascii_digit())
+                .map_or(after.len(), |(index, _)| index);
+            let id = format!("{}@s.whatsapp.net", &after[..digits]);
+            let known = digits >= 5
+                && (self.me.as_deref() == Some(id.as_str())
+                    || self.contacts.contains_key(&id)
+                    || self.chat(&id).is_some());
+            if known {
+                out.push_str(&self.mention_name(&id));
+                rest = &after[digits..];
+            } else {
+                rest = after;
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// A message as one line of plain text with names for mentions.
+    pub fn message_text(&self, message: &Message) -> String {
+        match &message.content {
+            Content::Text { text, .. } => crate::markup::plain(text, &self.mention_list(message)),
+            _ => self.resolve_mention_tokens(&message.summary()),
         }
     }
 
@@ -1775,5 +1868,82 @@ mod tests {
         assert_eq!(app.display_name("42@lid"), "~Bob");
         app.me = Some("42@lid".into());
         assert_eq!(app.display_name("42@lid"), "You");
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+    use crate::model::{Contact, Content, Delivery, MentionRef};
+
+    fn app() -> App {
+        let root = std::env::temp_dir().join(format!("fastsapp-names-{}", std::process::id()));
+        let (mut app, _events) = App::headless(AppDirs::under(&root), Settings::default());
+        app.me = Some("15550001111@s.whatsapp.net".into());
+        app.me_name = Some("Carmine".into());
+        app.contacts.insert(
+            "1@s.whatsapp.net".into(),
+            Contact {
+                id: "1@s.whatsapp.net".into(),
+                full_name: Some("Ada Lovelace".into()),
+                push_name: Some("Ada".into()),
+            },
+        );
+        app.contacts.insert(
+            "2@s.whatsapp.net".into(),
+            Contact {
+                id: "2@s.whatsapp.net".into(),
+                full_name: None,
+                push_name: Some("Bob".into()),
+            },
+        );
+        app
+    }
+
+    #[test]
+    fn the_setting_picks_the_source_and_the_other_fills_in() {
+        let mut app = app();
+        assert_eq!(app.display_name("1@s.whatsapp.net"), "Ada Lovelace");
+        assert_eq!(app.display_name("2@s.whatsapp.net"), "~Bob");
+        app.settings.names_from_contacts = false;
+        assert_eq!(app.display_name("1@s.whatsapp.net"), "Ada");
+        assert_eq!(app.display_name("2@s.whatsapp.net"), "Bob");
+        assert_eq!(
+            app.display_name_or("3@s.whatsapp.net", Some("Cy")),
+            "Cy",
+            "a name the message carried, for someone unknown"
+        );
+    }
+
+    #[test]
+    fn mentions_use_our_own_name_and_previews_resolve_tokens() {
+        let app = app();
+        assert_eq!(app.mention_name("15550001111@s.whatsapp.net"), "Carmine");
+        assert_eq!(app.display_name("15550001111@s.whatsapp.net"), "You");
+        assert_eq!(
+            app.resolve_mention_tokens("palestra oggi? @15550001111 e @1 ?"),
+            "palestra oggi? @Carmine e @1 ?",
+            "a short number is not a mention"
+        );
+        let message = Message {
+            id: "m".into(),
+            chat: "1@s.whatsapp.net".into(),
+            sender: "1@s.whatsapp.net".into(),
+            sender_name: None,
+            from_me: false,
+            timestamp: 0,
+            content: Content::text("ciao @15550001111"),
+            status: Delivery::None,
+            quoted: None,
+            reactions: Vec::new(),
+            edited: false,
+            mentions: vec![MentionRef {
+                user: "15550001111".into(),
+                id: "15550001111@s.whatsapp.net".into(),
+            }],
+            forwarded: false,
+            thumbnail: None,
+        };
+        assert_eq!(app.message_text(&message), "ciao @Carmine");
     }
 }

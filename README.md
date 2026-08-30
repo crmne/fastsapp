@@ -56,6 +56,9 @@ same pattern without carrying WhatsApp's trademark.)
   lately, synced when you link, plus those you have sent or received here),
   and GIF search through GIPHY (paste a free API key from
   developers.giphy.com in Settings, unless your build carries one).
+- **One name per person.** From your address book, or as people call
+  themselves on WhatsApp (a setting), and the same in the chat list,
+  senders, replies, mentions, and notifications.
 - **Groups.** Members under the group's name, the sender's picture beside
   each message (optionally in every chat), a click on either for their
   details, and the composer steps aside in announcement groups where only

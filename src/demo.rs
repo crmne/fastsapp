@@ -414,6 +414,7 @@ pub fn populate(app: &mut App) {
                 sender: ada.into(),
                 sender_name: Some("Ada Lovelace".into()),
                 summary: "Voice message (0:42)".into(),
+                mentions: Vec::new(),
             });
             row.edited = true;
             row.status = Delivery::Delivered;
@@ -571,6 +572,7 @@ pub fn populate(app: &mut App) {
                 sender: jonas.0.into(),
                 sender_name: Some(jonas.1.into()),
                 summary: "Save me a seat 🙏".into(),
+                mentions: Vec::new(),
             });
             row.mentions = vec![MentionRef {
                 user: jonas.0.split('@').next().unwrap_or_default().to_owned(),

@@ -78,6 +78,7 @@ fn empty(app: &mut App, ui: &mut egui::Ui) {
 
 fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let palette = app.palette;
+    let title = app.chat_title(chat);
     egui::Panel::top("chat-header")
         .show_separator_line(false)
         .frame(
@@ -125,7 +126,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                 widgets::avatar(
                                     ui,
                                     &palette,
-                                    &chat.name,
+                                    &title,
                                     &chat.id,
                                     40.0,
                                     picture.as_deref(),
@@ -140,14 +141,14 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                         ui.add_space(8.0);
                                         widgets::rich_text(
                                             ui,
-                                            &chat.name,
+                                            &title,
                                             theme::semibold(17.0),
                                             palette.text,
                                         );
                                     } else {
                                         widgets::rich_text(
                                             ui,
-                                            &chat.name,
+                                            &title,
                                             theme::semibold(15.0),
                                             palette.text,
                                         );
@@ -527,12 +528,9 @@ fn reply_strip(app: &mut App, ui: &mut egui::Ui, quoted: &Message) {
     let who = if quoted.from_me {
         "You".to_owned()
     } else {
-        quoted
-            .sender_name
-            .clone()
-            .unwrap_or_else(|| app.display_name(&quoted.sender))
+        app.display_name_or(&quoted.sender, quoted.sender_name.as_deref())
     };
-    let summary = markup::plain(&quoted.summary(), &[]);
+    let summary = markup::plain(&quoted.summary(), &app.mention_list(quoted));
     Frame::new()
         .fill(palette.surface)
         .corner_radius(CornerRadius::same(theme::RADIUS))
@@ -582,7 +580,10 @@ struct View<'a> {
     /// Pictures beside every incoming message, not only in groups.
     pictures: bool,
     anchor: Option<&'a str>,
-    names: &'a dyn Fn(&str) -> String,
+    /// A name with the one a message carried as the fallback.
+    names_or: &'a dyn Fn(&str, Option<&str>) -> String,
+    /// Names in mentions: our own rather than "You".
+    mention_names: &'a dyn Fn(&str) -> String,
     avatars: &'a HashMap<String, Option<PathBuf>>,
     now: i64,
 }
@@ -606,7 +607,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             avatars.insert(sender, picture);
         }
     }
-    let names = |id: &str| app.display_name(id);
+    let names_or = |id: &str, hint: Option<&str>| app.display_name_or(id, hint);
+    let mention_names = |id: &str| app.mention_name(id);
     let view = View {
         palette,
         chat,
@@ -618,7 +620,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         } else {
             app.scroll_anchor.as_deref()
         },
-        names: &names,
+        names_or: &names_or,
+        mention_names: &mention_names,
         avatars: &avatars,
         now: crate::util::now(),
     };
@@ -868,10 +871,7 @@ fn bubble(
                         actions.push(Action::ShowDialog(Dialog::ChatInfo(message.sender.clone())));
                     }
                     if show_sender && ui.is_rect_visible(rect) {
-                        let name = message
-                            .sender_name
-                            .clone()
-                            .unwrap_or_else(|| (view.names)(&message.sender));
+                        let name = (view.names_or)(&message.sender, message.sender_name.as_deref());
                         widgets::paint_avatar(
                             ui,
                             &view.palette,
@@ -970,10 +970,7 @@ fn bubble_frame(
             ui.set_max_width(max_width);
             ui.spacing_mut().item_spacing.y = 4.0;
             if show_sender && view.chat.is_group() {
-                let name = message
-                    .sender_name
-                    .clone()
-                    .unwrap_or_else(|| (view.names)(&message.sender));
+                let name = (view.names_or)(&message.sender, message.sender_name.as_deref());
                 let response = widgets::rich_text(
                     ui,
                     &name,
@@ -1079,12 +1076,9 @@ fn quote_block(
     let who = if view.me == Some(quoted.sender.as_str()) {
         "You".to_owned()
     } else {
-        quoted
-            .sender_name
-            .clone()
-            .unwrap_or_else(|| (view.names)(&quoted.sender))
+        (view.names_or)(&quoted.sender, quoted.sender_name.as_deref())
     };
-    let summary = markup::plain(&quoted.summary, &[]);
+    let summary = markup::plain(&quoted.summary, &quote_mentions(view, quoted));
     let response = Frame::new()
         .fill(palette.window.gamma_multiply(0.35))
         .corner_radius(CornerRadius::same(6))
@@ -1409,7 +1403,18 @@ fn mentions_of(view: &View<'_>, message: &Message) -> Vec<markup::Mention> {
         .iter()
         .map(|mention| markup::Mention {
             user: mention.user.clone(),
-            name: (view.names)(&mention.id),
+            name: (view.mention_names)(&mention.id),
+        })
+        .collect()
+}
+
+fn quote_mentions(view: &View<'_>, quoted: &crate::model::Quoted) -> Vec<markup::Mention> {
+    quoted
+        .mentions
+        .iter()
+        .map(|mention| markup::Mention {
+            user: mention.user.clone(),
+            name: (view.mention_names)(&mention.id),
         })
         .collect()
 }

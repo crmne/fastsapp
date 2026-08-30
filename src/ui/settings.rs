@@ -75,6 +75,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     toggle(ui, app, "Show when you are typing", "", |settings| &mut settings.send_typing);
                     toggle(ui, app, "Download attachments automatically", "Pictures, videos, voice messages, and documents up to 64 MB are fetched as they come into view. Off, each is fetched when you click it.", |settings| &mut settings.auto_download);
                     toggle(ui, app, "Show sender pictures in every chat", "WhatsApp shows them in groups only.", |settings| &mut settings.show_sender_pictures);
+                    toggle(ui, app, "Names from your address book", "People are shown as you saved them, and as they call themselves on WhatsApp when you have not. Off, the other way round. The same everywhere: the chat list, senders, replies, mentions, and notifications.", |settings| &mut settings.names_from_contacts);
                     toggle(ui, app, "Show shortcut hints", "", |settings| &mut settings.show_shortcut_hints);
 
                     section(ui, app, "Window");

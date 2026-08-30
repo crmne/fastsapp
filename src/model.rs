@@ -177,6 +177,9 @@ pub struct Quoted {
     pub sender: String,
     pub sender_name: Option<String>,
     pub summary: String,
+    /// The people the quoted text names, so they show as names.
+    #[serde(default)]
+    pub mentions: Vec<MentionRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
