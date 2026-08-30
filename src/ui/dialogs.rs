@@ -72,7 +72,7 @@ fn shortcuts(app: &mut App, ui: &mut egui::Ui) {
             for (keys, what) in super::keys::SHORTCUTS {
                 theme::text(
                     ui,
-                    &super::keys::label(keys),
+                    super::keys::label(keys),
                     theme::semibold(13.0),
                     palette.text,
                 );
