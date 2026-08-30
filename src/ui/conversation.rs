@@ -111,39 +111,56 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 // that opens the info, as on the phone.
                 let block = ui
                     .scope(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.set_min_height(HEADER_ROW);
-                            widgets::avatar(
-                                ui,
-                                &palette,
-                                &chat.name,
-                                &chat.id,
-                                40.0,
-                                picture.as_deref(),
-                            );
-                            ui.add_space(4.0);
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 1.0;
-                                ui.set_max_width((ui.available_width() - right_controls).max(80.0));
-                                if subtitle.is_empty() {
-                                    ui.add_space(8.0);
-                                    widgets::rich_text(
-                                        ui,
-                                        &chat.name,
-                                        theme::semibold(17.0),
-                                        palette.text,
+                        // A child of the row's full height from the start:
+                        // a `horizontal` would be centred at its initial
+                        // height and then grow downwards, putting the
+                        // picture below the button's line.
+                        ui.allocate_ui_with_layout(
+                            vec2(
+                                (ui.available_width() - right_controls).max(80.0),
+                                HEADER_ROW,
+                            ),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                widgets::avatar(
+                                    ui,
+                                    &palette,
+                                    &chat.name,
+                                    &chat.id,
+                                    40.0,
+                                    picture.as_deref(),
+                                );
+                                ui.add_space(4.0);
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 1.0;
+                                    ui.set_max_width(
+                                        (ui.available_width() - right_controls).max(80.0),
                                     );
-                                } else {
-                                    widgets::rich_text(
-                                        ui,
-                                        &chat.name,
-                                        theme::semibold(15.0),
-                                        palette.text,
-                                    );
-                                    widgets::rich_text(ui, &subtitle, theme::regular(12.5), color);
-                                }
-                            });
-                        });
+                                    if subtitle.is_empty() {
+                                        ui.add_space(8.0);
+                                        widgets::rich_text(
+                                            ui,
+                                            &chat.name,
+                                            theme::semibold(17.0),
+                                            palette.text,
+                                        );
+                                    } else {
+                                        widgets::rich_text(
+                                            ui,
+                                            &chat.name,
+                                            theme::semibold(15.0),
+                                            palette.text,
+                                        );
+                                        widgets::rich_text(
+                                            ui,
+                                            &subtitle,
+                                            theme::regular(12.5),
+                                            color,
+                                        );
+                                    }
+                                });
+                            },
+                        );
                     })
                     .response;
                 let block = ui
