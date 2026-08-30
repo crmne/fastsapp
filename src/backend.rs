@@ -242,6 +242,12 @@ pub enum Event {
         complete: bool,
     },
     MessageUpdated(Box<Message>),
+    /// A message just arrived from someone else, live (not from history),
+    /// for the desktop notification.
+    Incoming {
+        chat: ChatId,
+        message: Box<Message>,
+    },
     Contacts(Vec<Contact>),
     Typing {
         chat: ChatId,

@@ -20,6 +20,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let ctx = &ctx;
     keys::handle(app, ctx);
+    titlebar_strip(app, ui);
     if !app.is_linked() {
         login::show(app, ui);
         dialogs::show(app, ctx);
@@ -193,4 +194,42 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                     });
             }
         });
+}
+
+/// On macOS the window has no title bar: this strip stands where it was,
+/// the traffic lights float over it, and dragging it moves the window.
+fn titlebar_strip(app: &App, ui: &mut egui::Ui) {
+    let inset = theme::titlebar_inset(ui.ctx());
+    if inset == 0.0 {
+        return;
+    }
+    let fill = if app.is_linked() {
+        app.palette.panel
+    } else {
+        app.palette.window
+    };
+    egui::Panel::top("titlebar")
+        .exact_size(inset)
+        .show_separator_line(false)
+        .frame(Frame::new().fill(fill))
+        .show(ui, |ui| {
+            let rect = ui.max_rect();
+            titlebar_drag(ui, rect);
+        });
+}
+
+/// Makes `rect` behave like the title bar that is no longer there: dragging
+/// it moves the window.
+pub fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
+    let response = ui.interact(
+        rect,
+        ui.id().with("titlebar-drag"),
+        egui::Sense::click_and_drag(),
+    );
+    // AppKit begins the move from the mouse-down event that is still live,
+    // so the command has to go out on the press itself; waiting for egui's
+    // drag threshold leaves the event stale and the window stays put.
+    if response.is_pointer_button_down_on() && ui.input(|input| input.pointer.primary_pressed()) {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
 }

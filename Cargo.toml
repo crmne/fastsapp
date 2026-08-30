@@ -1,6 +1,6 @@
 [package]
 name = "fastsapp"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -71,6 +71,29 @@ arboard = { version = "3", default-features = false, features = ["image-data", "
 mime_guess2 = "2"
 # Names, groups, and shortcodes of every emoji, for the picker's search.
 emojis = "0.9"
+
+# Desktop notifications through the desktop's own service: pure Rust over
+# D-Bus on Linux, the system frameworks elsewhere.
+notify-rust = { version = "4", default-features = false, features = ["z"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The status-notifier tray item, pure Rust over D-Bus.
+ksni = { version = "0.3", features = ["blocking"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+# The tray item on Windows and macOS.
+tray-icon = { version = "0.24", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Serving AppKit while no window exists: the status item and the Dock
+# reopen callback live on the main thread.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
+
+[target.'cfg(windows)'.dependencies]
+# The tray thread's message loop.
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
 # Sample data and screenshot flags; never part of a release build.

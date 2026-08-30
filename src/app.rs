@@ -14,7 +14,9 @@ use crate::model::{
 };
 use crate::paths::AppDirs;
 use crate::settings::{Settings, ThemeChoice};
+use crate::single_instance::{ControlCommand, Guard};
 use crate::theme::Palette;
+use crate::tray::{TrayCommand, TrayService};
 
 /// How many messages a chat opens with, and loads per scroll to the top.
 pub const PAGE: usize = 60;
@@ -194,22 +196,61 @@ pub struct App {
     pub focus_search: bool,
     pub quit_requested: bool,
     pub window_focused: bool,
+    /// Repaints the window when something arrives from another thread.
+    waker: Waker,
+    tray: Option<TrayService>,
+    /// No window exists; the app lives in the tray.
+    pub window_hidden: bool,
+    /// The window should close but the process should stay in the tray.
+    pub hide_intent: bool,
+    /// Something asked for a window while there is none.
+    pub wants_show: bool,
+    /// What other launches asked for, when this process holds the instance.
+    control_commands: Option<std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>>>,
+    /// Chats whose notification was clicked.
+    notification_opens: std::sync::Arc<std::sync::Mutex<Vec<ChatId>>>,
+}
+
+/// What a process wants of the app beyond the window.
+#[derive(Clone, Copy, Debug)]
+pub struct AppOptions {
+    /// Register the system-tray item.
+    pub tray: bool,
+}
+
+impl Default for AppOptions {
+    fn default() -> Self {
+        Self { tray: true }
+    }
 }
 
 impl App {
-    pub fn new(waker: &Waker, dirs: AppDirs, settings: Settings) -> Self {
+    pub fn new(waker: &Waker, dirs: AppDirs, settings: Settings, options: AppOptions) -> Self {
         let backend = Backend::spawn(dirs.clone(), waker.clone());
-        Self::with_backend(dirs, settings, backend)
+        let mut app = Self::with_backend(dirs, settings, backend, waker.clone());
+        if options.tray {
+            let waker = waker.clone();
+            app.tray = TrayService::spawn(move || waker.wake());
+        }
+        app
+    }
+
+    /// Other launches reach this process through the instance guard.
+    pub fn set_remote_control(&mut self, guard: &Guard) {
+        self.control_commands = Some(guard.commands());
     }
 
     /// An app with no connection, for the demo mode and tests. Events can
     /// be fed through the returned sender.
     pub fn headless(dirs: AppDirs, settings: Settings) -> (Self, std::sync::mpsc::Sender<Event>) {
         let (backend, events) = Backend::detached();
-        (Self::with_backend(dirs, settings, backend), events)
+        (
+            Self::with_backend(dirs, settings, backend, Waker::default()),
+            events,
+        )
     }
 
-    fn with_backend(dirs: AppDirs, settings: Settings, backend: Backend) -> Self {
+    fn with_backend(dirs: AppDirs, settings: Settings, backend: Backend, waker: Waker) -> Self {
         let palette = match settings.theme {
             ThemeChoice::Light => Palette::light(),
             _ => Palette::dark(),
@@ -278,7 +319,110 @@ impl App {
             focus_search: false,
             quit_requested: false,
             window_focused: true,
+            waker,
+            tray: None,
+            window_hidden: false,
+            hide_intent: false,
+            wants_show: false,
+            control_commands: None,
+            notification_opens: Default::default(),
         }
+    }
+
+    /// The window is gone but the process stays: the link, the archive,
+    /// and the tray keep going until Show or Quit.
+    pub fn window_gone(&mut self) {
+        self.window_hidden = true;
+        self.hide_intent = false;
+        self.wants_show = false;
+        if let Some(tray) = &mut self.tray {
+            tray.hidden();
+        }
+    }
+
+    /// Whether closing the window keeps the app in the tray rather than
+    /// quitting.
+    pub fn hides_to_tray(&self) -> bool {
+        self.tray.is_some() && self.settings.keep_running_in_background
+    }
+
+    fn handle_tray(&mut self) {
+        let Some(commands) = self.tray.as_ref().map(TrayService::drain_commands) else {
+            return;
+        };
+        for command in commands {
+            match command {
+                TrayCommand::Show => self.actions.push(Action::ShowWindow),
+                TrayCommand::ShowHide => self.actions.push(if self.window_hidden {
+                    Action::ShowWindow
+                } else {
+                    Action::HideWindow
+                }),
+                TrayCommand::Quit => self.actions.push(Action::Quit),
+            }
+        }
+    }
+
+    fn handle_control_commands(&mut self) {
+        let Some(queue) = &self.control_commands else {
+            return;
+        };
+        let commands: Vec<ControlCommand> =
+            std::mem::take(&mut *queue.lock().unwrap_or_else(|p| p.into_inner()));
+        for command in commands {
+            match command {
+                ControlCommand::Show => self.actions.push(Action::ShowWindow),
+            }
+        }
+    }
+
+    /// A clicked notification opens its chat, in a window if need be.
+    fn handle_notification_opens(&mut self) {
+        let opened: Vec<ChatId> = std::mem::take(
+            &mut *self
+                .notification_opens
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()),
+        );
+        for chat in opened {
+            self.actions.push(Action::OpenChat(chat));
+            self.actions.push(Action::ShowWindow);
+        }
+    }
+
+    /// Tells the desktop about a message that arrived while the reader was
+    /// not looking at that chat.
+    fn maybe_notify(&self, chat_id: &str, message: &Message) {
+        if !self.settings.notifications {
+            return;
+        }
+        let Some(chat) = self.chat(chat_id) else {
+            return;
+        };
+        let now = crate::util::now();
+        // Muted chats stay quiet, and a backlog drained on reconnect is not
+        // news.
+        if chat.muted(now) || now - message.timestamp > 60 {
+            return;
+        }
+        let reading = !self.window_hidden
+            && self.window_focused
+            && self.page == Page::Chats
+            && self.open_chat.as_deref() == Some(chat_id);
+        if reading {
+            return;
+        }
+        let sender = self.display_name(&message.sender);
+        let (title, body) =
+            crate::notify::lines(&chat.name, chat.is_group(), &sender, &message.summary());
+        let waker = self.waker.clone();
+        crate::notify::show(
+            title,
+            body,
+            chat_id.to_owned(),
+            std::sync::Arc::clone(&self.notification_opens),
+            move || waker.wake(),
+        );
     }
 
     /// Once per window, before the first frame.
@@ -295,6 +439,12 @@ impl App {
             .ok();
         self.applied_dark = None;
         self.zoom_applied = false;
+        self.window_hidden = false;
+        self.hide_intent = false;
+        self.wants_show = false;
+        if let Some(tray) = &mut self.tray {
+            tray.attach();
+        }
     }
 
     pub fn is_connected(&self) -> bool {
@@ -526,6 +676,7 @@ impl App {
                         self.scroll_to_bottom = true;
                     }
                 }
+                Event::Incoming { chat, message } => self.maybe_notify(&chat, &message),
                 Event::MessageUpdated(message) => {
                     let message = *message;
                     if let Some(conversation) = self.conversations.get_mut(&message.chat)
@@ -1221,6 +1372,20 @@ impl App {
                 self.quit_requested = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            Action::ShowWindow => {
+                if self.window_hidden {
+                    // No window exists; the loop in `main` creates one.
+                    self.wants_show = true;
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
+            Action::HideWindow => {
+                if self.tray.is_some() {
+                    self.hide_intent = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
         }
     }
 
@@ -1245,6 +1410,9 @@ impl App {
 
     /// Everything that happens whether or not the window is showing.
     pub fn background_frame(&mut self, ctx: &egui::Context) {
+        self.handle_tray();
+        self.handle_control_commands();
+        self.handle_notification_opens();
         self.handle_events();
         self.tick(ctx);
         self.apply_actions(ctx);
@@ -1265,6 +1433,14 @@ impl App {
             self.mark_read(&open);
         }
         self.window_focused = focused;
+        // Closing the window keeps the app in the tray when asked to; the
+        // window still goes, and the loop in `main` carries on without it.
+        if ctx.input(|input| input.viewport().close_requested())
+            && !self.quit_requested
+            && self.hides_to_tray()
+        {
+            self.hide_intent = true;
+        }
         self.lock_scroll_axis(ctx);
         self.take_drops_and_pastes(ctx);
         crate::ui::show(self, ui);

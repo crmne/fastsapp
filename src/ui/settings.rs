@@ -77,6 +77,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     toggle(ui, app, "Show sender pictures in every chat", "WhatsApp shows them in groups only.", |settings| &mut settings.show_sender_pictures);
                     toggle(ui, app, "Show shortcut hints", "", |settings| &mut settings.show_shortcut_hints);
 
+                    section(ui, app, "Window");
+                    toggle(ui, app, "Keep running when the window closes", "Fastsapp hides to the system tray and stays linked. Quit from the tray menu or with Ctrl+Q.", |settings| &mut settings.keep_running_in_background);
+                    toggle(ui, app, "Notify about new messages", "Through the desktop's own notifications, when the window is hidden, in the background, or showing another chat. Muted chats stay quiet.", |settings| &mut settings.notifications);
+
                     widgets::setting_row(
                         ui,
                         &palette,

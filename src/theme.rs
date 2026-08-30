@@ -749,6 +749,17 @@ pub fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
+/// Room for the traffic lights on macOS, where the window has no title bar
+/// and the content runs to the top edge; nothing elsewhere.
+pub fn titlebar_inset(ctx: &egui::Context) -> f32 {
+    if cfg!(target_os = "macos") && !ctx.input(|input| input.viewport().fullscreen.unwrap_or(false))
+    {
+        28.0
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

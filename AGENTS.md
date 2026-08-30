@@ -55,6 +55,20 @@ protocol. These notes are for coding agents and new contributors.
   surface, so they are not shown.
 - `src/paths.rs` moves a setup left by the app's earlier name
   (`fastwhatsapp`) over once, so the linked device survives the rename.
+- The app outlives the window, as in fastpotify: `main` runs
+  `eframe::run_native` in a loop; closing the window with "keep running"
+  on sets `hide_intent`, the window is destroyed, and a headless loop keeps
+  calling `App::background_frame` (the link, the archive, the tray) until
+  the tray, a clicked notification, or another launch sets `wants_show`,
+  when a new window is made. `src/tray.rs` is the Linux status notifier
+  (ksni), `src/tray_native.rs` the Windows and macOS item (tray-icon; on
+  macOS made with the first window and pumped by `tray::idle` while none
+  exists). `src/single_instance.rs` holds a loopback port so a second
+  launch surfaces the first. `src/notify.rs` sends desktop notifications
+  for `Event::Incoming` (live messages from others, not history) when the
+  reader is away from that chat. macOS has no title bar: the content runs
+  to the top and `ui::titlebar_strip` leaves `theme::titlebar_inset` for
+  the traffic lights and drags the window.
 - Older history comes from the phone on demand (`Command::FetchOlder` →
   `Client::fetch_message_history` → a `HistorySync` chunk with
   `sync_type == ON_DEMAND`); the archive is paged first, the phone only
@@ -81,11 +95,13 @@ Three egui pitfalls this code has already hit:
 
 Bump `version` in `Cargo.toml`, commit, tag `vX.Y.Z`, and push the tag: the
 release workflow builds every platform and publishes the GitHub release
-with `checksums.txt`. Then update the AUR package in the maintainer's
-`~/Code/aur/fastsapp` clone (new `pkgver`, `pkgrel=1`, the two Linux
-checksums from `checksums.txt`, `makepkg --printsrcinfo > .SRCINFO`,
-`makepkg -f` to prove it builds, commit, push). `fastsapp-git` only needs
-touching when the build recipe or the dependencies change.
+with `checksums.txt`. Then update the AUR packages in the maintainer's
+`~/Code/aur/` clones: `fastsapp-bin` (new `pkgver`, `pkgrel=1`, the two
+Linux checksums from `checksums.txt`) and `fastsapp` (new `pkgver`,
+`pkgrel=1`, the source tarball's checksum from `makepkg -g`); for each,
+`makepkg --printsrcinfo > .SRCINFO`, `makepkg -f` to prove it builds,
+commit, push. `fastsapp-git` only needs touching when the build recipe or
+the dependencies change.
 
 ## Definition of done
 

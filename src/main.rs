@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use fastsapp::{app, backend, paths, settings, util};
+use fastsapp::{app, backend, paths, settings, single_instance, util};
 
 use clap::Parser;
 
@@ -76,12 +76,29 @@ fn main() -> eframe::Result<()> {
     let demo = cli.demo || cli.demo_shot.is_some();
     #[cfg(not(feature = "demo"))]
     let demo = false;
+    // A second launch surfaces the instance already running instead of
+    // fighting it for the link. Held for the lifetime of the process; a
+    // demo run is a throwaway next to the real one and stays out of it.
+    let instance = if demo {
+        None
+    } else {
+        match single_instance::acquire(&waker) {
+            single_instance::Outcome::Only(guard) => Some(guard),
+            single_instance::Outcome::Surfaced => {
+                log::info!("Fastsapp is already running; asked it to show its window");
+                return Ok(());
+            }
+        }
+    };
     #[allow(unused_mut)]
     let mut app = if demo {
         app::App::headless(dirs, settings).0
     } else {
-        app::App::new(&waker, dirs, settings)
+        app::App::new(&waker, dirs, settings, app::AppOptions { tray: true })
     };
+    if let Some(guard) = &instance {
+        app.set_remote_control(guard);
+    }
     #[cfg(feature = "demo")]
     if demo {
         fastsapp::demo::populate(&mut app);
@@ -93,22 +110,81 @@ fn main() -> eframe::Result<()> {
         due: std::time::Instant::now() + std::time::Duration::from_millis(cli.demo_shot_delay),
         asked: false,
     });
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(app)));
 
-    let creator_waker = waker.clone();
-    eframe::run_native(
-        "Fastsapp",
-        native_options(),
-        Box::new(move |cc| {
-            creator_waker.attach(&cc.egui_ctx);
-            app.attach(&cc.egui_ctx);
-            Ok(Box::new(Shell {
-                app,
-                #[cfg(feature = "demo")]
-                shot,
-            }))
-        }),
-    )?;
-    waker.detach();
+    // The application (the link, the archive, the tray) outlives any
+    // window. Closing to the tray destroys the window, and this loop
+    // creates a new one when the tray, a notification, or another launch
+    // asks for it. Plain window lifecycle, portable across desktops.
+    loop {
+        let creator_slot = std::sync::Arc::clone(&slot);
+        let creator_waker = waker.clone();
+        #[cfg(feature = "demo")]
+        let creator_shot = shot.clone();
+        eframe::run_native(
+            "Fastsapp",
+            native_options(),
+            Box::new(move |cc| {
+                creator_waker.attach(&cc.egui_ctx);
+                let mut app = creator_slot
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .take()
+                    .expect("application state present");
+                app.attach(&cc.egui_ctx);
+                Ok(Box::new(Shell {
+                    app: Some(app),
+                    slot: std::sync::Arc::clone(&creator_slot),
+                    #[cfg(feature = "demo")]
+                    shot: creator_shot,
+                }))
+            }),
+        )?;
+        waker.detach();
+
+        let hide = {
+            let guard = slot.lock().unwrap_or_else(|p| p.into_inner());
+            let app = guard.as_ref().expect("application state present");
+            !app.quit_requested && app.hide_intent
+        };
+        if !hide {
+            break;
+        }
+
+        // Tray life: no window, but the link, the archive, and the tray
+        // keep going until Show or Quit.
+        let headless = egui::Context::default();
+        slot.lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_mut()
+            .expect("application state present")
+            .window_gone();
+        loop {
+            {
+                let mut guard = slot.lock().unwrap_or_else(|p| p.into_inner());
+                let app = guard.as_mut().expect("application state present");
+                app.background_frame(&headless);
+                if app.quit_requested || app.wants_show {
+                    break;
+                }
+            }
+            fastsapp::tray::idle(std::time::Duration::from_millis(150));
+        }
+        let quit = slot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .expect("application state present")
+            .quit_requested;
+        if quit {
+            break;
+        }
+    }
+
+    if let Some(mut app) = slot.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        app.shutdown();
+    }
+    drop(instance);
     Ok(())
 }
 
@@ -152,26 +228,43 @@ fn log_panics(path: std::path::PathBuf) {
 }
 
 fn native_options() -> eframe::NativeOptions {
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("Fastsapp")
+        .with_app_id("fastsapp")
+        .with_inner_size([1180.0, 780.0])
+        .with_min_inner_size([720.0, 480.0])
+        .with_icon(app_icon())
+        // macOS: no title bar strip above the app. The content runs to the
+        // top edge and the traffic lights float over it; the interface
+        // leaves room for them with `theme::titlebar_inset`. Nothing
+        // changes elsewhere.
+        .with_fullsize_content_view(true)
+        .with_titlebar_shown(false)
+        .with_title_shown(false);
     eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Fastsapp")
-            .with_app_id("fastsapp")
-            .with_inner_size([1180.0, 780.0])
-            .with_min_inner_size([720.0, 480.0])
-            .with_icon(app_icon()),
+        viewport,
         ..Default::default()
     }
 }
 
-/// The eframe adapter around the long-lived [`app::App`].
+/// The eframe adapter around the long-lived [`app::App`]: delegates frames
+/// and, when the window goes away, hands the state back for the next one.
 struct Shell {
-    app: app::App,
+    app: Option<app::App>,
+    slot: std::sync::Arc<std::sync::Mutex<Option<app::App>>>,
     #[cfg(feature = "demo")]
     shot: Option<Shot>,
 }
 
+impl Drop for Shell {
+    fn drop(&mut self) {
+        *self.slot.lock().unwrap_or_else(|p| p.into_inner()) = self.app.take();
+    }
+}
+
 /// A screenshot the window still owes us.
 #[cfg(feature = "demo")]
+#[derive(Clone)]
 struct Shot {
     path: std::path::PathBuf,
     due: std::time::Instant,
@@ -227,17 +320,25 @@ impl eframe::App for Shell {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.app.background_frame(ctx);
+        if let Some(app) = self.app.as_mut() {
+            app.background_frame(ctx);
+        }
         #[cfg(feature = "demo")]
         self.drive_shot(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.app.frame_ui(ui);
+        if let Some(app) = self.app.as_mut() {
+            app.frame_ui(ui);
+        }
     }
 
+    /// The window is closing; the app may live on in the tray, so only what
+    /// must not be lost is written now.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.app.shutdown();
+        if let Some(app) = self.app.as_mut() {
+            app.save_state();
+        }
     }
 }
 

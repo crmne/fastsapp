@@ -53,6 +53,10 @@ pub struct Settings {
     /// A GIPHY API key, for the GIF search; empty means the built-in one,
     /// if this build carries any.
     pub giphy_key: String,
+    /// Closing the window hides to the tray and keeps the link up.
+    pub keep_running_in_background: bool,
+    /// Desktop notifications for messages that arrive while away.
+    pub notifications: bool,
 }
 
 impl Default for Settings {
@@ -70,6 +74,8 @@ impl Default for Settings {
             show_shortcut_hints: true,
             recent_emoji: Vec::new(),
             giphy_key: String::new(),
+            keep_running_in_background: true,
+            notifications: true,
         }
     }
 }

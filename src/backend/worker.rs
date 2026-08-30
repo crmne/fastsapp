@@ -1277,6 +1277,9 @@ impl Worker {
             .ok()
             .flatten()
             .unwrap_or(message);
+        // Live and from someone else: the desktop may want to say so.
+        // History being replayed is not news.
+        let incoming = (is_new && !stored.from_me && !self.syncing).then(|| stored.clone());
         self.emit(Event::Messages {
             chat: chat.clone(),
             messages: vec![stored],
@@ -1284,6 +1287,12 @@ impl Worker {
             complete: false,
         });
         self.emit_chat(&chat);
+        if let Some(message) = incoming {
+            self.emit(Event::Incoming {
+                chat,
+                message: Box::new(message),
+            });
+        }
     }
 
     fn quoted_of(&self, base: &wa::Message) -> Option<Quoted> {

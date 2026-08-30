@@ -234,6 +234,21 @@ pub fn app_icon_rgba(size: usize) -> Vec<u8> {
     rgba
 }
 
+/// The mark as a macOS template image: the disc black, the glyph a hole,
+/// so the menu bar can draw it in whichever colour matches its theme.
+pub fn tray_template_rgba(size: usize) -> Vec<u8> {
+    let mut rgba = app_icon_rgba(size);
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        if pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200 {
+            pixel[3] = 0;
+        }
+        pixel[0] = 0;
+        pixel[1] = 0;
+        pixel[2] = 0;
+    }
+    rgba
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

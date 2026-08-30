@@ -505,6 +505,10 @@ pub enum Action {
     Unlink,
     Reconnect,
     Quit,
+    /// Bring the window forward, creating it if the app lives in the tray.
+    ShowWindow,
+    /// Close the window but keep the app in the tray.
+    HideWindow,
 }
 
 #[cfg(test)]

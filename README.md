@@ -62,6 +62,15 @@ same pattern without carrying WhatsApp's trademark.)
   admins may post.
 - **Presence.** Online and last-seen for the open chat, and typing
   indicators both ways.
+- **Stays in the background.** Closing the window keeps Fastsapp linked
+  and receiving in the system tray (a status notifier on Linux, the menu
+  bar on macOS, the notification area on Windows); clicking the tray brings
+  the window back. Quit from the tray menu or with `Ctrl+Q`; turn it off
+  in Settings. A second launch shows the running window instead of
+  starting a rival that would take over the link.
+- **Notifies.** New messages come through the desktop's own notifications
+  when the window is hidden, in the background, or on another chat; muted
+  chats stay quiet; a click opens the chat (Linux). Off in Settings.
 - **Light and dark**, or follow the system. Zoom with Ctrl+plus and
   Ctrl+minus.
 - **Keyboard-first.** `Ctrl+K` searches, `Alt+↑/↓` walks the chats, `Esc`
