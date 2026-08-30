@@ -161,6 +161,9 @@ pub struct App {
     pub picker_search: String,
     /// The picker just opened: its search field takes the focus once.
     pub picker_focus: bool,
+    /// Attachments staged in the composer, sent with the next message as
+    /// their caption.
+    pub pending: Vec<Pending>,
     pub gif_query: String,
     pub gif_results: Vec<Gif>,
     /// A GIF search is on its way.
@@ -209,6 +212,28 @@ pub struct App {
     control_commands: Option<std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>>>,
     /// Chats whose notification was clicked.
     notification_opens: std::sync::Arc<std::sync::Mutex<Vec<ChatId>>>,
+}
+
+/// An attachment staged in the composer, waiting for its caption.
+pub enum Pending {
+    /// A picture off the clipboard, as straight RGBA, and its preview once
+    /// made.
+    Picture {
+        width: usize,
+        height: usize,
+        rgba: std::sync::Arc<Vec<u8>>,
+        texture: Option<egui::TextureHandle>,
+    },
+    File(PathBuf),
+}
+
+impl Pending {
+    /// Whether the file is a picture the composer can show as one.
+    pub fn is_picture_file(path: &std::path::Path) -> bool {
+        mime_guess2::from_path(path)
+            .first()
+            .is_some_and(|mime| mime.type_() == "image")
+    }
 }
 
 /// What a process wants of the app beyond the window.
@@ -293,6 +318,7 @@ impl App {
             picker_anchor: None,
             picker_search: String::new(),
             picker_focus: false,
+            pending: Vec::new(),
             gif_query: String::new(),
             gif_results: Vec::new(),
             gif_pending: false,
@@ -609,6 +635,35 @@ impl App {
 
     /// The members of a group as WhatsApp lists them under its name: first
     /// names, then the numbers of people without one, ourselves last.
+    /// The members of a group as (id, name): people with names first, in
+    /// alphabetical order, then bare numbers, and ourselves last.
+    pub fn participant_list(&self, chat: &Chat) -> Vec<(String, String)> {
+        let me = self.me.as_deref();
+        let mut named = Vec::new();
+        let mut numbers = Vec::new();
+        for id in chat
+            .participants
+            .iter()
+            .filter(|id| Some(id.as_str()) != me)
+        {
+            let name = self.display_name(id);
+            if name.starts_with('+') || name == "Unknown" {
+                numbers.push((id.clone(), name));
+            } else {
+                named.push((id.clone(), name));
+            }
+        }
+        named.sort_by_key(|(_, name)| name.trim_start_matches('~').to_lowercase());
+        numbers.sort_by(|a, b| a.1.cmp(&b.1));
+        named.extend(numbers);
+        if let Some(me) = me
+            && chat.participants.iter().any(|id| id == me)
+        {
+            named.push((me.to_owned(), "You".to_owned()));
+        }
+        named
+    }
+
     pub fn participant_names(&self, chat: &Chat) -> String {
         let me = self.me.as_deref();
         let mut names = Vec::new();
@@ -789,6 +844,11 @@ impl App {
                     }
                 }
                 Event::Incoming { chat, message } => self.maybe_notify(&chat, &message),
+                Event::Picked { chat, paths } => {
+                    if self.open_chat.as_deref() == Some(chat.as_str()) {
+                        self.stage_files(paths);
+                    }
+                }
                 Event::MessageUpdated(message) => {
                     let message = *message;
                     if let Some(conversation) = self.conversations.get_mut(&message.chat)
@@ -1133,6 +1193,56 @@ impl App {
     }
 
     /// Sends files to the open chat.
+    /// Puts files into the composer, to go out with the next message as
+    /// their caption.
+    fn stage_files(&mut self, paths: Vec<PathBuf>) {
+        if self.open_chat.is_none() {
+            self.toast_error("Open a chat first");
+            return;
+        }
+        for path in paths {
+            self.pending.push(Pending::File(path));
+        }
+        self.focus_composer = true;
+    }
+
+    /// Sends what is staged, the caption going with the first item.
+    fn send_pending(&mut self, chat: ChatId, caption: String) {
+        let caption = Some(caption.trim().to_owned()).filter(|text| !text.is_empty());
+        let mut caption = caption;
+        let mut files = Vec::new();
+        for item in std::mem::take(&mut self.pending) {
+            match item {
+                Pending::Picture {
+                    width,
+                    height,
+                    rgba,
+                    ..
+                } => {
+                    self.backend.send(Command::SendImage {
+                        chat: chat.clone(),
+                        width: width as u32,
+                        height: height as u32,
+                        rgba: std::sync::Arc::try_unwrap(rgba).unwrap_or_else(|arc| (*arc).clone()),
+                        caption: caption.take(),
+                    });
+                }
+                Pending::File(path) => files.push(path),
+            }
+        }
+        if !files.is_empty() {
+            self.backend.send(Command::SendFiles {
+                chat,
+                paths: files,
+                caption: caption.take(),
+            });
+        }
+        self.reply_to = None;
+        self.scroll_to_bottom = true;
+        self.at_bottom = true;
+    }
+
+    #[allow(dead_code)]
     fn send_files(&mut self, paths: Vec<PathBuf>) {
         let Some(chat) = self.open_chat.clone() else {
             self.toast_error("Open a chat first");
@@ -1146,7 +1256,11 @@ impl App {
             paths.len(),
             if paths.len() == 1 { "" } else { "s" }
         ));
-        self.backend.send(Command::SendFiles { chat, paths });
+        self.backend.send(Command::SendFiles {
+            chat,
+            paths,
+            caption: None,
+        });
         self.scroll_to_bottom = true;
         self.at_bottom = true;
     }
@@ -1327,7 +1441,20 @@ impl App {
                     self.backend.send(Command::PickFiles(chat));
                 }
             }
-            Action::SendFiles(paths) => self.send_files(paths),
+            Action::SendFiles(paths) => self.stage_files(paths),
+            Action::SendPending { chat, caption } => self.send_pending(chat, caption),
+            Action::RemovePending(index) => {
+                if index < self.pending.len() {
+                    self.pending.remove(index);
+                }
+            }
+            Action::ClearPending => self.pending.clear(),
+            Action::SetMuted(chat, until) => {
+                if let Some(known) = self.chat_mut(&chat) {
+                    known.muted_until = until;
+                }
+                self.backend.send(Command::SetMuted(chat, until));
+            }
             Action::TogglePicker(tab) => {
                 if self.picker == Some(tab) {
                     self.picker = None;
@@ -1384,16 +1511,15 @@ impl App {
                 height,
                 rgba,
             } => {
-                if let Some(chat) = self.open_chat.clone() {
-                    self.toast("Sending the picture…");
-                    self.backend.send(Command::SendImage {
-                        chat,
-                        width: width as u32,
-                        height: height as u32,
-                        rgba,
+                // Staged, not sent: a caption may follow.
+                if self.open_chat.is_some() {
+                    self.pending.push(Pending::Picture {
+                        width,
+                        height,
+                        rgba: std::sync::Arc::new(rgba),
+                        texture: None,
                     });
-                    self.scroll_to_bottom = true;
-                    self.at_bottom = true;
+                    self.focus_composer = true;
                 }
             }
             Action::React {

@@ -250,15 +250,73 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     });
     ui.add_space(8.0);
     if chat.is_group() && !chat.participants.is_empty() {
-        theme::text(ui, "Members", theme::medium(12.5), palette.secondary);
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(app.participant_names(&chat))
-                    .font(theme::regular(12.5))
-                    .color(palette.text),
-            )
-            .wrap(),
+        let members = app.participant_list(&chat);
+        theme::text(
+            ui,
+            format!("Members ({})", members.len()),
+            theme::medium(12.5),
+            palette.secondary,
         );
+        ui.add_space(4.0);
+        // One row each, in a list that scrolls: a group can have thousands.
+        let row_height = 30.0;
+        let mut open = None;
+        egui::ScrollArea::vertical()
+            .id_salt("members")
+            .max_height(row_height * 8.0)
+            .auto_shrink([false, true])
+            .show_rows(ui, row_height, members.len(), |ui, range| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (member, name) in &members[range] {
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), row_height),
+                        egui::Sense::click(),
+                    );
+                    if ui.is_rect_visible(rect) {
+                        if response.hovered() {
+                            ui.painter().rect_filled(rect, 6.0, palette.surface_hover);
+                        }
+                        let picture = app.avatar(member);
+                        let avatar = egui::Rect::from_center_size(
+                            egui::pos2(rect.left() + 16.0, rect.center().y),
+                            egui::Vec2::splat(24.0),
+                        );
+                        super::widgets::paint_avatar(
+                            ui,
+                            &palette,
+                            avatar,
+                            name.trim_start_matches('~'),
+                            member,
+                            picture.as_deref(),
+                        );
+                        let line = super::widgets::line(
+                            ui,
+                            name,
+                            theme::regular(13.0),
+                            palette.text,
+                            rect.width() - 40.0,
+                            1,
+                        );
+                        line.paint(
+                            ui,
+                            egui::pos2(rect.left() + 34.0, rect.center().y - line.size().y / 2.0),
+                            palette.text,
+                        );
+                    }
+                    if response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        open = Some(member.clone());
+                    }
+                }
+            });
+        if let Some(member) = open
+            && Some(member.as_str()) != app.me.as_deref()
+        {
+            app.actions
+                .push(Action::ShowDialog(Dialog::ChatInfo(member)));
+        }
         ui.add_space(6.0);
     }
     if let Some(until) = chat.muted_until {
@@ -279,6 +337,20 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
             && theme::soft_button(ui, &palette, Some(Icon::Copy), "Copy number", false).clicked()
         {
             app.actions.push(Action::CopyText(format!("+{phone}")));
+        }
+        if has_chat {
+            let muted = chat.muted(crate::util::now());
+            let (icon, label) = if muted {
+                (Icon::Bell, "Unmute")
+            } else {
+                (Icon::BellOff, "Mute")
+            };
+            if theme::soft_button(ui, &palette, Some(icon), label, false).clicked() {
+                app.actions.push(Action::SetMuted(
+                    chat.id.clone(),
+                    if muted { None } else { Some(0) },
+                ));
+            }
         }
         if !has_chat {
             return;

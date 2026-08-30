@@ -692,6 +692,27 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.focus_composer = true;
             }
             "nosidebar" => app.sidebar_visible = false,
+            "staged" => {
+                let (photo, _) = sample_files(app);
+                let side = 48usize;
+                let rgba: Vec<u8> = (0..side * side)
+                    .flat_map(|index| {
+                        let x = (index % side) as u8;
+                        let y = (index / side) as u8;
+                        [x * 5, 120, 255 - y * 5, 255]
+                    })
+                    .collect();
+                app.pending.push(crate::app::Pending::Picture {
+                    width: side,
+                    height: side,
+                    rgba: std::sync::Arc::new(rgba),
+                    texture: None,
+                });
+                app.pending.push(crate::app::Pending::File(photo));
+                app.pending
+                    .push(crate::app::Pending::File("/tmp/notes.pdf".into()));
+                app.composer = "Look at these".into();
+            }
             "archived" => app.show_archived = true,
             "picker" => app.picker = Some(crate::model::PickerTab::Emoji),
             "stickers" => {
@@ -837,6 +858,7 @@ mod tests {
             "stickers",
             "typing",
             "nosidebar",
+            "staged",
             "gifs",
         ] {
             let mut app = self::app();
@@ -1039,6 +1061,49 @@ mod tests {
         };
         frame_with(&mut app, &ctx, vec![plain]);
         assert!(!ctx.input(crate::app::wants_paste), "a plain V is typing");
+    }
+
+    #[test]
+    fn a_pasted_picture_waits_for_its_caption() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        let before = app.conversations[&chat].messages.len();
+        app.actions.push(crate::model::Action::PasteImage {
+            width: 2,
+            height: 2,
+            rgba: vec![200; 16],
+        });
+        render(&mut app, &ctx);
+        assert_eq!(app.pending.len(), 1, "staged, not sent");
+        assert_eq!(app.conversations[&chat].messages.len(), before);
+        app.actions.push(crate::model::Action::SendPending {
+            chat: chat.clone(),
+            caption: "look".into(),
+        });
+        render(&mut app, &ctx);
+        assert!(app.pending.is_empty(), "sent with the caption");
+    }
+
+    #[test]
+    fn muting_a_chat_takes_effect_at_once() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        let now = crate::util::now();
+        assert!(!app.chat(&chat).expect("chat").muted(now));
+        app.actions
+            .push(crate::model::Action::SetMuted(chat.clone(), Some(0)));
+        render(&mut app, &ctx);
+        assert!(app.chat(&chat).expect("chat").muted(now));
+        app.actions
+            .push(crate::model::Action::SetMuted(chat.clone(), None));
+        render(&mut app, &ctx);
+        assert!(!app.chat(&chat).expect("chat").muted(now));
     }
 
     #[test]

@@ -393,6 +393,22 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
         app.actions
             .push(Action::SetArchived(chat.id.clone(), !chat.archived));
     }
+    let now = crate::util::now();
+    if chat.muted(now) {
+        if widgets::menu_item(ui, palette, Some(Icon::Bell), "Unmute") {
+            app.actions.push(Action::SetMuted(chat.id.clone(), None));
+        }
+    } else {
+        for (label, until) in [
+            ("Mute for 8 hours", Some(now + 8 * 3600)),
+            ("Mute for a week", Some(now + 7 * 86_400)),
+            ("Mute always", Some(0)),
+        ] {
+            if widgets::menu_item(ui, palette, Some(Icon::BellOff), label) {
+                app.actions.push(Action::SetMuted(chat.id.clone(), until));
+            }
+        }
+    }
     widgets::menu_separator(ui, palette);
     if let Some(phone) = chat.phone()
         && widgets::menu_item(ui, palette, Some(Icon::Copy), "Copy number")

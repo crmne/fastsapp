@@ -285,6 +285,24 @@ impl Worker {
         self.waker.wake();
     }
 
+    /// Runs a chat setting's sync to the phone off the worker, when there
+    /// is a link; the archive is already updated, so a failure only logs.
+    fn tell_phone<F, Fut>(&self, chat: &str, call: F)
+    where
+        F: FnOnce(Arc<Client>, Jid) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+    {
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(chat)) else {
+            return;
+        };
+        let chat = chat.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) = call(client, jid).await {
+                log::warn!("the phone was not told about {chat}: {error}");
+            }
+        });
+    }
+
     fn emit_chats(&self) {
         match self.archive.chats() {
             Ok(mut chats) => {
@@ -1781,15 +1799,21 @@ impl Worker {
                     let _ = commands.send(Command::Picked { chat, paths });
                 });
             }
-            Command::Picked { chat, paths } | Command::SendFiles { chat, paths } => {
-                self.send_files(chat, paths);
+            Command::Picked { chat, paths } => self.emit(Event::Picked { chat, paths }),
+            Command::SendFiles {
+                chat,
+                paths,
+                caption,
+            } => {
+                self.send_files(chat, paths, caption);
             }
             Command::SendImage {
                 chat,
                 width,
                 height,
                 rgba,
-            } => self.send_pasted_image(chat, width, height, rgba),
+                caption,
+            } => self.send_pasted_image(chat, width, height, rgba, caption),
             Command::Outbound { chat, row, raw } => self.outbound(chat, *row, raw),
             Command::SendSticker { chat, path } => self.send_sticker(chat, path),
             Command::SendGif { chat, gif } => self.send_gif(chat, gif),
@@ -1844,10 +1868,43 @@ impl Worker {
             Command::SetArchived(chat, archived) => {
                 let _ = self.archive.set_archived(&chat, archived);
                 self.emit_chat(&chat);
+                self.tell_phone(&chat, move |client, jid| async move {
+                    if archived {
+                        client.chat_actions().archive_chat(&jid, None).await
+                    } else {
+                        client.chat_actions().unarchive_chat(&jid, None).await
+                    }
+                    .map_err(|error| error.to_string())
+                });
             }
             Command::SetPinned(chat, pinned) => {
                 let _ = self.archive.set_pinned(&chat, pinned);
                 self.emit_chat(&chat);
+                self.tell_phone(&chat, move |client, jid| async move {
+                    if pinned {
+                        client.chat_actions().pin_chat(&jid).await
+                    } else {
+                        client.chat_actions().unpin_chat(&jid).await
+                    }
+                    .map_err(|error| error.to_string())
+                });
+            }
+            Command::SetMuted(chat, until) => {
+                let _ = self.archive.set_muted(&chat, until);
+                self.emit_chat(&chat);
+                self.tell_phone(&chat, move |client, jid| async move {
+                    match until {
+                        None => client.chat_actions().unmute_chat(&jid).await,
+                        Some(0) => client.chat_actions().mute_chat(&jid).await,
+                        Some(seconds) => {
+                            client
+                                .chat_actions()
+                                .mute_chat_until(&jid, seconds * 1000)
+                                .await
+                        }
+                    }
+                    .map_err(|error| error.to_string())
+                });
             }
             Command::PairWithPhone(phone) => {
                 let Some(client) = self.client.clone() else {
@@ -2525,8 +2582,8 @@ impl Worker {
         });
     }
 
-    fn send_files(&mut self, chat: ChatId, paths: Vec<PathBuf>) {
-        for path in paths {
+    fn send_files(&mut self, chat: ChatId, paths: Vec<PathBuf>, caption: Option<String>) {
+        for (index, path) in paths.into_iter().enumerate() {
             let Some(client) = self.client.clone() else {
                 self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
                 return;
@@ -2535,6 +2592,8 @@ impl Worker {
             let chat = chat.clone();
             let dir = self.dirs.media_cache_dir();
             let me = self.me();
+            // The caption goes with the first file, as on the phone.
+            let caption = if index == 0 { caption.clone() } else { None };
             tokio::spawn(async move {
                 let outcome = async {
                     let bytes = tokio::fs::read(&path)
@@ -2548,7 +2607,7 @@ impl Worker {
                         .map(|name| name.to_string_lossy().into_owned());
                     let prepared =
                         prepare_media(&client, bytes, &mime, file_name.as_deref(), false).await?;
-                    file_outbound(&client, &chat, &me, &dir, prepared).await
+                    file_outbound(&client, &chat, &me, &dir, prepared, caption).await
                 }
                 .await;
                 match outcome {
@@ -2571,7 +2630,14 @@ impl Worker {
         }
     }
 
-    fn send_pasted_image(&mut self, chat: ChatId, width: u32, height: u32, rgba: Vec<u8>) {
+    fn send_pasted_image(
+        &mut self,
+        chat: ChatId,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        caption: Option<String>,
+    ) {
         let Some(client) = self.client.clone() else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
@@ -2589,7 +2655,7 @@ impl Worker {
                 .await
                 .map_err(|error| error.to_string())??;
                 let prepared = prepare_media(&client, encoded, "image/jpeg", None, false).await?;
-                file_outbound(&client, &chat, &me, &dir, prepared).await
+                file_outbound(&client, &chat, &me, &dir, prepared, caption).await
             }
             .await;
             match outcome {
@@ -2625,7 +2691,7 @@ impl Worker {
                     .await
                     .map_err(|error| error.to_string())?;
                 let prepared = prepare_sticker(&client, bytes).await?;
-                file_outbound(&client, &chat, &me, &dir, prepared).await
+                file_outbound(&client, &chat, &me, &dir, prepared, None).await
             }
             .await;
             match outcome {
@@ -2675,7 +2741,7 @@ impl Worker {
                     video.width = Some(gif.width);
                     video.height = Some(gif.height);
                 }
-                file_outbound(&client, &chat, &me, &dir, prepared).await
+                file_outbound(&client, &chat, &me, &dir, prepared, None).await
             }
             .await;
             match outcome {
@@ -3452,8 +3518,26 @@ async fn file_outbound(
     chat: &str,
     me: &str,
     dir: &Path,
-    prepared: Prepared,
+    mut prepared: Prepared,
+    caption: Option<String>,
 ) -> Result<(Message, Vec<u8>), String> {
+    if let Some(caption) = caption.filter(|caption| !caption.trim().is_empty()) {
+        match &mut prepared.content {
+            Content::Image { caption: slot, .. }
+            | Content::Video { caption: slot, .. }
+            | Content::Document { caption: slot, .. } => *slot = Some(caption.clone()),
+            _ => {}
+        }
+        if let Some(image) = prepared.message.image_message.as_option_mut() {
+            image.caption = Some(caption.clone());
+        }
+        if let Some(video) = prepared.message.video_message.as_option_mut() {
+            video.caption = Some(caption.clone());
+        }
+        if let Some(document) = prepared.message.document_message.as_option_mut() {
+            document.caption = Some(caption);
+        }
+    }
     let id = client.generate_message_id();
     let path = media_path(
         dir,

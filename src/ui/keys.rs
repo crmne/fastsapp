@@ -42,6 +42,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.push(Action::CloseDialog);
         } else if app.picker.is_some() {
             actions.push(Action::ClosePicker);
+        } else if !app.pending.is_empty() {
+            actions.push(Action::ClearPending);
         } else if app.editing.is_some() {
             actions.push(Action::CancelEdit);
         } else if app.reply_to.is_some() {

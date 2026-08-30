@@ -348,6 +348,9 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                     });
                     sent
                 });
+            if !app.pending.is_empty() {
+                pending_strip(app, ui);
+            }
             let mut send_click = false;
             let line_height = ui
                 .painter()
@@ -423,8 +426,12 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                         .frame(Frame::NONE)
                                         .margin(Margin::ZERO)
                                         .hint_text(
-                                            egui::RichText::new("Type a message")
-                                                .color(palette.dim),
+                                            egui::RichText::new(if app.pending.is_empty() {
+                                                "Type a message"
+                                            } else {
+                                                "Add a caption"
+                                            })
+                                            .color(palette.dim),
                                         )
                                         .font(theme::regular(BODY_SIZE))
                                         .text_color(palette.text)
@@ -454,7 +461,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                 }
                             });
                     });
-                let ready = !app.composer.trim().is_empty();
+                let ready = !app.composer.trim().is_empty() || !app.pending.is_empty();
                 let (fill, hover, icon) = if ready {
                     (palette.accent, palette.accent_hover, palette.on_accent)
                 } else {
@@ -472,13 +479,22 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 }
             },
             );
-            if (send_key || send_click) && !app.composer.trim().is_empty() {
+            if (send_key || send_click)
+                && (!app.composer.trim().is_empty() || !app.pending.is_empty())
+            {
                 let text = std::mem::take(&mut app.composer);
-                app.actions.push(Action::SendText {
-                    chat: chat.id.clone(),
-                    text,
-                    quoting: app.reply_to.clone(),
-                });
+                if app.pending.is_empty() {
+                    app.actions.push(Action::SendText {
+                        chat: chat.id.clone(),
+                        text,
+                        quoting: app.reply_to.clone(),
+                    });
+                } else {
+                    app.actions.push(Action::SendPending {
+                        chat: chat.id.clone(),
+                        caption: text,
+                    });
+                }
                 app.focus_composer = true;
             }
             if app.settings.show_shortcut_hints {
@@ -2342,4 +2358,100 @@ mod reaction_tests {
         assert_eq!(quick.len(), QUICK_REACTIONS.len() + 1);
         assert_eq!(quick.last(), Some(&"🦀"));
     }
+}
+
+/// What is staged to go out with the next message: a tile per attachment,
+/// each with a way to take it out again.
+fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let tile = 72.0;
+    let mut remove = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+        for (index, item) in app.pending.iter_mut().enumerate() {
+            let (rect, response) = ui.allocate_exact_size(Vec2::splat(tile), Sense::hover());
+            if ui.is_rect_visible(rect) {
+                ui.painter().rect_filled(rect, 8.0, palette.surface);
+                match item {
+                    crate::app::Pending::Picture {
+                        width,
+                        height,
+                        rgba,
+                        texture,
+                    } => {
+                        let handle = texture.get_or_insert_with(|| {
+                            ui.ctx().load_texture(
+                                format!("pending-picture-{index}"),
+                                egui::ColorImage::from_rgba_unmultiplied([*width, *height], rgba),
+                                egui::TextureOptions::LINEAR,
+                            )
+                        });
+                        // A thumbnail, not a bubble: keep the aspect, fill
+                        // the tile as far as it goes.
+                        let side = tile - 8.0;
+                        let scale =
+                            (side / (*width).max(1) as f32).min(side / (*height).max(1) as f32);
+                        let fitted = vec2(*width as f32 * scale, *height as f32 * scale);
+                        let inner = Rect::from_center_size(rect.center(), fitted);
+                        egui::Image::from_texture((handle.id(), fitted))
+                            .corner_radius(6.0)
+                            .paint_at(ui, inner);
+                    }
+                    crate::app::Pending::File(path) => {
+                        if crate::app::Pending::is_picture_file(path) {
+                            egui::Image::new(file_uri(path))
+                                .fit_to_exact_size(Vec2::splat(tile - 8.0))
+                                .corner_radius(6.0)
+                                .paint_at(ui, rect.shrink(4.0));
+                        } else {
+                            let icon = Rect::from_center_size(
+                                rect.center() - vec2(0.0, 10.0),
+                                Vec2::splat(24.0),
+                            );
+                            theme::paint_icon(ui, Icon::FileText, icon, 22.0, palette.secondary);
+                            let name = path
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            let line = widgets::line(
+                                ui,
+                                &name,
+                                theme::regular(10.5),
+                                palette.text,
+                                tile - 8.0,
+                                1,
+                            );
+                            line.paint(
+                                ui,
+                                egui::pos2(
+                                    rect.center().x - line.size().x / 2.0,
+                                    rect.bottom() - 18.0,
+                                ),
+                                palette.text,
+                            );
+                        }
+                    }
+                }
+                // The way out, in the corner.
+                let close =
+                    Rect::from_center_size(rect.right_top() + vec2(-10.0, 10.0), Vec2::splat(18.0));
+                let close_response =
+                    ui.interact(close, ui.id().with(("unstage", index)), Sense::click());
+                ui.painter()
+                    .circle_filled(close.center(), 9.0, palette.overlay);
+                theme::paint_icon(ui, Icon::X, close, 12.0, palette.text);
+                if close_response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    remove = Some(index);
+                }
+            }
+            let _ = response;
+        }
+    });
+    if let Some(index) = remove {
+        app.actions.push(Action::RemovePending(index));
+    }
+    ui.add_space(4.0);
 }

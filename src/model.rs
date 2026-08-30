@@ -515,6 +515,18 @@ pub enum Action {
     /// Close the window as its close button would: into the tray when the
     /// app keeps running, else quitting.
     CloseWindow,
+    /// Mute a chat until the given time, `Some(0)` for good, `None` to
+    /// unmute.
+    SetMuted(ChatId, Option<i64>),
+    /// Send what is staged in the composer, with the text as its caption.
+    SendPending {
+        chat: ChatId,
+        caption: String,
+    },
+    /// Take one staged attachment out of the composer.
+    RemovePending(usize),
+    /// Take every staged attachment out of the composer.
+    ClearPending,
 }
 
 #[cfg(test)]

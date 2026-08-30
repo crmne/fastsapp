@@ -37,6 +37,11 @@ same pattern without carrying WhatsApp's trademark.)
   colour from the desktop's emoji font (Noto Color Emoji on Linux, Apple
   Color Emoji on macOS), flags, skin tones, and families included; a
   message of nothing but emoji is shown large.
+- **Attachments wait for a caption.** A pasted picture, dropped files, or
+  files from the picker sit in the composer until you send, with whatever
+  you typed as the caption; Escape drops them.
+- **Mute.** Any chat, for eight hours, a week, or for good, from its menu
+  or its info; the phone follows, and so do notifications.
 - **Sends.** Text with Enter (Shift+Enter breaks a line; swap them in
   Settings), pictures pasted from the clipboard, and files picked with the
   paperclip or dropped on the window: pictures, videos, audio, and
@@ -46,7 +51,8 @@ same pattern without carrying WhatsApp's trademark.)
 - **Attachments.** Everything up to 64 MB is fetched as it scrolls into
   view (or on a click, in Settings), with WhatsApp's blurred preview until
   then. Pictures show at WhatsApp's size, stickers on their own, GIFs and
-  animated stickers play in place (GIFs through the `ffmpeg` command when
+  animated stickers play in place (GIFs are decoded in the app; `ffmpeg`
+  is only tried for anything that is not H.264, when
   the desktop has one); other videos show their poster and length and,
   like voice messages and documents, open with whatever your desktop uses
   for them. Locations open in a map; contacts and polls are shown;

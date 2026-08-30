@@ -116,9 +116,11 @@ pub enum Command {
     },
     /// Open the desktop's file picker and send what is chosen.
     PickFiles(ChatId),
+    /// Files to send; the caption goes with the first.
     SendFiles {
         chat: ChatId,
         paths: Vec<PathBuf>,
+        caption: Option<String>,
     },
     /// A picture off the clipboard, as straight RGBA.
     SendImage {
@@ -126,7 +128,11 @@ pub enum Command {
         width: u32,
         height: u32,
         rgba: Vec<u8>,
+        caption: Option<String>,
     },
+    /// Mute a chat until the given time (seconds), `Some(0)` for good,
+    /// `None` to unmute; told to the phone as well.
+    SetMuted(ChatId, Option<i64>),
     /// A sticker file (WebP) to send.
     SendSticker {
         chat: ChatId,
@@ -242,6 +248,11 @@ pub enum Event {
         complete: bool,
     },
     MessageUpdated(Box<Message>),
+    /// Files chosen in the picker, for the composer to stage.
+    Picked {
+        chat: ChatId,
+        paths: Vec<PathBuf>,
+    },
     /// A message just arrived from someone else, live (not from history),
     /// for the desktop notification.
     Incoming {

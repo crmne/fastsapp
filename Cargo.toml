@@ -1,6 +1,6 @@
 [package]
 name = "fastsapp"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -79,6 +79,8 @@ resvg = { version = "0.45", default-features = false }
 # Desktop notifications through the desktop's own service: pure Rust over
 # D-Bus on Linux, the system frameworks elsewhere.
 notify-rust = { version = "4", default-features = false, features = ["z"] }
+openh264 = "0.9"
+mp4 = "0.14"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The status-notifier tray item, pure Rust over D-Bus.

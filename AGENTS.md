@@ -43,7 +43,9 @@ protocol. These notes are for coding agents and new contributors.
   Any text that can hold an emoji goes through `widgets::line` /
   `widgets::rich_text` or `markup::layout`, never a bare `Label`.
 - `src/animation.rs` plays animated stickers and GIFs: WebP/GIF frames
-  decode in-process, MP4 through the `ffmpeg` command; frames become
+  decode in-process, and so do MP4s (the `mp4` crate demuxes, `openh264`
+  decodes the H.264 WhatsApp uses, samples converted from AVCC to Annex
+  B); `ffmpeg` is only a fallback for other codecs. Frames become
   textures on the interface thread and are dropped when unseen.
   `src/ui/picker.rs` is the emoji/GIF/sticker panel. GIF search uses the
   key from Settings, else one baked in at build time from
