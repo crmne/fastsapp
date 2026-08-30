@@ -47,7 +47,7 @@ protocol. These notes are for coding agents and new contributors.
   decodes the H.264 WhatsApp uses, samples converted from AVCC to Annex
   B); `ffmpeg` is only a fallback for other codecs. `openh264` compiles
   its C++ from source with the C++ compiler of the host; `nasm` is
-  optional and only adds the SIMD paths (the AUR source recipes list it,
+  optional and only adds the SIMD paths (the AUR recipes leave it out,
   the build works without it). Frames become textures on the interface
   thread and are dropped when unseen.
 - `src/voice.rs` is the codec for voice messages: OGG/Opus in and out
