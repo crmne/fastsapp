@@ -45,8 +45,11 @@ protocol. These notes are for coding agents and new contributors.
 - `src/animation.rs` plays animated stickers and GIFs: WebP/GIF frames
   decode in-process, and so do MP4s (the `mp4` crate demuxes, `openh264`
   decodes the H.264 WhatsApp uses, samples converted from AVCC to Annex
-  B); `ffmpeg` is only a fallback for other codecs. Frames become
-  textures on the interface thread and are dropped when unseen.
+  B); `ffmpeg` is only a fallback for other codecs. `openh264` compiles
+  its C++ from source with the C++ compiler of the host; `nasm` is
+  optional and only adds the SIMD paths (the AUR source recipes list it,
+  the build works without it). Frames become textures on the interface
+  thread and are dropped when unseen.
   `src/ui/picker.rs` is the emoji/GIF/sticker panel. GIF search uses the
   key from Settings, else one baked in at build time from
   `FASTSAPP_GIPHY_KEY` (`option_env!`); the repository carries none. The
