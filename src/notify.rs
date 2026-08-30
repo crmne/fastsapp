@@ -7,6 +7,7 @@
 //! waiting for a click blocks until the notification is gone, so each is
 //! handled on its own thread.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// The title and body for a message: the chat's name, and in a group the
@@ -20,18 +21,20 @@ pub fn lines(chat_name: &str, is_group: bool, sender: &str, summary: &str) -> (S
     (chat_name.to_owned(), body)
 }
 
-/// Shows one. A click on it (where the desktop reports clicks) puts `chat`
+/// Shows one, with the person's or the group's picture when there is one
+/// on disk. A click on it (where the desktop reports clicks) puts `chat`
 /// into `opened` and wakes the app, which then shows that chat.
 pub fn show(
     title: String,
     body: String,
+    picture: Option<PathBuf>,
     chat: String,
     opened: Arc<Mutex<Vec<String>>>,
     wake: impl Fn() + Send + 'static,
 ) {
     let spawned = std::thread::Builder::new()
         .name("notification".into())
-        .spawn(move || deliver(&title, &body, chat, opened, wake));
+        .spawn(move || deliver(&title, &body, picture.as_deref(), chat, opened, wake));
     if let Err(error) = spawned {
         log::debug!("no thread for a notification: {error}");
     }
@@ -41,6 +44,7 @@ pub fn show(
 fn deliver(
     title: &str,
     body: &str,
+    picture: Option<&std::path::Path>,
     chat: String,
     opened: Arc<Mutex<Vec<String>>>,
     wake: impl Fn() + Send + 'static,
@@ -52,6 +56,9 @@ fn deliver(
         .body(body)
         .icon("fastsapp")
         .action("default", "Open");
+    if let Some(picture) = picture {
+        notification.image_path(&picture.to_string_lossy());
+    }
     match notification.show() {
         Ok(handle) => handle.wait_for_action(|action| {
             if action == "default" {
@@ -67,12 +74,17 @@ fn deliver(
 fn deliver(
     title: &str,
     body: &str,
+    picture: Option<&std::path::Path>,
     _chat: String,
     _opened: Arc<Mutex<Vec<String>>>,
     _wake: impl Fn() + Send + 'static,
 ) {
     let mut notification = notify_rust::Notification::new();
     notification.appname("Fastsapp").summary(title).body(body);
+    // Windows shows it; macOS shows the app's own icon regardless.
+    if let Some(picture) = picture {
+        notification.image_path(&picture.to_string_lossy());
+    }
     if let Err(error) = notification.show() {
         log::debug!("no notification: {error}");
     }
@@ -81,6 +93,25 @@ fn deliver(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shows one on this desktop, with the first cached picture if any:
+    /// `cargo test --all-features shows_one -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "shows a real notification"]
+    fn shows_one_on_this_desktop() {
+        let picture = std::fs::read_dir(crate::paths::AppDirs::discover().avatar_cache_dir())
+            .ok()
+            .and_then(|entries| entries.flatten().map(|entry| entry.path()).next());
+        show(
+            "Ada Lovelace".into(),
+            "A test from Fastsapp, with a picture".into(),
+            picture,
+            "test".into(),
+            Default::default(),
+            || {},
+        );
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 
     #[test]
     fn a_group_names_the_sender_and_a_chat_does_not() {

@@ -1011,6 +1011,35 @@ mod tests {
     }
 
     #[test]
+    fn a_paste_is_seen_on_the_key_release() {
+        // The platform layer never delivers the press of Ctrl+V (it becomes
+        // a text paste, or nothing, for a picture); the release is what
+        // there is.
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        let release = egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        frame_with(&mut app, &ctx, vec![release]);
+        assert!(ctx.input(crate::app::wants_paste));
+        let plain = egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_with(&mut app, &ctx, vec![plain]);
+        assert!(!ctx.input(crate::app::wants_paste), "a plain V is typing");
+    }
+
+    #[test]
     fn editing_puts_the_text_back_and_escape_stops() {
         let mut app = app();
         let ctx = egui::Context::default();

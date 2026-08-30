@@ -392,7 +392,7 @@ impl App {
 
     /// Tells the desktop about a message that arrived while the reader was
     /// not looking at that chat.
-    fn maybe_notify(&self, chat_id: &str, message: &Message) {
+    fn maybe_notify(&mut self, chat_id: &str, message: &Message) {
         if !self.settings.notifications {
             return;
         }
@@ -412,13 +412,19 @@ impl App {
         if reading {
             return;
         }
+        let (name, is_group) = (chat.name.clone(), chat.is_group());
         let sender = self.display_name(&message.sender);
-        let (title, body) =
-            crate::notify::lines(&chat.name, chat.is_group(), &sender, &message.summary());
+        let (title, body) = crate::notify::lines(&name, is_group, &sender, &message.summary());
+        // The chat's picture (the person, or the group), else the sender's;
+        // asking for one that is not here yet serves the next time.
+        let picture = self
+            .avatar(chat_id)
+            .or_else(|| self.avatar(&message.sender));
         let waker = self.waker.clone();
         crate::notify::show(
             title,
             body,
+            picture,
             chat_id.to_owned(),
             std::sync::Arc::clone(&self.notification_opens),
             move || waker.wake(),
@@ -1489,14 +1495,17 @@ impl App {
                 .map(|file| file.path().to_path_buf())
                 .collect();
             let hovering = !input.raw.hovered_files.is_empty();
-            let paste = input.modifiers.command && input.key_pressed(egui::Key::V);
-            (dropped, hovering, paste)
+            (dropped, hovering, wants_paste(input))
         });
         self.dropping = hovering && self.open_chat.is_some();
         if !dropped.is_empty() {
             self.actions.push(Action::SendFiles(dropped));
         }
-        let composing = ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text")));
+        // Into the composer, or with nothing else focused; a search field
+        // or a dialog's text keeps its own paste.
+        let composing = ctx.memory(|memory| {
+            memory.has_focus(egui::Id::new("composer-text")) || memory.focused().is_none()
+        });
         if paste && composing && self.open_chat.is_some() {
             // egui pastes text on its own; a picture on the clipboard is
             // ours to notice.
@@ -1612,6 +1621,25 @@ impl App {
     pub fn media_of(&self, chat: &str, id: &str) -> Option<&Media> {
         self.conversations.get(chat)?.message(id)?.content.media()
     }
+}
+
+/// Whether the paste shortcut was used this frame. egui's platform layer
+/// swallows the key press of Ctrl+V (Cmd+V on macOS) and turns it into a
+/// `Paste` event only when the clipboard holds text, so a picture on the
+/// clipboard shows no press at all; the release still comes through,
+/// carrying the modifiers it was made with.
+pub fn wants_paste(input: &egui::InputState) -> bool {
+    input.events.iter().any(|event| {
+        matches!(
+            event,
+            egui::Event::Key {
+                key: egui::Key::V,
+                pressed: false,
+                modifiers,
+                ..
+            } if modifiers.command
+        )
+    })
 }
 
 /// A picture on the clipboard, as (width, height, straight RGBA).
