@@ -85,7 +85,8 @@ same pattern without carrying WhatsApp's trademark.)
 On Arch Linux, Fastsapp is in the AUR:
 
 ```sh
-yay -S fastsapp          # the released build
+yay -S fastsapp-bin      # the released build, ready made
+yay -S fastsapp          # the release, built from source
 yay -S fastsapp-git      # built from the latest commit
 ```
 
