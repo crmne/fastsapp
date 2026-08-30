@@ -70,7 +70,12 @@ fn shortcuts(app: &mut App, ui: &mut egui::Ui) {
         .spacing([18.0, 8.0])
         .show(ui, |ui| {
             for (keys, what) in super::keys::SHORTCUTS {
-                theme::text(ui, *keys, theme::semibold(13.0), palette.text);
+                theme::text(
+                    ui,
+                    &super::keys::label(keys),
+                    theme::semibold(13.0),
+                    palette.text,
+                );
                 theme::text(ui, *what, theme::regular(13.0), palette.secondary);
                 ui.end_row();
             }

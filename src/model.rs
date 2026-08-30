@@ -509,6 +509,9 @@ pub enum Action {
     ShowWindow,
     /// Close the window but keep the app in the tray.
     HideWindow,
+    /// Close the window as its close button would: into the tray when the
+    /// app keeps running, else quitting.
+    CloseWindow,
 }
 
 #[cfg(test)]

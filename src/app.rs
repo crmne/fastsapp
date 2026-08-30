@@ -1386,6 +1386,9 @@ impl App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
+            // The same as the window's own close button: `frame_ui` sees the
+            // request and keeps the app in the tray when asked to.
+            Action::CloseWindow => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
     }
 

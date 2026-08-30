@@ -481,13 +481,13 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 app.focus_composer = true;
             }
             if app.settings.show_shortcut_hints {
-                let hint = if enter_sends {
+                let hint = super::keys::label(if enter_sends {
                     "Enter sends · Shift+Enter for a new line · *bold* _italic_ ~strike~ · Ctrl+V pastes a picture"
                 } else {
                     "Ctrl+Enter sends · *bold* _italic_ ~strike~ · Ctrl+V pastes a picture"
-                };
+                });
                 ui.add_space(2.0);
-                theme::text(ui, hint, theme::regular(11.0), palette.dim);
+                theme::text(ui, &hint, theme::regular(11.0), palette.dim);
             }
         });
 }

@@ -18,6 +18,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         key(Modifiers::COMMAND, Key::B, Action::ToggleSidebar);
         key(Modifiers::COMMAND, Key::Comma, Action::Open(Page::Settings));
         key(Modifiers::COMMAND, Key::Q, Action::Quit);
+        key(Modifiers::COMMAND, Key::W, Action::CloseWindow);
         key(
             Modifiers::COMMAND,
             Key::Slash,
@@ -91,5 +92,16 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl++ / Ctrl+-", "Zoom in / out"),
     ("Ctrl+0", "Reset zoom"),
     ("Ctrl+/", "This list"),
+    ("Ctrl+W", "Close the window (Fastsapp stays in the tray)"),
     ("Ctrl+Q", "Quit"),
 ];
+
+/// A shortcut as the platform writes it: the Command key stands in for
+/// Ctrl on macOS, and Option for Alt.
+pub fn label(keys: &str) -> String {
+    if cfg!(target_os = "macos") {
+        keys.replace("Ctrl", "⌘").replace("Alt", "⌥")
+    } else {
+        keys.to_owned()
+    }
+}
