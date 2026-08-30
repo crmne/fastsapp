@@ -1,6 +1,6 @@
 [package]
 name = "fastsapp"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -81,6 +81,9 @@ resvg = { version = "0.45", default-features = false }
 notify-rust = { version = "4", default-features = false, features = ["z"] }
 openh264 = "0.9"
 mp4 = "0.14"
+rodio = { version = "0.22", default-features = false, features = ["playback", "recording", "mp3", "mp4", "wav", "vorbis"] }
+opus = "0.4"
+ogg = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The status-notifier tray item, pure Rust over D-Bus.

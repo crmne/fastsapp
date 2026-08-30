@@ -133,6 +133,18 @@ pub enum Command {
     /// Mute a chat until the given time (seconds), `Some(0)` for good,
     /// `None` to unmute; told to the phone as well.
     SetMuted(ChatId, Option<i64>),
+    /// A recorded voice message: mono samples at 48 kHz, encoded and sent
+    /// as push-to-talk.
+    SendVoice {
+        chat: ChatId,
+        samples: Vec<f32>,
+    },
+    /// Tell the sender their voice message was listened to.
+    MarkPlayed {
+        chat: ChatId,
+        message: String,
+        sender: String,
+    },
     /// A sticker file (WebP) to send.
     SendSticker {
         chat: ChatId,
@@ -320,6 +332,13 @@ impl Waker {
     pub fn wake(&self) {
         if let Some(ctx) = self.0.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
             ctx.request_repaint();
+        }
+    }
+
+    /// A repaint a little later, for something that moves on its own.
+    pub fn wake_after(&self, delay: std::time::Duration) {
+        if let Some(ctx) = self.0.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            ctx.request_repaint_after(delay);
         }
     }
 }

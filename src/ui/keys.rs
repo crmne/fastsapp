@@ -40,6 +40,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     if escape {
         if app.dialog.is_some() {
             actions.push(Action::CloseDialog);
+        } else if app.recording.is_some() {
+            actions.push(Action::CancelRecording);
         } else if app.picker.is_some() {
             actions.push(Action::ClosePicker);
         } else if !app.pending.is_empty() {
@@ -53,6 +55,13 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         } else if !app.search.is_empty() {
             actions.push(Action::Search(String::new()));
         }
+    }
+    // While recording, Enter sends the voice message: the field is not
+    // there to take it.
+    if app.recording.is_some()
+        && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter))
+    {
+        actions.push(Action::SendRecording);
     }
     // Alt+Up/Down walk the chat list without leaving the composer.
     let step = ctx.input_mut(|input| {
@@ -86,7 +95,10 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+F / Ctrl+K", "Search chats"),
     ("Alt+↑ / Alt+↓", "Previous / next chat"),
     ("Enter", "Send (Shift+Enter for a new line)"),
-    ("Escape", "Close dialog, cancel edit or reply, clear search"),
+    (
+        "Escape",
+        "Close dialog, discard recording, cancel edit or reply, clear search",
+    ),
     ("Ctrl+V", "Paste text, or send a picture from the clipboard"),
     ("Ctrl+B", "Show or hide the chat list"),
     ("Ctrl+End", "Jump to the newest message"),

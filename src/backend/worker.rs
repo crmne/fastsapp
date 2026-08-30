@@ -1816,6 +1816,12 @@ impl Worker {
             } => self.send_pasted_image(chat, width, height, rgba, caption),
             Command::Outbound { chat, row, raw } => self.outbound(chat, *row, raw),
             Command::SendSticker { chat, path } => self.send_sticker(chat, path),
+            Command::SendVoice { chat, samples } => self.send_voice(chat, samples),
+            Command::MarkPlayed {
+                chat,
+                message,
+                sender,
+            } => self.mark_played(chat, message, sender),
             Command::SendGif { chat, gif } => self.send_gif(chat, gif),
             Command::SearchGifs { query, key } => {
                 let commands = self.commands.clone();
@@ -2677,6 +2683,70 @@ impl Worker {
         });
     }
 
+    /// Encodes a recording to OGG/Opus and sends it as a voice message.
+    fn send_voice(&mut self, chat: ChatId, samples: Vec<f32>) {
+        let Some(client) = self.client.clone() else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            return;
+        };
+        let commands = self.commands.clone();
+        let dir = self.dirs.media_cache_dir();
+        let me = self.me();
+        tokio::spawn(async move {
+            let outcome = async {
+                let (bytes, seconds, waveform) = tokio::task::spawn_blocking(move || {
+                    let seconds = (samples.len() as f64 / f64::from(crate::voice::RATE))
+                        .round()
+                        .max(1.0) as u32;
+                    let waveform = crate::voice::waveform(&samples);
+                    crate::voice::encode(&samples).map(|bytes| (bytes, seconds, waveform))
+                })
+                .await
+                .map_err(|error| error.to_string())??;
+                let prepared = prepare_voice(&client, bytes, seconds, waveform).await?;
+                file_outbound(&client, &chat, &me, &dir, prepared, None).await
+            }
+            .await;
+            match outcome {
+                Ok((row, raw)) => {
+                    let _ = commands.send(Command::Outbound {
+                        chat,
+                        row: Box::new(row),
+                        raw,
+                    });
+                }
+                Err(error) => {
+                    let _ = commands.send(Command::Sent {
+                        chat,
+                        id: String::new(),
+                        error: Some(format!("could not send the voice message: {error}")),
+                    });
+                }
+            }
+        });
+    }
+
+    /// The blue microphone on the sender's side: a played receipt, sent
+    /// the way the phone sends it.
+    fn mark_played(&mut self, chat: ChatId, message: String, sender: String) {
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            return;
+        };
+        let sender = if jid.is_group() {
+            sender.parse::<Jid>().ok()
+        } else {
+            None
+        };
+        tokio::spawn(async move {
+            if let Err(error) = client
+                .mark_as_played(&jid, sender.as_ref(), &[message.as_str()])
+                .await
+            {
+                log::debug!("played receipt not sent: {error}");
+            }
+        });
+    }
+
     fn send_sticker(&mut self, chat: ChatId, path: PathBuf) {
         let Some(client) = self.client.clone() else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
@@ -3033,6 +3103,7 @@ fn classify(base: &wa::Message) -> Option<Content> {
             media: media(audio.mimetype.as_ref(), audio.file_length, None, None),
             seconds: audio.seconds,
             voice_note: audio.ptt.unwrap_or(false),
+            waveform: audio.waveform.clone().unwrap_or_default(),
         });
     }
     if let Some(document) = base.document_message.as_option() {
@@ -3204,6 +3275,45 @@ fn thumbnail_jpeg(image: &image::DynamicImage) -> Option<Vec<u8>> {
     encode_jpeg(&small, 60).ok()
 }
 
+/// Uploads a recording and builds the push-to-talk message that carries
+/// it, waveform and all, so every client draws it as a voice message.
+async fn prepare_voice(
+    client: &Client,
+    bytes: Vec<u8>,
+    seconds: u32,
+    waveform: Vec<u8>,
+) -> Result<Prepared, String> {
+    let mime = "audio/ogg; codecs=opus".to_owned();
+    let size = bytes.len() as u64;
+    let upload = client
+        .upload(bytes.clone(), MediaType::Audio, UploadOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+    let message = audio_message(
+        upload,
+        AudioOptions {
+            mimetype: Some(mime.clone()),
+            duration_seconds: Some(seconds),
+            ptt: Some(true),
+            waveform: Some(waveform.clone()),
+            ..Default::default()
+        },
+    );
+    Ok(Prepared {
+        message,
+        content: Content::Audio {
+            media: media(Some(&mime), Some(size), None, None),
+            seconds: Some(seconds),
+            voice_note: true,
+            waveform,
+        },
+        thumbnail: None,
+        bytes,
+        mime,
+        file_name: None,
+    })
+}
+
 /// Uploads a file and builds the message that carries it. Pictures go as
 /// JPEG, which is what every WhatsApp client expects.
 async fn prepare_media(
@@ -3314,6 +3424,7 @@ async fn prepare_media(
                 media: media(Some(&mime_owned), Some(size), None, None),
                 seconds: None,
                 voice_note: false,
+                waveform: Vec::new(),
             },
             thumbnail: None,
             bytes,

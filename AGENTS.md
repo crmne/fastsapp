@@ -50,6 +50,22 @@ protocol. These notes are for coding agents and new contributors.
   optional and only adds the SIMD paths (the AUR source recipes list it,
   the build works without it). Frames become textures on the interface
   thread and are dropped when unseen.
+- `src/voice.rs` is the codec for voice messages: OGG/Opus in and out
+  (the `ogg` crate for the container, `opus` with libopus bundled and
+  built by cmake for the codec, so cmake is a build dependency), plus
+  the 64-bar waveform WhatsApp draws and a mono/48 kHz resampler.
+  `src/audio.rs` is the sound: `Player` plays one clip at a time through
+  rodio (OGG/Opus through `voice`, MP3/M4A/WAV through rodio's decoders,
+  decoded on a thread, the device opened on demand and released when the
+  clip ends) and `Recorder` reads the default microphone through rodio's
+  `Microphone` on a thread, keeping a loudness per 50 ms for the live bars.
+  Linux needs ALSA headers to build (`libasound2-dev` on Debian,
+  `alsa-lib` on Arch). `Action::PlayVoice/SeekVoice` drive the player from
+  the bubble; `StartRecording/CancelRecording/SendRecording` the
+  microphone from the composer (the send button is a microphone when there
+  is nothing to send); `Command::SendVoice` encodes and sends push-to-talk
+  with the waveform, `Command::MarkPlayed` sends the played receipt once
+  per incoming voice message.
   `src/ui/picker.rs` is the emoji/GIF/sticker panel. GIF search uses the
   key from Settings, else one baked in at build time from
   `FASTSAPP_GIPHY_KEY` (`option_env!`); the repository carries none. The

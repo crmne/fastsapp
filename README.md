@@ -42,6 +42,11 @@ same pattern without carrying WhatsApp's trademark.)
   you typed as the caption; Escape drops them.
 - **Mute.** Any chat, for eight hours, a week, or for good, from its menu
   or its info; the phone follows, and so do notifications.
+- **Voice messages.** They play where they are, with WhatsApp's own
+  waveform to scrub through, and the sender sees the blue microphone.
+  With nothing typed, the send button records one: a red light, the
+  clock, the sound as it comes in; Enter or the button sends it, Escape
+  drops it. Opus in OGG both ways, decoded and encoded in the app.
 - **Sends.** Text with Enter (Shift+Enter breaks a line; swap them in
   Settings), pictures pasted from the clipboard, and files picked with the
   paperclip or dropped on the window: pictures, videos, audio, and
@@ -53,10 +58,10 @@ same pattern without carrying WhatsApp's trademark.)
   then. Pictures show at WhatsApp's size, stickers on their own, GIFs and
   animated stickers play in place (GIFs are decoded in the app; `ffmpeg`
   is only tried for anything that is not H.264, when
-  the desktop has one); other videos show their poster and length and,
-  like voice messages and documents, open with whatever your desktop uses
-  for them. Locations open in a map; contacts and polls are shown;
-  forwarded messages say so.
+  the desktop has one); voice messages and audio files play in place;
+  other videos show their poster and length and, like documents, open
+  with whatever your desktop uses for them. Locations open in a map;
+  contacts and polls are shown; forwarded messages say so.
 - **Picker.** The smiley next to the composer opens emoji (searchable, by
   category, with your recent ones), stickers (the ones your phone used
   lately, synced when you link, plus those you have sent or received here),
@@ -91,8 +96,8 @@ same pattern without carrying WhatsApp's trademark.)
 
 ## What it does not do yet
 
-- Record voice messages, or play them in the app; play ordinary videos in
-  the app (they open in your player).
+- Play ordinary videos in the app (they open in your player), or reply to
+  a message with a voice message or an attachment.
 - Calls, status posts, communities, newsletters, and group administration.
 - Colour emoji on Windows: Segoe UI Emoji is not a bitmap font, so emoji
   stay monochrome there for now.

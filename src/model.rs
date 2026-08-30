@@ -211,6 +211,9 @@ pub enum Content {
         media: Media,
         seconds: Option<u32>,
         voice_note: bool,
+        /// The 64 bars the sender's app drew for a voice message.
+        #[serde(default)]
+        waveform: Vec<u8>,
     },
     Document {
         media: Media,
@@ -451,6 +454,21 @@ pub enum Action {
         chat: ChatId,
         message: String,
     },
+    /// Play or pause a voice message or audio file that is on disk.
+    PlayVoice {
+        message: String,
+        path: PathBuf,
+    },
+    /// Jump to a point, 0 to 1, in one and play from there.
+    SeekVoice {
+        message: String,
+        path: PathBuf,
+        fraction: f32,
+    },
+    /// The microphone: start a voice message, drop it, or send it.
+    StartRecording,
+    CancelRecording,
+    SendRecording,
     OpenFile(PathBuf),
     OpenUrl(String),
     CopyText(String),
@@ -575,7 +593,8 @@ mod tests {
             Content::Audio {
                 media: media(),
                 seconds: Some(65),
-                voice_note: true
+                voice_note: true,
+                waveform: Vec::new()
             }
             .summary(),
             "Voice message (1:05)"

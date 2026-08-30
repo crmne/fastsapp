@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use egui::{
     Align, Align2, Color32, CornerRadius, Frame, Key, KeyboardShortcut, Layout, Margin, Modifiers,
@@ -351,6 +352,10 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             if !app.pending.is_empty() {
                 pending_strip(app, ui);
             }
+            if app.recording.is_some() {
+                recording_strip(app, ui);
+                return;
+            }
             let mut send_click = false;
             let line_height = ui
                 .painter()
@@ -467,15 +472,32 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 } else {
                     (palette.surface, palette.surface_hover, palette.dim)
                 };
-                let icon_kind = if app.editing.is_some() {
-                    Icon::Check
-                } else {
-                    Icon::Send
-                };
-                if theme::circle_button(ui, icon_kind, button_width, fill, hover, icon, "Send")
+                if !ready && app.editing.is_none() {
+                    // Nothing to send yet: the button records, as on the phone.
+                    if theme::circle_button(
+                        ui,
+                        Icon::Mic,
+                        button_width,
+                        fill,
+                        hover,
+                        palette.secondary,
+                        "Record a voice message",
+                    )
                     .clicked()
-                {
-                    send_click = true;
+                    {
+                        app.actions.push(Action::StartRecording);
+                    }
+                } else {
+                    let icon_kind = if app.editing.is_some() {
+                        Icon::Check
+                    } else {
+                        Icon::Send
+                    };
+                    if theme::circle_button(ui, icon_kind, button_width, fill, hover, icon, "Send")
+                        .clicked()
+                    {
+                        send_click = true;
+                    }
                 }
             },
             );
@@ -602,6 +624,7 @@ struct View<'a> {
     mention_names: &'a dyn Fn(&str) -> String,
     avatars: &'a HashMap<String, Option<PathBuf>>,
     now: i64,
+    player: &'a crate::audio::Player,
 }
 
 fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
@@ -640,6 +663,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         mention_names: &mention_names,
         avatars: &avatars,
         now: crate::util::now(),
+        player: &app.player,
     };
     let mut actions = Vec::new();
     let mut anchored = false;
@@ -1478,18 +1502,10 @@ fn content(
         Content::Audio {
             media,
             seconds,
-            voice_note,
+            waveform,
+            ..
         } => {
-            let title = if *voice_note {
-                "Voice message"
-            } else {
-                "Audio"
-            };
-            let detail = match seconds {
-                Some(seconds) => crate::util::duration(*seconds),
-                None => crate::util::bytes(media.size),
-            };
-            attachment(ui, view, message, media, Icon::Mic, title, &detail, actions);
+            voice_player(ui, view, message, media, *seconds, waveform, width, actions);
             None
         }
         Content::Document {
@@ -2246,6 +2262,234 @@ fn attachment(
             None => {}
         }
     }
+}
+
+/// A voice message, or an audio file, played where it is: the button, the
+/// waveform with the played part coloured in, and the time.
+#[allow(clippy::too_many_arguments)]
+fn voice_player(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    media: &Media,
+    seconds: Option<u32>,
+    waveform: &[u8],
+    width: f32,
+    actions: &mut Vec<Action>,
+) {
+    use crate::audio::State;
+    let palette = view.palette;
+    let status = view.player.status(&message.id);
+    let button = 36.0;
+    let bar_height = 30.0;
+    let width = width.clamp(220.0, 320.0);
+    let wave_width = width - button - 10.0;
+    let bars: Vec<u8> = if !waveform.is_empty() {
+        waveform.to_vec()
+    } else if let Some(bars) = view.player.bars(&message.id) {
+        bars.to_vec()
+    } else {
+        vec![12; crate::voice::BARS]
+    };
+    let fill = palette.accent.gamma_multiply(0.22);
+    let hover = palette.accent.gamma_multiply(0.38);
+    let waiting = |ui: &mut egui::Ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(button), Sense::hover());
+        ui.painter()
+            .circle_filled(rect.center(), button / 2.0, fill);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.centered_and_justified(|ui| {
+                theme::spinner(ui, 18.0, palette.accent);
+            });
+        });
+    };
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.set_min_height(button);
+        match (&media.path, &media.state) {
+            (None, MediaState::Downloading) => waiting(ui),
+            (None, _) => {
+                if theme::circle_button(
+                    ui,
+                    Icon::Download,
+                    button,
+                    fill,
+                    hover,
+                    palette.accent,
+                    "Fetch",
+                )
+                .clicked()
+                {
+                    actions.push(Action::Download {
+                        chat: view.chat.id.clone(),
+                        message: message.id.clone(),
+                    });
+                }
+            }
+            (Some(path), _) => match status.state {
+                State::Loading => waiting(ui),
+                State::Playing | State::Paused | State::Idle => {
+                    let (icon, tooltip) = if status.state == State::Playing {
+                        (Icon::Pause, "Pause")
+                    } else {
+                        (Icon::Play, "Play")
+                    };
+                    if theme::circle_button(ui, icon, button, fill, hover, palette.accent, tooltip)
+                        .clicked()
+                    {
+                        actions.push(Action::PlayVoice {
+                            message: message.id.clone(),
+                            path: path.clone(),
+                        });
+                    }
+                }
+            },
+        }
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            let (rect, response) =
+                ui.allocate_exact_size(vec2(wave_width, bar_height), Sense::click());
+            let pitch = 3.0;
+            let count = ((rect.width() / pitch).floor() as usize).max(1);
+            let fraction = if status.total > Duration::ZERO {
+                status.position.as_secs_f32() / status.total.as_secs_f32()
+            } else {
+                0.0
+            };
+            let played_until = rect.left() + fraction * rect.width();
+            let quiet = palette.secondary.gamma_multiply(0.7);
+            for index in 0..count {
+                let level = f32::from(bars[index * bars.len() / count]) / 100.0;
+                let height = (2.0 + level * (bar_height - 4.0)).max(2.0);
+                let x = rect.left() + index as f32 * pitch + 1.0;
+                let colour = if status.state != State::Idle && x <= played_until {
+                    palette.accent
+                } else {
+                    quiet
+                };
+                ui.painter().rect_filled(
+                    Rect::from_center_size(egui::pos2(x, rect.center().y), vec2(2.0, height)),
+                    1.0,
+                    colour,
+                );
+            }
+            if matches!(status.state, State::Playing | State::Paused) {
+                let knob = played_until.clamp(rect.left() + 5.0, rect.right() - 5.0);
+                ui.painter()
+                    .circle_filled(egui::pos2(knob, rect.center().y), 5.0, palette.accent);
+            }
+            if let Some(path) = &media.path {
+                let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                if response.clicked()
+                    && let Some(pointer) = response.interact_pointer_pos()
+                {
+                    let fraction = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                    actions.push(Action::SeekVoice {
+                        message: message.id.clone(),
+                        path: path.clone(),
+                        fraction,
+                    });
+                }
+            }
+            // The time: where playback stands, else how long the clip runs.
+            let shown = match status.state {
+                State::Playing | State::Paused => {
+                    crate::util::duration(status.position.as_secs() as u32)
+                }
+                _ => seconds
+                    .or_else(|| {
+                        (status.total > Duration::ZERO).then_some(status.total.as_secs() as u32)
+                    })
+                    .map(crate::util::duration)
+                    .unwrap_or_else(|| crate::util::bytes(media.size)),
+            };
+            let text = match &media.state {
+                MediaState::Failed(error) => format!("Failed: {error}"),
+                _ => shown,
+            };
+            theme::text(ui, text, theme::regular(11.5), palette.secondary);
+        });
+    });
+    let auto = media.path.is_none()
+        && matches!(media.state, MediaState::Idle)
+        && view.auto_download
+        && media.size <= AUTO_DOWNLOAD_LIMIT;
+    if auto {
+        actions.push(Action::Download {
+            chat: view.chat.id.clone(),
+            message: message.id.clone(),
+        });
+    }
+}
+
+/// The composer while a voice message is being recorded: the way out, the
+/// clock, the sound as it comes in, and the way to send it.
+fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let (elapsed, levels) = match app.recording.as_ref() {
+        Some(recorder) => (recorder.elapsed(), recorder.levels()),
+        None => return,
+    };
+    let button = 36.0;
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), button),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            if theme::circle_button(
+                ui,
+                Icon::Trash,
+                button,
+                palette.surface,
+                palette.surface_hover,
+                palette.secondary,
+                "Discard",
+            )
+            .clicked()
+            {
+                app.actions.push(Action::CancelRecording);
+            }
+            // A red light that breathes, then the clock.
+            let (dot, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+            let pulse = 0.55 + 0.45 * (elapsed.as_secs_f32() * 3.0).sin().abs();
+            ui.painter()
+                .circle_filled(dot.center(), 5.0, palette.danger.gamma_multiply(pulse));
+            theme::text(
+                ui,
+                crate::util::duration(elapsed.as_secs() as u32),
+                theme::medium(14.0),
+                palette.text,
+            );
+            // The last stretch of sound, newest at the right.
+            let wave_width = (ui.available_width() - button - 10.0).max(40.0);
+            let (rect, _) = ui.allocate_exact_size(vec2(wave_width, 28.0), Sense::hover());
+            let pitch = 3.0;
+            let count = (rect.width() / pitch).floor() as usize;
+            let start = levels.len().saturating_sub(count);
+            for (index, level) in levels[start..].iter().enumerate() {
+                let height = 2.0_f32 + (level * 4.0).min(1.0) * 24.0;
+                let x = rect.left() + index as f32 * pitch + 1.0;
+                ui.painter().rect_filled(
+                    Rect::from_center_size(egui::pos2(x, rect.center().y), vec2(2.0, height)),
+                    1.0,
+                    palette.accent,
+                );
+            }
+            if theme::circle_button(
+                ui,
+                Icon::Send,
+                button,
+                palette.accent,
+                palette.accent_hover,
+                palette.on_accent,
+                "Send",
+            )
+            .clicked()
+            {
+                app.actions.push(Action::SendRecording);
+            }
+        },
+    );
 }
 
 fn file_uri(path: &Path) -> String {

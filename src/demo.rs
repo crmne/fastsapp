@@ -184,6 +184,16 @@ fn media(mime: &str, size: u64, width: Option<u32>, height: Option<u32>) -> Medi
     }
 }
 
+/// A waveform with the shape of speech, for voice messages in the demo.
+fn demo_waveform() -> Vec<u8> {
+    (0..crate::voice::BARS)
+        .map(|index| {
+            let t = index as f32 * 0.55;
+            (18.0 + 70.0 * (t.sin() * (t * 0.37).cos()).abs()) as u8
+        })
+        .collect()
+}
+
 fn message(chat: &str, id: &str, from_me: bool, timestamp: i64, content: Content) -> Message {
     Message {
         id: id.to_owned(),
@@ -399,6 +409,7 @@ pub fn populate(app: &mut App) {
                 media: media("audio/ogg; codecs=opus", 71_002, None, None),
                 seconds: Some(42),
                 voice_note: true,
+                waveform: demo_waveform(),
             },
         ),
         {
@@ -692,6 +703,39 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.focus_composer = true;
             }
             "nosidebar" => app.sidebar_visible = false,
+            "voice" => {
+                // A real clip, so the player has something to play.
+                let tone: Vec<f32> = (0..crate::voice::RATE * 6)
+                    .map(|i| {
+                        let t = i as f32 / crate::voice::RATE as f32;
+                        (t * 220.0 * std::f32::consts::TAU).sin() * 0.4 * (t * 1.3).sin().abs()
+                    })
+                    .collect();
+                let path = crate::paths::AppDirs::discover()
+                    .media_cache_dir()
+                    .join("demo-voice.ogg");
+                if let Ok(bytes) = crate::voice::encode(&tone) {
+                    let _ = std::fs::create_dir_all(path.parent().expect("a directory"));
+                    let _ = std::fs::write(&path, bytes);
+                }
+                let waveform = crate::voice::waveform(&tone);
+                if let Some(message) = app
+                    .conversations
+                    .get_mut(&app.open_chat.clone().unwrap_or_default())
+                    .and_then(|conversation| conversation.message_mut("ada-voice"))
+                    && let crate::model::Content::Audio {
+                        media,
+                        waveform: bars,
+                        seconds,
+                        ..
+                    } = &mut message.content
+                {
+                    media.path = Some(path);
+                    *bars = waveform;
+                    *seconds = Some(6);
+                }
+            }
+            "recording" => app.recording = Some(crate::audio::Recorder::rehearsal()),
             "staged" => {
                 let (photo, _) = sample_files(app);
                 let side = 48usize;
@@ -859,6 +903,8 @@ mod tests {
             "typing",
             "nosidebar",
             "staged",
+            "voice",
+            "recording",
             "gifs",
         ] {
             let mut app = self::app();

@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::audio::{Player, Recorder};
 use crate::backend::{Backend, Command, Event, LinkStatus, Waker};
 use crate::model::{
     Action, Chat, ChatId, Contact, Content, Delivery, Dialog, Gif, Media, MediaState, Message,
@@ -164,6 +165,12 @@ pub struct App {
     /// Attachments staged in the composer, sent with the next message as
     /// their caption.
     pub pending: Vec<Pending>,
+    /// Voice messages and audio files sounding in their bubble.
+    pub player: Player,
+    /// The microphone, while a voice message is being recorded.
+    pub recording: Option<Recorder>,
+    /// Voice messages whose sender has been told they were played.
+    played_told: HashSet<String>,
     pub gif_query: String,
     pub gif_results: Vec<Gif>,
     /// A GIF search is on its way.
@@ -319,6 +326,9 @@ impl App {
             picker_search: String::new(),
             picker_focus: false,
             pending: Vec::new(),
+            player: Player::new(waker.clone()),
+            recording: None,
+            played_told: HashSet::new(),
             gif_query: String::new(),
             gif_results: Vec::new(),
             gif_pending: false,
@@ -1449,6 +1459,23 @@ impl App {
                 }
             }
             Action::ClearPending => self.pending.clear(),
+            Action::PlayVoice { message, path } => self.play_voice(message, path),
+            Action::SeekVoice {
+                message,
+                path,
+                fraction,
+            } => {
+                if let Err(error) = self.player.seek(&message, &path, fraction) {
+                    self.toast_error(error);
+                }
+            }
+            Action::StartRecording => {
+                if self.open_chat.is_some() && self.recording.is_none() {
+                    self.recording = Some(Recorder::start(self.waker.clone()));
+                }
+            }
+            Action::CancelRecording => self.recording = None,
+            Action::SendRecording => self.send_recording(),
             Action::SetMuted(chat, until) => {
                 if let Some(known) = self.chat_mut(&chat) {
                     known.muted_until = until;
@@ -1656,7 +1683,71 @@ impl App {
         self.handle_notification_opens();
         self.handle_events();
         self.tick(ctx);
+        self.tick_audio();
         self.apply_actions(ctx);
+    }
+
+    /// Playback and recording move on their own: pick up what changed and
+    /// keep the frames coming while they do.
+    fn tick_audio(&mut self) {
+        if let Err(error) = self.player.poll() {
+            self.toast_error(error);
+        }
+        if let Some(error) = self.recording.as_ref().and_then(Recorder::failure) {
+            self.recording = None;
+            self.toast_error(format!("Could not record: {error}"));
+        }
+        if self.player.is_playing() || self.recording.is_some() {
+            self.waker.wake_after(Duration::from_millis(40));
+        }
+    }
+
+    /// Plays or pauses a clip; the first time an incoming voice message is
+    /// played, its sender is told, as the phone would.
+    fn play_voice(&mut self, message: String, path: PathBuf) {
+        if let Err(error) = self.player.toggle(&message, &path) {
+            self.toast_error(error);
+            return;
+        }
+        let Some(chat) = self.open_chat.clone() else {
+            return;
+        };
+        if self.played_told.contains(&message) {
+            return;
+        }
+        let Some(row) = self
+            .conversations
+            .get(&chat)
+            .and_then(|conversation| conversation.message(&message))
+        else {
+            return;
+        };
+        if row.from_me {
+            return;
+        }
+        let sender = row.sender.clone();
+        self.played_told.insert(message.clone());
+        self.backend.send(Command::MarkPlayed {
+            chat,
+            message,
+            sender,
+        });
+    }
+
+    /// Stops the microphone and sends what it heard, unless it was only a
+    /// slip: the phone drops anything under a second too.
+    fn send_recording(&mut self) {
+        let Some(recorder) = self.recording.take() else {
+            return;
+        };
+        let Some(chat) = self.open_chat.clone() else {
+            return;
+        };
+        match recorder.finish() {
+            Ok(samples) if samples.len() < crate::voice::RATE as usize / 2 => {}
+            Ok(samples) => self.backend.send(Command::SendVoice { chat, samples }),
+            Err(error) => self.toast_error(format!("Could not record: {error}")),
+        }
     }
 
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {

@@ -3,6 +3,7 @@
 pub mod animation;
 pub mod app;
 pub mod archive;
+pub mod audio;
 pub mod backend;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
@@ -23,3 +24,4 @@ pub mod tray;
 pub mod tray;
 pub mod ui;
 pub mod util;
+pub mod voice;
