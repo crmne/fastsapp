@@ -416,11 +416,15 @@ impl App {
         let sender = self.display_name_or(&message.sender, message.sender_name.as_deref());
         let (title, body) =
             crate::notify::lines(&name, is_group, &sender, &self.message_text(message));
-        // The chat's picture (the person, or the group), else the sender's;
-        // asking for one that is not here yet serves the next time.
+        // The chat's picture (the person, or the group), else the sender's.
+        // What is on disk serves even before the chat list has shown the
+        // chat in this run; asking for one not here yet serves next time.
+        let sender = message.sender.clone();
         let picture = self
             .avatar(chat_id)
-            .or_else(|| self.avatar(&message.sender));
+            .or_else(|| self.cached_avatar(chat_id))
+            .or_else(|| self.avatar(&sender))
+            .or_else(|| self.cached_avatar(&sender));
         let waker = self.waker.clone();
         crate::notify::show(
             title,
@@ -673,6 +677,15 @@ impl App {
 
     /// The profile picture of a chat or contact, asking the backend for it
     /// the first time.
+    /// A picture already fetched in an earlier run, straight from disk.
+    fn cached_avatar(&self, id: &str) -> Option<PathBuf> {
+        let path = self.dirs.avatar_file(id, false);
+        path.metadata()
+            .ok()
+            .filter(|metadata| metadata.len() > 0)
+            .map(|_| path)
+    }
+
     pub fn avatar(&mut self, id: &str) -> Option<PathBuf> {
         if let Some(known) = self.avatars.get(id) {
             return known.clone();

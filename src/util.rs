@@ -187,47 +187,55 @@ pub fn hue(seed: &str) -> f32 {
     (hash % 360) as f32
 }
 
-/// The window icon: the accent disc with a speech bubble cut out of it.
+/// The mark: `packaging/icons/fastsapp.svg`, the one drawing the desktop
+/// files, the window, the tray, and the notifications all show.
+const MARK: &[u8] = include_bytes!("../packaging/icons/fastsapp.svg");
+
+/// The mark rasterised to straight RGBA at `size` by `size`.
 pub fn app_icon_rgba(size: usize) -> Vec<u8> {
+    let side = size.max(1) as u32;
+    let rendered = resvg::usvg::Tree::from_data(MARK, &resvg::usvg::Options::default())
+        .ok()
+        .and_then(|tree| {
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(side, side)?;
+            let scale = side as f32 / tree.size().width();
+            resvg::render(
+                &tree,
+                resvg::tiny_skia::Transform::from_scale(scale, scale),
+                &mut pixmap.as_mut(),
+            );
+            Some(
+                pixmap
+                    .pixels()
+                    .iter()
+                    .flat_map(|pixel| {
+                        let color = pixel.demultiply();
+                        [color.red(), color.green(), color.blue(), color.alpha()]
+                    })
+                    .collect::<Vec<u8>>(),
+            )
+        });
+    match rendered {
+        Some(rgba) => rgba,
+        // The drawing is part of the build and tested; a plain disc is the
+        // only sensible thing to show if it ever failed to render.
+        None => plain_disc(size),
+    }
+}
+
+fn plain_disc(size: usize) -> Vec<u8> {
     let mut rgba = vec![0u8; size * size * 4];
     let center = size as f32 / 2.0;
     let radius = center - 2.0;
-    let bubble_center = (center, center - size as f32 * 0.03);
-    let bubble_radius = size as f32 * 0.26;
-    let tail = [
-        (center - size as f32 * 0.14, center + size as f32 * 0.16),
-        (center - size as f32 * 0.26, center + size as f32 * 0.30),
-        (center - size as f32 * 0.03, center + size as f32 * 0.22),
-    ];
-    let sign = |a: (f32, f32), b: (f32, f32), c: (f32, f32)| {
-        (a.0 - c.0) * (b.1 - c.1) - (b.0 - c.0) * (a.1 - c.1)
-    };
     for y in 0..size {
         for x in 0..size {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
             let distance = ((px - center).powi(2) + (py - center).powi(2)).sqrt();
             let coverage = (radius - distance + 0.5).clamp(0.0, 1.0);
-            if coverage <= 0.0 {
-                continue;
-            }
-            let bubble_distance =
-                ((px - bubble_center.0).powi(2) + (py - bubble_center.1).powi(2)).sqrt();
-            let in_bubble = bubble_distance <= bubble_radius;
-            let d1 = sign((px, py), tail[0], tail[1]);
-            let d2 = sign((px, py), tail[1], tail[2]);
-            let d3 = sign((px, py), tail[2], tail[0]);
-            let negative = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
-            let positive = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
-            let in_tail = !(negative && positive);
-            let (r, g, b) = if in_bubble || in_tail {
-                (255, 255, 255)
-            } else {
-                (0, 168, 132)
-            };
             let index = (y * size + x) * 4;
-            rgba[index] = r;
-            rgba[index + 1] = g;
-            rgba[index + 2] = b;
+            rgba[index] = 0;
+            rgba[index + 1] = 168;
+            rgba[index + 2] = 132;
             rgba[index + 3] = (coverage * 255.0) as u8;
         }
     }

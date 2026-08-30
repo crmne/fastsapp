@@ -121,6 +121,17 @@ impl AppDirs {
         self.cache.join("stickers")
     }
 
+    /// Where a chat's or person's picture is kept, once fetched; `full`
+    /// for the large one an info dialog shows.
+    pub fn avatar_file(&self, id: &str, full: bool) -> PathBuf {
+        let stem: String = id
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        self.avatar_cache_dir()
+            .join(format!("{stem}{}.jpg", if full { "-full" } else { "" }))
+    }
+
     pub fn ensure(&self) -> std::io::Result<()> {
         for dir in [&self.config, &self.state, &self.cache] {
             std::fs::create_dir_all(dir)?;

@@ -569,8 +569,12 @@ pub fn circle_button(
 /// wherever it appears.
 pub fn logo(ui: &egui::Ui, center: egui::Pos2, diameter: f32, disc: Color32, glyph: Color32) {
     ui.painter().circle_filled(center, diameter / 2.0, disc);
-    let icon_size = diameter * 0.52;
-    let icon_rect = egui::Rect::from_center_size(center, Vec2::splat(icon_size));
+    // The same proportions as `packaging/icons/fastsapp.svg`.
+    let icon_size = diameter * 0.56;
+    let icon_rect = egui::Rect::from_center_size(
+        center - Vec2::new(0.0, diameter * 0.02),
+        Vec2::splat(icon_size),
+    );
     Icon::MessageCircle
         .image(glyph, icon_size)
         .paint_at(ui, icon_rect);

@@ -2312,11 +2312,7 @@ impl Worker {
     }
 
     fn avatar_file(&self, id: &str, full: bool) -> PathBuf {
-        self.dirs.avatar_cache_dir().join(format!(
-            "{}{}.jpg",
-            sanitize(id),
-            if full { "-full" } else { "" }
-        ))
+        self.dirs.avatar_file(id, full)
     }
 
     fn fetch_avatar(&mut self, id: String, full: bool) {

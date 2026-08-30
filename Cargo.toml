@@ -1,6 +1,6 @@
 [package]
 name = "fastsapp"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -71,6 +71,10 @@ arboard = { version = "3", default-features = false, features = ["image-data", "
 mime_guess2 = "2"
 # Names, groups, and shortcodes of every emoji, for the picker's search.
 emojis = "0.9"
+
+# The one drawing of the mark, rasterised for the window, the tray, and the
+# notifications; already in the build through egui_extras's SVG support.
+resvg = { version = "0.45", default-features = false }
 
 # Desktop notifications through the desktop's own service: pure Rust over
 # D-Bus on Linux, the system frameworks elsewhere.
