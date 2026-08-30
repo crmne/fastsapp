@@ -41,6 +41,11 @@ pub struct Text {
 }
 
 impl Text {
+    /// The emoji behind the galley's placeholder glyphs, in order.
+    pub fn placements(&self) -> &[String] {
+        &self.placements
+    }
+
     /// The address under a character index, if any.
     pub fn link_at(&self, character: usize) -> Option<&str> {
         self.links

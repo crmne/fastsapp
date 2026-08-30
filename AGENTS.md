@@ -63,6 +63,14 @@ protocol. These notes are for coding agents and new contributors.
   runs after the selection plugin's own end-of-pass flush (plugins run
   in registration order and the built-ins come first, so end-pass
   callbacks fire too early).
+- A download that answers 403/404/410 goes through
+  `client.media_reupload().request(..)` (a server-error receipt; WhatsApp
+  has the phone re-upload and answers with a fresh `direct_path`) and is
+  fetched once more before the bubble reports "No longer on WhatsApp's
+  servers". Download failures never toast; they live in the bubble as
+  "... · click to retry". Copied text is refined by
+  `transcript::refine`: emoji placeholders map back through each row's
+  `placements`.
 - History sync can bring a chat with a name and no messages at all; a
   history request for such a chat is anchored at the present with an
   empty message id (`worker::fetch_older`), and the app asks the phone

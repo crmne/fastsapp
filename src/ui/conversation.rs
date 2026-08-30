@@ -1694,6 +1694,7 @@ fn rich_body(
         .push(crate::transcript::Row {
             header: format!("[{}] {}: ", crate::util::copy_stamp(message.timestamp), who),
             body: laid.galley.text().to_owned(),
+            placements: laid.placements().to_vec(),
         });
     // Clicks open links; the drag is the reader sweeping text to copy.
     let (rect, response) = ui.allocate_exact_size(allocation, Sense::click_and_drag());
@@ -2233,7 +2234,7 @@ fn attachment(
                     ui.set_width(ui.available_width() - 34.0);
                     widgets::rich_text(ui, title, theme::medium(14.0), palette.text);
                     let detail = match &media.state {
-                        MediaState::Failed(error) => format!("Failed: {error}"),
+                        MediaState::Failed(error) => format!("{error} · click to retry"),
                         _ => detail.to_owned(),
                     };
                     theme::text(ui, detail, theme::regular(12.0), palette.secondary);
@@ -2440,7 +2441,7 @@ fn voice_player(
                         .unwrap_or_else(|| crate::util::bytes(media.size)),
                 };
                 let text = match &media.state {
-                    MediaState::Failed(error) => format!("Failed: {error}"),
+                    MediaState::Failed(error) => format!("{error} · click to retry"),
                     _ => shown,
                 };
                 theme::text(ui, text, theme::regular(11.5), palette.secondary);

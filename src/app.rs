@@ -483,6 +483,12 @@ impl App {
         ctx.add_plugin(crate::transcript::CopyAnnotator {
             rows: std::sync::Arc::clone(&self.copy_rows),
         });
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("copy-rows"),
+                std::sync::Arc::clone(&self.copy_rows),
+            );
+        });
         crate::theme::install(ctx);
         // Three lines per wheel notch is what egui ships; a chat of short
         // rows wants the pace every other client scrolls at.
@@ -1041,16 +1047,16 @@ impl App {
                 media.state = MediaState::Idle;
             }
             Err(error) => {
-                media.state = MediaState::Failed(error.clone());
-                // WhatsApp keeps a file for a while only; a 403 or 404 is the
-                // server saying it is gone, not a fault here.
+                // WhatsApp keeps a file for a while only; a 403 or 404 is
+                // the server saying it is gone, not a fault here. Said in
+                // the bubble, where the file is, never as a toast.
                 let notice = if error.contains("403") || error.contains("404") {
-                    "This file is no longer on WhatsApp's servers; ask for it to be sent again"
-                        .to_owned()
+                    "No longer on WhatsApp's servers".to_owned()
                 } else {
-                    format!("Download failed: {error}")
+                    error
                 };
-                self.toast_error(notice);
+                log::warn!("download failed: {notice}");
+                media.state = MediaState::Failed(notice);
             }
         }
     }

@@ -33,6 +33,7 @@ use whatsapp_rust::wacore::history_sync::{HistorySyncStream, MAX_DECOMPRESSED};
 use whatsapp_rust::wacore::store::DevicePropsOverride;
 use whatsapp_rust::wacore_binary::jid::JidExt;
 use whatsapp_rust::waproto::buffa::Message as _;
+use whatsapp_rust::{MediaRetryResult, MediaReuploadRequest};
 
 use super::{Command, Event, LinkStatus, Waker};
 use crate::app::PAGE;
@@ -2248,24 +2249,128 @@ impl Worker {
                 });
                 return;
             };
+        // What a re-upload request needs, should the file be off the
+        // servers: WhatsApp answers with a fresh path and the download is
+        // tried once more with it.
+        let media_key = base
+            .image_message
+            .as_option()
+            .and_then(|media| media.media_key.clone())
+            .or_else(|| {
+                base.video_message
+                    .as_option()
+                    .or(base.ptv_message.as_option())
+                    .and_then(|media| media.media_key.clone())
+            })
+            .or_else(|| {
+                base.audio_message
+                    .as_option()
+                    .and_then(|media| media.media_key.clone())
+            })
+            .or_else(|| {
+                base.document_message
+                    .as_option()
+                    .and_then(|media| media.media_key.clone())
+            })
+            .or_else(|| {
+                base.sticker_message
+                    .as_option()
+                    .and_then(|media| media.media_key.clone())
+            })
+            .unwrap_or_default();
+        let jid = Self::jid_of(&chat);
+        let row = self.archive.message(&chat, &id).ok().flatten();
+        let is_from_me = row.as_ref().is_some_and(|row| row.from_me);
+        let participant = match (&jid, &row) {
+            (Some(jid), Some(row)) if jid.is_group() => Self::jid_of(&row.sender),
+            _ => None,
+        };
+        let mut fresh_base = base;
+        let mut refreshed = move |direct: String| -> Option<Box<dyn Downloadable>> {
+            if let Some(media) = fresh_base.image_message.as_option_mut() {
+                media.direct_path = Some(direct);
+                media.url = None;
+                return Some(Box::new(media.clone()));
+            }
+            if let Some(media) = fresh_base
+                .video_message
+                .as_option_mut()
+                .or(fresh_base.ptv_message.as_option_mut())
+            {
+                media.direct_path = Some(direct);
+                media.url = None;
+                return Some(Box::new(media.clone()));
+            }
+            if let Some(media) = fresh_base.audio_message.as_option_mut() {
+                media.direct_path = Some(direct);
+                media.url = None;
+                return Some(Box::new(media.clone()));
+            }
+            if let Some(media) = fresh_base.document_message.as_option_mut() {
+                media.direct_path = Some(direct);
+                media.url = None;
+                return Some(Box::new(media.clone()));
+            }
+            if let Some(media) = fresh_base.sticker_message.as_option_mut() {
+                media.direct_path = Some(direct);
+                media.url = None;
+                return Some(Box::new(media.clone()));
+            }
+            None
+        };
         let dir = self.dirs.media_cache_dir();
         let commands = self.commands.clone();
         tokio::spawn(async move {
-            let result = async {
-                let bytes = client
-                    .download(&*downloadable)
-                    .await
-                    .map_err(|error| error.to_string())?;
+            let keep = |bytes: Vec<u8>| {
+                let dir = dir.clone();
                 let path = media_path(&dir, &chat, &id, &mime, file_name.as_deref());
-                tokio::fs::create_dir_all(&dir)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                tokio::fs::write(&path, &bytes)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok(path)
-            }
-            .await;
+                async move {
+                    tokio::fs::create_dir_all(&dir)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    tokio::fs::write(&path, &bytes)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    Ok(path)
+                }
+            };
+            let result = match client.download(&*downloadable).await {
+                Ok(bytes) => keep(bytes).await,
+                Err(error) => {
+                    let text = error.to_string();
+                    let expired = ["403", "404", "410"].iter().any(|code| text.contains(code));
+                    match (&jid, expired && !media_key.is_empty()) {
+                        (Some(jid), true) => {
+                            // Off the servers: ask WhatsApp to put it back
+                            // (the phone re-uploads it), then fetch again.
+                            let request = MediaReuploadRequest {
+                                msg_id: &id,
+                                chat_jid: jid,
+                                media_key: &media_key,
+                                is_from_me,
+                                participant: participant.as_ref(),
+                            };
+                            match client.media_reupload().request(&request).await {
+                                Ok(MediaRetryResult::Success { direct_path }) => {
+                                    match refreshed(direct_path) {
+                                        Some(again) => match client.download(&*again).await {
+                                            Ok(bytes) => keep(bytes).await,
+                                            Err(error) => Err(error.to_string()),
+                                        },
+                                        None => Err(text),
+                                    }
+                                }
+                                Ok(_) => Err("No longer on WhatsApp's servers".to_owned()),
+                                Err(error) => {
+                                    log::info!("media re-upload was not granted: {error}");
+                                    Err("No longer on WhatsApp's servers".to_owned())
+                                }
+                            }
+                        }
+                        _ => Err(text),
+                    }
+                }
+            };
             let _ = commands.send(Command::Downloaded { chat, id, result });
         });
     }

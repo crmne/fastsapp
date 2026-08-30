@@ -79,6 +79,21 @@ pub fn selectable_rich_text(
     let width = ui.available_width().max(1.0);
     let line = line(ui, text, font, color, width, 1);
     let (rect, response) = ui.allocate_exact_size(line.size(), Sense::click_and_drag());
+    // Registered with the copy rewriter, so emoji in a copied name come
+    // out as themselves rather than as placeholder glyphs.
+    if let Some(rows) = ui.ctx().data(|data| {
+        data.get_temp::<std::sync::Arc<std::sync::Mutex<Vec<crate::transcript::Row>>>>(
+            egui::Id::new("copy-rows"),
+        )
+    }) {
+        rows.lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(crate::transcript::Row {
+                header: String::new(),
+                body: line.galley.text().to_owned(),
+                placements: line.placements.clone(),
+            });
+    }
     if ui.is_rect_visible(rect) {
         egui::text_selection::LabelSelectionState::label_text_selection(
             ui,

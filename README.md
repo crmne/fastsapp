@@ -57,7 +57,9 @@ same pattern without carrying WhatsApp's trademark.)
   typing.
 - **Attachments.** Everything up to 64 MB is fetched as it scrolls into
   view (or on a click, in Settings), with WhatsApp's blurred preview until
-  then. Pictures show at WhatsApp's size, stickers on their own, GIFs and
+  then. A file the servers have let go of is asked for again (WhatsApp
+  tells the phone to re-upload it); only if that fails does the bubble
+  say it is no longer on the servers. Pictures show at WhatsApp's size, stickers on their own, GIFs and
   animated stickers play in place (GIFs are decoded in the app; `ffmpeg`
   is only tried for anything that is not H.264, when
   the desktop has one); voice messages and audio files play in place;

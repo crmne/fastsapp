@@ -176,6 +176,16 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                         color: palette.shadow,
                     })
                     .show(ui, |ui| {
+                        // As wide as its words up to a readable measure,
+                        // never squeezed into a column.
+                        let font = theme::medium(13.5);
+                        let laid = ui.painter().layout(
+                            toast.message.clone(),
+                            font.clone(),
+                            palette.text,
+                            360.0,
+                        );
+                        ui.set_width(laid.size().x + 26.0);
                         ui.horizontal(|ui| {
                             let (icon, color) = match toast.kind {
                                 ToastKind::Info => (Icon::CircleCheck, palette.accent),
@@ -185,7 +195,7 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(&toast.message)
-                                        .font(theme::medium(13.5))
+                                        .font(font)
                                         .color(palette.text),
                                 )
                                 .wrap(),

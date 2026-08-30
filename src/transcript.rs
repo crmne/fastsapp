@@ -28,20 +28,69 @@ impl egui::plugin::Plugin for CopyAnnotator {
         }
         for command in &mut output.platform_output.commands {
             if let egui::OutputCommand::CopyText(text) = command
-                && let Some(annotated) = annotate(text, &rows)
+                && let Some(refined) = refine(text, &rows)
             {
-                *text = annotated;
+                *text = refined;
             }
         }
     }
 }
 
-/// One message body as drawn: the header to write before it, and the text
-/// selection sees.
+/// One message body as drawn: the header to write before it, the text
+/// selection sees, and the emoji behind the body's placeholder glyphs (the
+/// galley holds `emoji::PLACEHOLDER` where a colour emoji is painted, and a
+/// copy must put the emoji themselves back).
 #[derive(Clone, Debug)]
 pub struct Row {
     pub header: String,
     pub body: String,
+    pub placements: Vec<String>,
+}
+
+impl Row {
+    /// The stretch of this row's body from `start`, with every placeholder
+    /// replaced by the emoji it stood for.
+    fn restored(&self, start: usize, segment: &str) -> String {
+        if self.placements.is_empty() {
+            return segment.to_owned();
+        }
+        let mut next = self.body[..start]
+            .chars()
+            .filter(|&c| c == crate::emoji::PLACEHOLDER)
+            .count();
+        let mut out = String::with_capacity(segment.len());
+        for character in segment.chars() {
+            if character == crate::emoji::PLACEHOLDER {
+                match self.placements.get(next) {
+                    Some(emoji) => out.push_str(emoji),
+                    None => out.push(character),
+                }
+                next += 1;
+            } else {
+                out.push(character);
+            }
+        }
+        out
+    }
+}
+
+/// What a copy needs done: headers put on when it spans messages, and the
+/// emoji restored either way. `None` when the text is not from the
+/// conversation (a field's copy, say) or needs nothing.
+pub fn refine(copied: &str, rows: &[Row]) -> Option<String> {
+    if let Some(annotated) = annotate(copied, rows) {
+        return Some(annotated);
+    }
+    // Within one message: no header, but the emoji come back.
+    if !copied.contains(crate::emoji::PLACEHOLDER) {
+        return None;
+    }
+    for row in rows {
+        if let Some(start) = row.body.find(copied) {
+            return Some(row.restored(start, copied));
+        }
+    }
+    None
 }
 
 /// Rebuilds copied text with a header per message, when it spans more than
@@ -75,7 +124,7 @@ fn walk(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
         let Some(rest) = copied.strip_prefix(part) else {
             continue;
         };
-        let line = format!("{}{}", row.header, part);
+        let line = format!("{}{}", row.header, row.restored(cut, part));
         if rest.is_empty() {
             return Some(vec![line]);
         }
@@ -103,13 +152,17 @@ fn follow(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
         }
         // The rest of the copy is the head of this body: the last message.
         if row.body.starts_with(remaining) {
-            return Some(vec![format!("{}{}", row.header, remaining)]);
+            return Some(vec![format!(
+                "{}{}",
+                row.header,
+                row.restored(0, remaining)
+            )]);
         }
         // The whole body, with more after it.
         if let Some(rest) = remaining.strip_prefix(row.body.as_str())
             && let Some(mut tail) = follow(rest, &rows[skipped + 1..])
         {
-            tail.insert(0, format!("{}{}", row.header, row.body));
+            tail.insert(0, format!("{}{}", row.header, row.restored(0, &row.body)));
             return Some(tail);
         }
     }
@@ -124,6 +177,11 @@ mod tests {
         Row {
             header: header.to_owned(),
             body: body.to_owned(),
+            placements: body
+                .chars()
+                .filter(|&c| c == crate::emoji::PLACEHOLDER)
+                .map(|_| "🎉".to_owned())
+                .collect(),
         }
     }
 
@@ -167,6 +225,38 @@ mod tests {
         assert_eq!(annotate("something else entirely", &rows()), None);
         assert_eq!(annotate("", &rows()), None);
         assert_eq!(annotate("anything", &[]), None);
+    }
+
+    #[test]
+    fn emoji_come_back_out_of_their_placeholders() {
+        let placeholder = crate::emoji::PLACEHOLDER;
+        let rows = vec![Row {
+            header: "[9:00, 1/2/2026] Ada: ".to_owned(),
+            body: format!("well {placeholder} done {placeholder}"),
+            placements: vec!["🎂".to_owned(), "🎈".to_owned()],
+        }];
+        // Within the one message: emoji restored, no header.
+        assert_eq!(
+            refine(&format!("{placeholder} done {placeholder}"), &rows).as_deref(),
+            Some("🎂 done 🎈")
+        );
+        assert_eq!(
+            refine(&format!("done {placeholder}"), &rows).as_deref(),
+            Some("done 🎈"),
+            "the offset counts placeholders before the selection"
+        );
+        assert_eq!(refine("well", &rows), None, "nothing to do");
+        // Across messages the headers carry restored bodies too.
+        let mut both = rows.clone();
+        both.push(Row {
+            header: "[9:01, 1/2/2026] Ada: ".to_owned(),
+            body: "and again".to_owned(),
+            placements: Vec::new(),
+        });
+        assert_eq!(
+            refine(&format!("done {placeholder}\nand again"), &both).as_deref(),
+            Some("[9:00, 1/2/2026] Ada: done 🎈\n[9:01, 1/2/2026] Ada: and again")
+        );
     }
 
     #[test]
