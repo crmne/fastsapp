@@ -46,7 +46,9 @@ same pattern without carrying WhatsApp's trademark.)
   waveform to scrub through, and the sender sees the blue microphone.
   With nothing typed, the send button records one: a red light, the
   clock, the sound as it comes in; Enter or the button sends it, Escape
-  drops it. Opus in OGG both ways, decoded and encoded in the app.
+  drops it. Replying first quotes the message under the recording, and a
+  quiet take is brought up to speaking volume before it goes out. Opus
+  in OGG both ways, decoded and encoded in the app.
 - **Sends.** Text with Enter (Shift+Enter breaks a line; swap them in
   Settings), pictures pasted from the clipboard, and files picked with the
   paperclip or dropped on the window: pictures, videos, audio, and
@@ -97,7 +99,7 @@ same pattern without carrying WhatsApp's trademark.)
 ## What it does not do yet
 
 - Play ordinary videos in the app (they open in your player), or reply to
-  a message with a voice message or an attachment.
+  a message with an attachment.
 - Calls, status posts, communities, newsletters, and group administration.
 - Colour emoji on Windows: Segoe UI Emoji is not a bitmap font, so emoji
   stay monochrome there for now.

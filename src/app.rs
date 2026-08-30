@@ -1745,7 +1745,14 @@ impl App {
         };
         match recorder.finish() {
             Ok(samples) if samples.len() < crate::voice::RATE as usize / 2 => {}
-            Ok(samples) => self.backend.send(Command::SendVoice { chat, samples }),
+            Ok(samples) => {
+                let quoting = self.reply_to.take();
+                self.backend.send(Command::SendVoice {
+                    chat,
+                    samples,
+                    quoting,
+                });
+            }
             Err(error) => self.toast_error(format!("Could not record: {error}")),
         }
     }

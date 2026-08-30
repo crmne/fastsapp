@@ -133,11 +133,12 @@ pub enum Command {
     /// Mute a chat until the given time (seconds), `Some(0)` for good,
     /// `None` to unmute; told to the phone as well.
     SetMuted(ChatId, Option<i64>),
-    /// A recorded voice message: mono samples at 48 kHz, encoded and sent
-    /// as push-to-talk.
+    /// A recorded voice message: mono samples at 48 kHz, normalized,
+    /// encoded, and sent as push-to-talk, quoting a message if replying.
     SendVoice {
         chat: ChatId,
         samples: Vec<f32>,
+        quoting: Option<String>,
     },
     /// Tell the sender their voice message was listened to.
     MarkPlayed {

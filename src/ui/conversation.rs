@@ -2303,113 +2303,130 @@ fn voice_player(
             });
         });
     };
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 10.0;
-        ui.set_min_height(button);
-        match (&media.path, &media.state) {
-            (None, MediaState::Downloading) => waiting(ui),
-            (None, _) => {
-                if theme::circle_button(
-                    ui,
-                    Icon::Download,
-                    button,
-                    fill,
-                    hover,
-                    palette.accent,
-                    "Fetch",
-                )
-                .clicked()
-                {
-                    actions.push(Action::Download {
-                        chat: view.chat.id.clone(),
-                        message: message.id.clone(),
-                    });
-                }
-            }
-            (Some(path), _) => match status.state {
-                State::Loading => waiting(ui),
-                State::Playing | State::Paused | State::Idle => {
-                    let (icon, tooltip) = if status.state == State::Playing {
-                        (Icon::Pause, "Pause")
-                    } else {
-                        (Icon::Play, "Play")
-                    };
-                    if theme::circle_button(ui, icon, button, fill, hover, palette.accent, tooltip)
-                        .clicked()
+    // Own bubbles right-align their content and egui then prefers laying
+    // rows right to left, which would mirror this one and stretch it to the
+    // bubble's limit; the row is built left to right at its own width.
+    ui.allocate_ui_with_layout(
+        vec2(width, button),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            match (&media.path, &media.state) {
+                (None, MediaState::Downloading) => waiting(ui),
+                (None, _) => {
+                    if theme::circle_button(
+                        ui,
+                        Icon::Download,
+                        button,
+                        fill,
+                        hover,
+                        palette.accent,
+                        "Fetch",
+                    )
+                    .clicked()
                     {
-                        actions.push(Action::PlayVoice {
+                        actions.push(Action::Download {
+                            chat: view.chat.id.clone(),
                             message: message.id.clone(),
-                            path: path.clone(),
                         });
                     }
                 }
-            },
-        }
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            let (rect, response) =
-                ui.allocate_exact_size(vec2(wave_width, bar_height), Sense::click());
-            let pitch = 3.0;
-            let count = ((rect.width() / pitch).floor() as usize).max(1);
-            let fraction = if status.total > Duration::ZERO {
-                status.position.as_secs_f32() / status.total.as_secs_f32()
-            } else {
-                0.0
-            };
-            let played_until = rect.left() + fraction * rect.width();
-            let quiet = palette.secondary.gamma_multiply(0.7);
-            for index in 0..count {
-                let level = f32::from(bars[index * bars.len() / count]) / 100.0;
-                let height = (2.0 + level * (bar_height - 4.0)).max(2.0);
-                let x = rect.left() + index as f32 * pitch + 1.0;
-                let colour = if status.state != State::Idle && x <= played_until {
-                    palette.accent
+                (Some(path), _) => match status.state {
+                    State::Loading => waiting(ui),
+                    State::Playing | State::Paused | State::Idle => {
+                        let (icon, tooltip) = if status.state == State::Playing {
+                            (Icon::Pause, "Pause")
+                        } else {
+                            (Icon::Play, "Play")
+                        };
+                        if theme::circle_button(
+                            ui,
+                            icon,
+                            button,
+                            fill,
+                            hover,
+                            palette.accent,
+                            tooltip,
+                        )
+                        .clicked()
+                        {
+                            actions.push(Action::PlayVoice {
+                                message: message.id.clone(),
+                                path: path.clone(),
+                            });
+                        }
+                    }
+                },
+            }
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let (rect, response) =
+                    ui.allocate_exact_size(vec2(wave_width, bar_height), Sense::click());
+                let pitch = 3.0;
+                let count = ((rect.width() / pitch).floor() as usize).max(1);
+                let fraction = if status.total > Duration::ZERO {
+                    status.position.as_secs_f32() / status.total.as_secs_f32()
                 } else {
-                    quiet
+                    0.0
                 };
-                ui.painter().rect_filled(
-                    Rect::from_center_size(egui::pos2(x, rect.center().y), vec2(2.0, height)),
-                    1.0,
-                    colour,
-                );
-            }
-            if matches!(status.state, State::Playing | State::Paused) {
-                let knob = played_until.clamp(rect.left() + 5.0, rect.right() - 5.0);
-                ui.painter()
-                    .circle_filled(egui::pos2(knob, rect.center().y), 5.0, palette.accent);
-            }
-            if let Some(path) = &media.path {
-                let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-                if response.clicked()
-                    && let Some(pointer) = response.interact_pointer_pos()
-                {
-                    let fraction = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-                    actions.push(Action::SeekVoice {
-                        message: message.id.clone(),
-                        path: path.clone(),
-                        fraction,
-                    });
+                let played_until = rect.left() + fraction * rect.width();
+                let quiet = palette.secondary.gamma_multiply(0.7);
+                for index in 0..count {
+                    let level = f32::from(bars[index * bars.len() / count]) / 100.0;
+                    let height = (2.0 + level * (bar_height - 4.0)).max(2.0);
+                    let x = rect.left() + index as f32 * pitch + 1.0;
+                    let colour = if status.state != State::Idle && x <= played_until {
+                        palette.accent
+                    } else {
+                        quiet
+                    };
+                    ui.painter().rect_filled(
+                        Rect::from_center_size(egui::pos2(x, rect.center().y), vec2(2.0, height)),
+                        1.0,
+                        colour,
+                    );
                 }
-            }
-            // The time: where playback stands, else how long the clip runs.
-            let shown = match status.state {
-                State::Playing | State::Paused => {
-                    crate::util::duration(status.position.as_secs() as u32)
+                if matches!(status.state, State::Playing | State::Paused) {
+                    let knob = played_until.clamp(rect.left() + 5.0, rect.right() - 5.0);
+                    ui.painter().circle_filled(
+                        egui::pos2(knob, rect.center().y),
+                        5.0,
+                        palette.accent,
+                    );
                 }
-                _ => seconds
-                    .or_else(|| {
-                        (status.total > Duration::ZERO).then_some(status.total.as_secs() as u32)
-                    })
-                    .map(crate::util::duration)
-                    .unwrap_or_else(|| crate::util::bytes(media.size)),
-            };
-            let text = match &media.state {
-                MediaState::Failed(error) => format!("Failed: {error}"),
-                _ => shown,
-            };
-            theme::text(ui, text, theme::regular(11.5), palette.secondary);
-        });
-    });
+                if let Some(path) = &media.path {
+                    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if response.clicked()
+                        && let Some(pointer) = response.interact_pointer_pos()
+                    {
+                        let fraction = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                        actions.push(Action::SeekVoice {
+                            message: message.id.clone(),
+                            path: path.clone(),
+                            fraction,
+                        });
+                    }
+                }
+                // The time: where playback stands, else how long the clip runs.
+                let shown = match status.state {
+                    State::Playing | State::Paused => {
+                        crate::util::duration(status.position.as_secs() as u32)
+                    }
+                    _ => seconds
+                        .or_else(|| {
+                            (status.total > Duration::ZERO).then_some(status.total.as_secs() as u32)
+                        })
+                        .map(crate::util::duration)
+                        .unwrap_or_else(|| crate::util::bytes(media.size)),
+                };
+                let text = match &media.state {
+                    MediaState::Failed(error) => format!("Failed: {error}"),
+                    _ => shown,
+                };
+                theme::text(ui, text, theme::regular(11.5), palette.secondary);
+            });
+        },
+    );
     let auto = media.path.is_none()
         && matches!(media.state, MediaState::Idle)
         && view.auto_download

@@ -1816,7 +1816,11 @@ impl Worker {
             } => self.send_pasted_image(chat, width, height, rgba, caption),
             Command::Outbound { chat, row, raw } => self.outbound(chat, *row, raw),
             Command::SendSticker { chat, path } => self.send_sticker(chat, path),
-            Command::SendVoice { chat, samples } => self.send_voice(chat, samples),
+            Command::SendVoice {
+                chat,
+                samples,
+                quoting,
+            } => self.send_voice(chat, samples, quoting),
             Command::MarkPlayed {
                 chat,
                 message,
@@ -2683,11 +2687,44 @@ impl Worker {
         });
     }
 
-    /// Encodes a recording to OGG/Opus and sends it as a voice message.
-    fn send_voice(&mut self, chat: ChatId, samples: Vec<f32>) {
+    /// Encodes a recording to OGG/Opus and sends it as a voice message,
+    /// quoting whatever was being replied to.
+    fn send_voice(&mut self, chat: ChatId, samples: Vec<f32>, quoting: Option<String>) {
         let Some(client) = self.client.clone() else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
+        };
+        let quote = quoting.as_deref().and_then(|id| {
+            let raw = self.archive.raw(&chat, id).ok().flatten()?;
+            let quoted = wa::Message::decode_from_slice(&raw).ok()?;
+            let row = self.archive.message(&chat, id).ok().flatten()?;
+            let jid = Self::jid_of(&chat)?;
+            let sender = Self::jid_of(&row.sender).unwrap_or_else(|| jid.clone());
+            let context = whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info(
+                row.id.clone(),
+                &sender,
+                &jid,
+                &jid,
+                &quoted,
+            );
+            let shown = Quoted {
+                mentions: row.mentions.clone(),
+                id: row.id,
+                sender_name: if row.from_me {
+                    Some("You".to_owned())
+                } else {
+                    row.sender_name
+                        .clone()
+                        .or_else(|| self.name_for(&row.sender))
+                },
+                sender: row.sender,
+                summary: row.content.summary(),
+            };
+            Some((context, shown))
+        });
+        let (context, shown) = match quote {
+            Some((context, shown)) => (Some(Box::new(context)), Some(shown)),
+            None => (None, None),
         };
         let commands = self.commands.clone();
         let dir = self.dirs.media_cache_dir();
@@ -2695,6 +2732,8 @@ impl Worker {
         tokio::spawn(async move {
             let outcome = async {
                 let (bytes, seconds, waveform) = tokio::task::spawn_blocking(move || {
+                    let mut samples = samples;
+                    crate::voice::normalize(&mut samples);
                     let seconds = (samples.len() as f64 / f64::from(crate::voice::RATE))
                         .round()
                         .max(1.0) as u32;
@@ -2703,12 +2742,13 @@ impl Worker {
                 })
                 .await
                 .map_err(|error| error.to_string())??;
-                let prepared = prepare_voice(&client, bytes, seconds, waveform).await?;
+                let prepared = prepare_voice(&client, bytes, seconds, waveform, context).await?;
                 file_outbound(&client, &chat, &me, &dir, prepared, None).await
             }
             .await;
             match outcome {
-                Ok((row, raw)) => {
+                Ok((mut row, raw)) => {
+                    row.quoted = shown;
                     let _ = commands.send(Command::Outbound {
                         chat,
                         row: Box::new(row),
@@ -3282,6 +3322,7 @@ async fn prepare_voice(
     bytes: Vec<u8>,
     seconds: u32,
     waveform: Vec<u8>,
+    context: Option<Box<wa::ContextInfo>>,
 ) -> Result<Prepared, String> {
     let mime = "audio/ogg; codecs=opus".to_owned();
     let size = bytes.len() as u64;
@@ -3296,7 +3337,7 @@ async fn prepare_voice(
             duration_seconds: Some(seconds),
             ptt: Some(true),
             waveform: Some(waveform.clone()),
-            ..Default::default()
+            context_info: context,
         },
     );
     Ok(Prepared {

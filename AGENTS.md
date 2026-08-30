@@ -63,9 +63,13 @@ protocol. These notes are for coding agents and new contributors.
   `alsa-lib` on Arch). `Action::PlayVoice/SeekVoice` drive the player from
   the bubble; `StartRecording/CancelRecording/SendRecording` the
   microphone from the composer (the send button is a microphone when there
-  is nothing to send); `Command::SendVoice` encodes and sends push-to-talk
-  with the waveform, `Command::MarkPlayed` sends the played receipt once
-  per incoming voice message.
+  is nothing to send); `Command::SendVoice` normalizes
+  (`voice::normalize`, quiet takes up to just under full scale, gain
+  capped), encodes and sends push-to-talk with the waveform and the reply
+  quote if one was open; `Command::MarkPlayed` sends the played receipt
+  once per incoming voice message. Own bubbles lay out right-aligned,
+  where egui turns `ui.horizontal` right to left: rows like the voice
+  player must use an explicit `Layout::left_to_right` at their own width.
   `src/ui/picker.rs` is the emoji/GIF/sticker panel. GIF search uses the
   key from Settings, else one baked in at build time from
   `FASTSAPP_GIPHY_KEY` (`option_env!`); the repository carries none. The

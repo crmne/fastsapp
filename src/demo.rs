@@ -412,6 +412,18 @@ pub fn populate(app: &mut App) {
                 waveform: demo_waveform(),
             },
         ),
+        message(
+            ada,
+            "you-voice",
+            true,
+            base + 95,
+            Content::Audio {
+                media: media("audio/ogg; codecs=opus", 24_113, None, None),
+                seconds: Some(11),
+                voice_note: true,
+                waveform: demo_waveform(),
+            },
+        ),
         {
             let mut row = message(
                 ada,
@@ -719,20 +731,22 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     let _ = std::fs::write(&path, bytes);
                 }
                 let waveform = crate::voice::waveform(&tone);
-                if let Some(message) = app
-                    .conversations
-                    .get_mut(&app.open_chat.clone().unwrap_or_default())
-                    .and_then(|conversation| conversation.message_mut("ada-voice"))
-                    && let crate::model::Content::Audio {
-                        media,
-                        waveform: bars,
-                        seconds,
-                        ..
-                    } = &mut message.content
-                {
-                    media.path = Some(path);
-                    *bars = waveform;
-                    *seconds = Some(6);
+                for id in ["ada-voice", "you-voice"] {
+                    if let Some(message) = app
+                        .conversations
+                        .get_mut(&app.open_chat.clone().unwrap_or_default())
+                        .and_then(|conversation| conversation.message_mut(id))
+                        && let crate::model::Content::Audio {
+                            media,
+                            waveform: bars,
+                            seconds,
+                            ..
+                        } = &mut message.content
+                    {
+                        media.path = Some(path.clone());
+                        *bars = waveform.clone();
+                        *seconds = Some(6);
+                    }
                 }
             }
             "recording" => app.recording = Some(crate::audio::Recorder::rehearsal()),
@@ -1131,6 +1145,27 @@ mod tests {
         });
         render(&mut app, &ctx);
         assert!(app.pending.is_empty(), "sent with the caption");
+    }
+
+    /// Own bubbles right-align, which once stretched the voice row across
+    /// the whole bubble width with the button flung to the far side.
+    #[test]
+    fn an_own_voice_message_keeps_its_bubble_narrow() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        let id = crate::ui::conversation::bubble_id(&chat, "you-voice").with("rect");
+        let rect = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id))
+            .expect("the bubble was drawn");
+        assert!(
+            (240.0..=345.0).contains(&rect.width()),
+            "{} wide",
+            rect.width()
+        );
     }
 
     #[test]

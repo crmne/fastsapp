@@ -173,6 +173,24 @@ fn opus_tags() -> Vec<u8> {
     tags
 }
 
+/// Brings a quiet recording up to speaking volume: the loudest moment
+/// lands just under full scale, with the gain capped so a silent room's
+/// noise is not blasted instead.
+pub fn normalize(samples: &mut [f32]) {
+    let peak = samples
+        .iter()
+        .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+    if peak <= 0.0 {
+        return;
+    }
+    let gain = (0.89 / peak).clamp(1.0, 10.0);
+    if gain > 1.0 {
+        for sample in samples {
+            *sample *= gain;
+        }
+    }
+}
+
 /// The bars WhatsApp draws: loudness per slice of the clip, 0 to 100 with
 /// the loudest slice at 100.
 pub fn waveform(samples: &[f32]) -> Vec<u8> {
@@ -278,6 +296,23 @@ mod tests {
         assert!((mono.len() as i64 - 48_000).abs() <= 2, "{}", mono.len());
         assert!(mono.iter().all(|v| (v - 0.5).abs() < 1e-6));
         assert_eq!(mono_at_rate(&[0.25; 10], 1, RATE), vec![0.25; 10]);
+    }
+
+    #[test]
+    fn a_quiet_recording_is_brought_up_but_not_blasted() {
+        let mut quiet: Vec<f32> = tone(0.1).iter().map(|sample| sample * 0.2).collect();
+        normalize(&mut quiet);
+        let peak = quiet.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+        assert!((peak - 0.89).abs() < 0.01, "{peak}");
+        // A whisper of noise gains at most twenty decibels.
+        let mut faint = vec![0.001f32, -0.002];
+        normalize(&mut faint);
+        assert!((faint[1] + 0.02).abs() < 1e-6, "{}", faint[1]);
+        // What is already loud is left alone.
+        let mut loud = vec![0.95f32];
+        normalize(&mut loud);
+        assert_eq!(loud, vec![0.95]);
+        normalize(&mut []);
     }
 
     #[test]
