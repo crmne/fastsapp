@@ -52,6 +52,13 @@ const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
     ("georgian", '\u{10d0}', "georgian"),
     ("ethiopic", '\u{1200}', "ethiopic"),
     ("cherokee", '\u{13a0}', "cherokee"),
+    // Not scripts, but the styled letters and marks people put in their
+    // names: mathematical alphanumerics (the 𝓯𝓪𝓷𝓬𝔂 alphabets), enclosed
+    // letters, and the loose symbols. Inter draws none of them, and they
+    // showed as boxes wherever a name used them.
+    ("math", '\u{1d4d0}', "math"),
+    ("enclosed", '\u{24b6}', "symbol"),
+    ("symbols", '\u{2661}', "symbol"),
 ];
 
 /// The regional cut of a pan-CJK font a locale should be shown, longest
@@ -408,6 +415,18 @@ mod tests {
             simplified,
             "each locale ranks its own cut the same"
         );
+    }
+
+    /// Lists which scripts found a face on this machine:
+    /// `cargo test system_fonts -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads this machine's fonts"]
+    fn which_scripts_have_faces_here() {
+        let found = fallbacks();
+        eprintln!("{} faces registered:", found.len());
+        for fallback in found {
+            eprintln!("  {} ({} KB)", fallback.name, fallback.bytes.len() / 1024);
+        }
     }
 
     #[test]
