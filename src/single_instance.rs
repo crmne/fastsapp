@@ -1,6 +1,6 @@
 //! One running instance at a time.
 //!
-//! Two copies of Fastsapp would fight over the one thing WhatsApp allows a
+//! Two copies of FastsApp would fight over the one thing WhatsApp allows a
 //! linked device: its connection. Each takes the stream from the other,
 //! forever. So a second launch does not start a second app; it asks the one
 //! already running to show its window and exits.
@@ -22,7 +22,7 @@ use std::time::Duration;
 const INSTANCE_PORT: u16 = 47_119;
 
 /// Every request and reply starts with this, so a foreign program that
-/// happens to hold the port is never mistaken for Fastsapp.
+/// happens to hold the port is never mistaken for FastsApp.
 const PREFIX: &str = "fastsapp:";
 const OK_REPLY: &str = "fastsapp:ok";
 
@@ -72,7 +72,7 @@ fn send_to(port: u16, verb: &str) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "the port is held by something other than Fastsapp",
+            "the port is held by something other than FastsApp",
         ))
     }
 }
@@ -82,11 +82,11 @@ pub fn acquire(waker: &crate::backend::Waker) -> Outcome {
         Ok(listener) => listener,
         Err(_) => {
             // Someone holds the port. Ask them to show themselves, and only
-            // stand down if they answer as Fastsapp.
+            // stand down if they answer as FastsApp.
             if send("show").is_ok() {
                 return Outcome::Surfaced;
             }
-            log::warn!("port {INSTANCE_PORT} is busy but not with Fastsapp; running unguarded");
+            log::warn!("port {INSTANCE_PORT} is busy but not with FastsApp; running unguarded");
             return Outcome::Only(Guard {
                 commands: Default::default(),
             });
@@ -187,7 +187,7 @@ mod tests {
             std::thread::spawn(move || serve(listener, &commands, &waker))
         };
 
-        send_to(port, "show").expect("answered as Fastsapp");
+        send_to(port, "show").expect("answered as FastsApp");
         // An unknown verb gets no reply at all, so the client sees a closed
         // connection rather than a command it never sent being obeyed.
         assert!(send_to(port, "frobnicate").is_err());

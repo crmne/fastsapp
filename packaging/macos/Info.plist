@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Fastsapp</string>
-    <key>CFBundleDisplayName</key><string>Fastsapp</string>
+    <key>CFBundleName</key><string>FastsApp</string>
+    <key>CFBundleDisplayName</key><string>FastsApp</string>
     <key>CFBundleIdentifier</key><string>me.paolino.fastsapp</string>
     <key>CFBundleExecutable</key><string>fastsapp</string>
     <key>CFBundleIconFile</key><string>fastsapp</string>

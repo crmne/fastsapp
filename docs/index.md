@@ -1,10 +1,10 @@
 ---
 layout: home
-title: Fastsapp
+title: FastsApp
 description: A fast, native WhatsApp client for Linux, macOS, and Windows, written in Rust.
 permalink: /
 hero:
-  name: Fastsapp
+  name: FastsApp
   text: WhatsApp, native and fast
   tagline: A lightweight WhatsApp client with your full chats, voice messages, attachments, and notifications on Linux, macOS, and Windows.
   actions:
@@ -12,14 +12,14 @@ hero:
       text: Download
       link: /download/
     - theme: alt
-      text: What is Fastsapp?
+      text: What is FastsApp?
       link: /what-is-fastsapp/
     - theme: alt
       text: GitHub
       link: https://github.com/crmne/fastsapp
   image:
     src: /screenshot.png
-    alt: "Fastsapp showing a chat with a photo, a document, a voice message, a quoted reply, and a link preview"
+    alt: "FastsApp showing a chat with a photo, a document, a voice message, a quoted reply, and a link preview"
     width: 1600
     height: 900
 

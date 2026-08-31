@@ -135,7 +135,7 @@ jobs:
       - name: App bundle
         run: |
           version="${GITHUB_REF_NAME#v}"
-          bash packaging/macos/bundle.sh universal/fastsapp Fastsapp.app "$version"
+          bash packaging/macos/bundle.sh universal/fastsapp FastsApp.app "$version"
 
       - name: Import signing certificate
         if: env.APPLE_CERTIFICATE_P12 != ''
@@ -154,18 +154,18 @@ jobs:
         if: env.APPLE_CERTIFICATE_P12 != ''
         run: |
           codesign --force --deep --options runtime --timestamp \
-            --sign "$APPLE_SIGNING_IDENTITY" Fastsapp.app
+            --sign "$APPLE_SIGNING_IDENTITY" FastsApp.app
 
       - name: DMG
         run: |
           name="fastsapp-${GITHUB_REF_NAME}-macos-universal"
           stage="$RUNNER_TEMP/dmg"
           mkdir -p "$stage"
-          cp -R Fastsapp.app "$stage/"
+          cp -R FastsApp.app "$stage/"
           cp README.md LICENSE "$stage/"
           ln -s /Applications "$stage/Applications"
           mkdir -p dist
-          hdiutil create -volname Fastsapp -srcfolder "$stage" -ov \
+          hdiutil create -volname FastsApp -srcfolder "$stage" -ov \
             -format UDZO "dist/$name.dmg"
 
       - name: Notarize

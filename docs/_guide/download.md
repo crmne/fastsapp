@@ -1,6 +1,6 @@
 ---
 title: Download
-description: Get Fastsapp for Linux, macOS, or Windows, with install instructions for each.
+description: Get FastsApp for Linux, macOS, or Windows, with install instructions for each.
 nav_order: 1
 ---
 
@@ -38,7 +38,7 @@ One download for both Apple Silicon and Intel:
 
 - [fastsapp-v{{ v }}-macos-universal.dmg]({{ base }}/fastsapp-v{{ v }}-macos-universal.dmg)
 
-Open it and drag **Fastsapp** to Applications.
+Open it and drag **FastsApp** to Applications.
 
 ### First open on macOS
 
@@ -46,25 +46,25 @@ This build is not yet notarized with Apple, so macOS blocks it the first
 time. Recent macOS versions no longer let you bypass this with a
 right-click, so you open it once through Privacy & Security:
 
-1. Double-click **Fastsapp** in Applications. macOS says it cannot be
+1. Double-click **FastsApp** in Applications. macOS says it cannot be
    opened because Apple cannot check it for malicious software. Click
    **Done** (do **not** click Move to Trash).
 2. Open **System Settings**, then **Privacy & Security**.
-3. Scroll down to the **Security** section, find *"Fastsapp was blocked to
+3. Scroll down to the **Security** section, find *"FastsApp was blocked to
    protect your Mac"*, and click **Open Anyway**.
 4. Authenticate, then click **Open Anyway** once more.
 
 Or clear the quarantine flag instead:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/Fastsapp.app
+xattr -dr com.apple.quarantine /Applications/FastsApp.app
 ```
 
 The `-r` matters: it clears the flag from the files inside the bundle too.
 
 ## Windows
 
-The installer adds Fastsapp to the Start menu and needs no administrator
+The installer adds FastsApp to the Start menu and needs no administrator
 rights. Choose x86_64 for most PCs or aarch64 for Windows on ARM:
 
 - [fastsapp-v{{ v }}-x86_64-pc-windows-msvc-setup.exe]({{ base }}/fastsapp-v{{ v }}-x86_64-pc-windows-msvc-setup.exe)

@@ -1,4 +1,4 @@
-//! Fastsapp's visual language: palette, typography, icons, base widgets.
+//! FastsApp's visual language: palette, typography, icons, base widgets.
 //!
 //! Inter carries the interface with real weights (egui's `strong()` only
 //! brightens), and one Lucide icon vocabulary replaces Unicode lookalikes.

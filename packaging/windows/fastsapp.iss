@@ -27,7 +27,7 @@
   #define InnoArch "x64compatible"
 #endif
 
-#define AppName "Fastsapp"
+#define AppName "FastsApp"
 #define AppExeName "fastsapp.exe"
 
 [Setup]

@@ -532,7 +532,7 @@ impl Worker {
             // device linked earlier keeps what it was linked as.
             .with_device_props(
                 DevicePropsOverride::new()
-                    .with_os("Fastsapp")
+                    .with_os("FastsApp")
                     .with_version(app_version())
                     .with_platform_type(wa::device_props::PlatformType::DESKTOP),
             )
@@ -990,7 +990,7 @@ impl Worker {
             }
             E::ClientOutdated(_) => {
                 self.set_status(LinkStatus::Failed(
-                    "WhatsApp rejected this client as outdated; update Fastsapp".to_owned(),
+                    "WhatsApp rejected this client as outdated; update FastsApp".to_owned(),
                 ));
             }
             E::Messages(batch) => {

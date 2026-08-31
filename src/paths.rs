@@ -1,4 +1,4 @@
-//! Where Fastsapp keeps its files.
+//! Where FastsApp keeps its files.
 //!
 //! Configuration, durable state (the linked device's keys and the message
 //! archive), and disposable caches (media, avatars) live in the platform's

@@ -85,7 +85,7 @@ fn main() -> eframe::Result<()> {
         match single_instance::acquire(&waker) {
             single_instance::Outcome::Only(guard) => Some(guard),
             single_instance::Outcome::Surfaced => {
-                log::info!("Fastsapp is already running; asked it to show its window");
+                log::info!("FastsApp is already running; asked it to show its window");
                 return Ok(());
             }
         }
@@ -122,7 +122,7 @@ fn main() -> eframe::Result<()> {
         #[cfg(feature = "demo")]
         let creator_shot = shot.clone();
         eframe::run_native(
-            "Fastsapp",
+            "FastsApp",
             native_options(),
             Box::new(move |cc| {
                 creator_waker.attach(&cc.egui_ctx);
@@ -229,7 +229,7 @@ fn log_panics(path: std::path::PathBuf) {
 
 fn native_options() -> eframe::NativeOptions {
     let viewport = egui::ViewportBuilder::default()
-        .with_title("Fastsapp")
+        .with_title("FastsApp")
         .with_app_id("fastsapp")
         .with_inner_size([1180.0, 780.0])
         .with_min_inner_size([720.0, 480.0])

@@ -57,7 +57,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         egui::Color32::WHITE,
                     );
                     ui.add_space(4.0);
-                    theme::text(ui, "Fastsapp", theme::bold(28.0), palette.text);
+                    theme::text(ui, "FastsApp", theme::bold(28.0), palette.text);
                     theme::text(
                         ui,
                         "A fast, native WhatsApp client.",

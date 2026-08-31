@@ -51,7 +51,7 @@ fn deliver(
 ) {
     let mut notification = notify_rust::Notification::new();
     notification
-        .appname("Fastsapp")
+        .appname("FastsApp")
         .summary(title)
         .body(body)
         .icon("fastsapp")
@@ -80,7 +80,7 @@ fn deliver(
     _wake: impl Fn() + Send + 'static,
 ) {
     let mut notification = notify_rust::Notification::new();
-    notification.appname("Fastsapp").summary(title).body(body);
+    notification.appname("FastsApp").summary(title).body(body);
     // Windows shows it; macOS shows the app's own icon regardless.
     if let Some(picture) = picture {
         notification.image_path(&picture.to_string_lossy());
@@ -104,7 +104,7 @@ mod tests {
             .and_then(|entries| entries.flatten().map(|entry| entry.path()).next());
         show(
             "Ada Lovelace".into(),
-            "A test from Fastsapp, with a picture".into(),
+            "A test from FastsApp, with a picture".into(),
             picture,
             "test".into(),
             Default::default(),

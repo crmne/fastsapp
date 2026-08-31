@@ -79,7 +79,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     toggle(ui, app, "Show shortcut hints", "", |settings| &mut settings.show_shortcut_hints);
 
                     section(ui, app, "Window");
-                    toggle(ui, app, "Keep running when the window closes", "Fastsapp hides to the system tray and stays linked. Quit from the tray menu or with Ctrl+Q.", |settings| &mut settings.keep_running_in_background);
+                    toggle(ui, app, "Keep running when the window closes", "FastsApp hides to the system tray and stays linked. Quit from the tray menu or with Ctrl+Q.", |settings| &mut settings.keep_running_in_background);
                     toggle(ui, app, "Notify about new messages", "Through the desktop's own notifications, when the window is hidden, in the background, or showing another chat. Muted chats stay quiet.", |settings| &mut settings.notifications);
 
                     widgets::setting_row(
@@ -168,7 +168,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     widgets::setting_row(
                         ui,
                         &palette,
-                        &format!("Fastsapp {}", env!("CARGO_PKG_VERSION")),
+                        &format!("FastsApp {}", env!("CARGO_PKG_VERSION")),
                         "A native WhatsApp client built with Rust, egui, and whatsapp-rust.",
                         |ui| {
                             if theme::soft_button(ui, &palette, Some(Icon::Info), "About", false).clicked() {

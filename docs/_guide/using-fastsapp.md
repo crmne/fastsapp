@@ -1,5 +1,5 @@
 ---
-title: Using Fastsapp
+title: Using FastsApp
 description: Everyday messaging, attachments, voice messages, and the shortcuts behind them.
 nav_order: 3
 ---
@@ -56,7 +56,7 @@ opens its page: the picture, the number, and in groups every member.
 
 ## Notifications and the tray
 
-Closing the window keeps Fastsapp in the tray with the link up; the tray
+Closing the window keeps FastsApp in the tray with the link up; the tray
 icon or launching the app again brings the window back. Notifications
 carry the chat's picture and open the chat when clicked; muted chats stay
 quiet. Both behaviours have switches in Settings.

@@ -1,6 +1,6 @@
-# Fastsapp agent guide
+# FastsApp agent guide
 
-Fastsapp is a small native WhatsApp client: Rust, egui, and the
+FastsApp is a small native WhatsApp client: Rust, egui, and the
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) library for the
 protocol. These notes are for coding agents and new contributors.
 

@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-description: Install Fastsapp, link it with your phone, and let the history arrive.
+description: Install FastsApp, link it with your phone, and let the history arrive.
 nav_order: 2
 ---
 
@@ -35,7 +35,7 @@ A desktop entry ships in `packaging/applications/fastsapp.desktop`.
 
 ## Link with your phone
 
-Fastsapp is a companion device, like WhatsApp Web. Start it and either:
+FastsApp is a companion device, like WhatsApp Web. Start it and either:
 
 - scan the QR code with your phone (WhatsApp, **Settings**, **Linked
   devices**, **Link a device**), or
@@ -49,7 +49,7 @@ network, or online, for reading what has already arrived.
 
 Right after linking, the phone sends the recent history: the chat list
 fills within seconds, and messages keep streaming in for a few minutes.
-From then on, Fastsapp keeps everything it sees in its own archive, so its
+From then on, FastsApp keeps everything it sees in its own archive, so its
 history grows past what WhatsApp replays. Scrolling to the top of a chat
 asks your phone for what came before; the phone must be online to answer.
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build Fastsapp.app from a GUI binary, on a macOS machine.
+# Build FastsApp.app from a GUI binary, on a macOS machine.
 #
 #   packaging/macos/bundle.sh <binary> <output.app> <version>
 #

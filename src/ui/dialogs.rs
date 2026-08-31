@@ -95,7 +95,7 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
             egui::Color32::WHITE,
         );
         ui.vertical(|ui| {
-            theme::text(ui, "Fastsapp", theme::bold(17.0), palette.text);
+            theme::text(ui, "FastsApp", theme::bold(17.0), palette.text);
             theme::text(
                 ui,
                 format!("Version {}", env!("CARGO_PKG_VERSION")),

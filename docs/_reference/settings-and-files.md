@@ -1,12 +1,12 @@
 ---
 title: Settings & Files
-description: Where Fastsapp keeps configuration, the archive, and caches, and what is safe to delete.
+description: Where FastsApp keeps configuration, the archive, and caches, and what is safe to delete.
 nav_order: 0
 ---
 
 ## Where things live
 
-Fastsapp follows each platform's conventions. On Linux:
+FastsApp follows each platform's conventions. On Linux:
 
 | What | Where | Safe to delete? |
 | --- | --- | --- |

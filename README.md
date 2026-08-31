@@ -1,4 +1,4 @@
-# Fastsapp
+# FastsApp
 
 **WhatsApp, native and fast.** A lightweight WhatsApp client written in Rust
 with [egui](https://github.com/emilk/egui), speaking the WhatsApp Web protocol
@@ -6,11 +6,11 @@ through [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust). It links
 to your phone like WhatsApp Web does, starts in well under a second, and stays
 small while it runs. There is no browser engine anywhere in the process.
 
-Fastsapp is a sibling of [Fastpotify](https://github.com/crmne/fastpotify):
+FastsApp is a sibling of [Fastpotify](https://github.com/crmne/fastpotify):
 the same idea, the same look, a different service. (The name follows the
 same pattern without carrying WhatsApp's trademark.)
 
-![Fastsapp showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
+![FastsApp showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
 
 ![A group chat with sender names and pictures, a photo with reactions, a reply with a mention, and a poll](docs/screenshot-group.png)
 
@@ -80,7 +80,7 @@ same pattern without carrying WhatsApp's trademark.)
   admins may post.
 - **Presence.** Online and last-seen for the open chat, and typing
   indicators both ways.
-- **Stays in the background.** Closing the window keeps Fastsapp linked
+- **Stays in the background.** Closing the window keeps FastsApp linked
   and receiving in the system tray (a status notifier on Linux, the menu
   bar on macOS, the notification area on Windows); clicking the tray brings
   the window back. Quit from the tray menu or with `Ctrl+Q`; turn it off
@@ -114,7 +114,7 @@ same pattern without carrying WhatsApp's trademark.)
 
 ## Installing
 
-On Arch Linux, Fastsapp is in the AUR:
+On Arch Linux, FastsApp is in the AUR:
 
 ```sh
 yay -S fastsapp-bin      # the released build, ready made
@@ -137,7 +137,7 @@ under System Settings, Privacy & Security.
 
 ### From source
 
-Fastsapp needs a Rust toolchain (`rust-toolchain.toml` pins the exact
+FastsApp needs a Rust toolchain (`rust-toolchain.toml` pins the exact
 version) and, on Linux, the usual GUI development packages:
 
 ```sh
@@ -166,7 +166,7 @@ The first start shows a QR code. On the phone, open WhatsApp, go to
 **Linked devices**, tap **Link a device**, and point the camera at the
 screen. If the camera is not an option, click *Link with phone number
 instead*, type your number with its country code, and enter the code
-Fastsapp shows on the phone.
+FastsApp shows on the phone.
 
 WhatsApp then replays your recent history, which takes from a few seconds
 to a couple of minutes depending on how much there is; a banner at the top
@@ -213,7 +213,7 @@ FASTSAPP_GIPHY_KEY=your-key cargo build --release
 
 ## Disclaimer
 
-Fastsapp is an unofficial client and is not affiliated with WhatsApp or
+FastsApp is an unofficial client and is not affiliated with WhatsApp or
 Meta. Using an unofficial client may be against WhatsApp's terms of service
 and could get an account suspended. Use it at your own risk.
 

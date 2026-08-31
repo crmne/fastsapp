@@ -1,4 +1,4 @@
-//! Fastsapp's internals, exposed so diagnostics and tests can reach them.
+//! FastsApp's internals, exposed so diagnostics and tests can reach them.
 
 pub mod animation;
 pub mod app;
