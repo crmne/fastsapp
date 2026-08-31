@@ -1299,6 +1299,26 @@ mod tests {
                     rect.right()
                 );
             }
+            for kind in ["quote", "preview"] {
+                let key = crate::ui::conversation::bubble_id(&chat, id).with(kind);
+                if let Some(rect) = ctx.data(|data| data.get_temp::<egui::Rect>(key)) {
+                    eprintln!(
+                        "  {kind}: {:.0} wide, {:.0}..{:.0}",
+                        rect.width(),
+                        rect.left(),
+                        rect.right()
+                    );
+                }
+            }
+            let body = crate::ui::conversation::bubble_id(&chat, id).with("body");
+            if let Some(rect) = ctx.data(|data| data.get_temp::<egui::Rect>(body)) {
+                eprintln!(
+                    "  body: {:.0} wide, {:.0}..{:.0}",
+                    rect.width(),
+                    rect.left(),
+                    rect.right()
+                );
+            }
         }
     }
 

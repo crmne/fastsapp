@@ -40,7 +40,9 @@ pub fn line(
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = width;
     job.wrap.max_rows = max_rows;
-    job.wrap.break_anywhere = true;
+    // A single line fills its row to the ellipsis; several lines break at
+    // words, or a card description ends in a split word.
+    job.wrap.break_anywhere = max_rows == 1;
     job.wrap.overflow_character = Some('…');
     let mut placements = Vec::new();
     let format = egui::TextFormat::simple(font, color);

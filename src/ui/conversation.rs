@@ -1282,26 +1282,24 @@ fn bubble_frame(
                     },
                 );
             }
-            // A quote strip and the reply under it anchor to the same left
-            // edge and share their width, as on the phone; an own bubble
-            // would otherwise right-align the strip, left-align the body,
-            // and stretch to their offset union. The footer stays outside,
-            // keeping its right edge.
-            // The strip and the reply share one width, the wider of the
-            // two (capped), the way the phone draws them; the reply's own
-            // row spans that full width with its text at the left, so no
-            // alignment fight can arise (see rich_body).
-            let slot = if let Some(quoted) = &message.quoted {
-                let available = ui.available_width();
-                let strip = quote_strip_width(ui, view, quoted);
-                let hint = quoted_content_width(ui, view, message, available);
-                let width = strip.max(hint).clamp(140.0, available.min(420.0));
-                quote_block(ui, view, message, quoted, width, actions);
-                let reserve = footer_width(ui, message);
-                content(ui, view, message, width, reserve, actions)
-            } else {
-                let reserve = footer_width(ui, message);
-                content(ui, view, message, max_width - 20.0, reserve, actions)
+            // Every card a bubble can hold — the quote strip, a link
+            // preview, a file row, the voice player — draws at the one
+            // width the whole bubble settles on: the text's natural
+            // width, never below CARD_WIDTH, never past the cap. The
+            // text's own row then spans that same width with its words at
+            // the left, so no alignment fight can arise (see rich_body).
+            // A bubble with no card keeps hugging its words. The footer
+            // stays outside, keeping its right edge.
+            let cap = (max_width - 20.0).min(ui.available_width());
+            let reserve = footer_width(ui, message);
+            let slot = match settled_width(ui, view, message, cap) {
+                Some(width) => {
+                    if let Some(quoted) = &message.quoted {
+                        quote_block(ui, view, message, quoted, width, actions);
+                    }
+                    content(ui, view, message, width, reserve, actions)
+                }
+                None => content(ui, view, message, cap, reserve, actions),
             };
             footer(ui, &palette, message, slot);
         });
@@ -1354,13 +1352,38 @@ fn bubble_frame(
     inner.response
 }
 
-/// How wide the message's own content will draw, so the quote strip above
-/// it can span the bubble the way WhatsApp draws it: as wide as the wider
-/// of the two, never a floating box narrower than the reply.
-fn quoted_content_width(ui: &egui::Ui, view: &View<'_>, message: &Message, available: f32) -> f32 {
+/// Every card a bubble can hold — the quote strip, a link preview, a
+/// file row, the voice player — draws at the one width the bubble
+/// settles on, and that width never drops below this, so a column of
+/// mixed messages lines up instead of each kind picking its own edge.
+const CARD_WIDTH: f32 = 320.0;
+
+/// The width a bubble with a card in it settles on: its text's natural
+/// width, at least [`CARD_WIDTH`], at most `cap`. A bubble with no card
+/// gets `None` and hugs its words.
+fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
+    let card = message.quoted.is_some()
+        || match &message.content {
+            Content::Text { preview, .. } => preview.is_some(),
+            Content::Document { .. } | Content::Audio { .. } | Content::Poll { .. } => true,
+            // A video with no poster draws as a file row.
+            Content::Video { .. } => message.thumbnail.is_none(),
+            _ => false,
+        };
+    card.then(|| {
+        let floor = CARD_WIDTH.min(cap);
+        natural_text_width(ui, view, message, cap).map_or(floor, |width| width.clamp(floor, cap))
+    })
+}
+
+/// The widest row the message's text (or caption) wraps to within `cap`,
+/// counting the room the clock takes beside the last row when it fits
+/// there; the settled width would otherwise come up short by exactly the
+/// clock.
+fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
     let palette = view.palette;
     let text = match &message.content {
-        Content::Text { text, .. } => Some(text),
+        Content::Text { text, .. } => text,
         Content::Image {
             caption: Some(caption),
             ..
@@ -1372,53 +1395,9 @@ fn quoted_content_width(ui: &egui::Ui, view: &View<'_>, message: &Message, avail
         | Content::Document {
             caption: Some(caption),
             ..
-        } => Some(caption),
-        _ => None,
+        } => caption,
+        _ => return None,
     };
-    match (&message.content, text) {
-        (_, Some(text)) => {
-            let style = markup::Style {
-                size: BODY_SIZE,
-                color: palette.text,
-                secondary: palette.secondary,
-                link: palette.link,
-                mention: palette.accent,
-            };
-            let laid = markup::layout(ui, text, &mentions_of(view, message), &style, available);
-            let widest = laid
-                .galley
-                .rows
-                .iter()
-                .map(|row| row.row.size.x)
-                .fold(0.0, f32::max);
-            // The bubble also holds the clock beside the last line when it
-            // fits; the strip has to count that room too, or it comes up
-            // short by exactly the clock.
-            let last = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
-            let reserve = footer_width(ui, message);
-            if last + 8.0 + reserve <= available {
-                widest.max(last + 8.0 + reserve)
-            } else {
-                widest
-            }
-        }
-        (Content::Audio { .. }, None) => available.clamp(220.0, 320.0),
-        (Content::Document { .. }, None) => available.clamp(200.0, 360.0),
-        _ => available.min(300.0),
-    }
-}
-
-/// The width a link message's bubble settles on: its own text rows (with
-/// the clock beside the last, when it fits), within the card's bounds.
-fn link_bubble_width(
-    ui: &egui::Ui,
-    view: &View<'_>,
-    message: &Message,
-    text: &str,
-    max: f32,
-    reserve: f32,
-) -> f32 {
-    let palette = view.palette;
     let style = markup::Style {
         size: BODY_SIZE,
         color: palette.text,
@@ -1426,7 +1405,7 @@ fn link_bubble_width(
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, max);
+    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap);
     let widest = laid
         .galley
         .rows
@@ -1434,34 +1413,12 @@ fn link_bubble_width(
         .map(|row| row.row.size.x)
         .fold(0.0, f32::max);
     let last = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
-    let with_clock = if last + 8.0 + reserve <= max {
+    let reserve = footer_width(ui, message);
+    Some(if last + 8.0 + reserve <= cap {
         widest.max(last + 8.0 + reserve)
     } else {
         widest
-    };
-    with_clock.clamp(200.0, max)
-}
-
-/// The width the quote strip's two lines ask for by themselves.
-fn quote_strip_width(ui: &egui::Ui, view: &View<'_>, quoted: &crate::model::Quoted) -> f32 {
-    let palette = view.palette;
-    let who = if view.me == Some(quoted.sender.as_str()) {
-        "You".to_owned()
-    } else {
-        (view.names_or)(&quoted.sender, quoted.sender_name.as_deref())
-    };
-    let summary = markup::plain(&quoted.summary, &quote_mentions(view, quoted));
-    let name_width = ui
-        .painter()
-        .layout_no_wrap(who, theme::semibold(12.5), palette.accent)
-        .size()
-        .x;
-    let summary_width = ui
-        .painter()
-        .layout_no_wrap(summary, theme::regular(12.5), palette.secondary)
-        .size()
-        .x;
-    name_width.max(summary_width) + 17.0
+    })
 }
 
 fn quote_block(
@@ -1489,27 +1446,42 @@ fn quote_block(
             bottom: 5,
         })
         .show(ui, |ui| {
-            ui.set_width(width);
-            let bar = |ui: &mut egui::Ui| {
-                let (bar, _) = ui.allocate_exact_size(vec2(3.0, 30.0), Sense::hover());
-                ui.painter().rect_filled(bar, 2.0, palette.accent);
-            };
-            let body = |ui: &mut egui::Ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.set_max_width(ui.available_width() - 6.0);
-                    widgets::rich_text(ui, &who, theme::semibold(12.5), palette.accent);
-                    widgets::rich_text(ui, &summary, theme::regular(12.5), palette.secondary);
-                });
-            };
-            // The bar sits at the strip's left in both bubble kinds; own
-            // bubbles right-align and would flip a plain horizontal row.
-            ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
-                bar(ui);
-                body(ui);
-            });
+            // The frame's margins count toward the settled width, so the
+            // strip's outer edge lands exactly on the text row's. The
+            // bounded left-anchored layout matters in own bubbles: their
+            // inherited right-to-left flow anchors a fixed-width column
+            // to the wrong side and pushes the bar outside the frame.
+            ui.allocate_ui_with_layout(
+                vec2(width - 18.0, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_width(width - 18.0);
+                    ui.horizontal(|ui| {
+                        let (bar, _) = ui.allocate_exact_size(vec2(3.0, 30.0), Sense::hover());
+                        ui.painter().rect_filled(bar, 2.0, palette.accent);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            // Exactly the room beside the bar and its gap.
+                            ui.set_width(width - 29.0);
+                            widgets::rich_text(ui, &who, theme::semibold(12.5), palette.accent);
+                            widgets::rich_text(
+                                ui,
+                                &summary,
+                                theme::regular(12.5),
+                                palette.secondary,
+                            );
+                        });
+                    });
+                },
+            );
         })
         .response;
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            bubble_id(&view.chat.id, &message.id).with("quote"),
+            response.rect,
+        );
+    });
     let response = ui
         .interact(
             response.rect,
@@ -1854,17 +1826,23 @@ fn content(
     match &message.content {
         Content::Text { text, preview } => {
             if let Some(preview) = preview {
-                // The card spans the text's width, as the phone draws it:
-                // the words set the bubble, the card dresses it.
-                let card = link_bubble_width(ui, view, message, text, width, reserve);
-                preview_card(ui, view, message, preview, card, actions);
+                preview_card(ui, view, message, preview, width, actions);
             }
-            rich_body(ui, view, message, text, width, Some(reserve), actions)
+            let span = (message.quoted.is_some() || preview.is_some()).then_some(width);
+            rich_body(ui, view, message, text, width, Some(reserve), span, actions)
         }
         Content::Image { caption, media } => {
-            picture(ui, view, message, media, width, None, actions);
+            let drawn = picture(ui, view, message, media, width, None, actions);
             caption.as_ref().and_then(|caption| {
-                rich_body(ui, view, message, caption, width, Some(reserve), actions)
+                // The picture sets the bubble; the caption wraps to it and
+                // starts at its left edge (a quote may have settled the
+                // bubble wider still).
+                let wrap = if message.quoted.is_some() {
+                    width.max(drawn)
+                } else {
+                    drawn
+                };
+                rich_body(ui, view, message, caption, wrap, Some(reserve), Some(wrap), actions)
             })
         }
         Content::Sticker { media, animated } => {
@@ -1877,9 +1855,14 @@ fn content(
             seconds,
             gif,
         } => {
-            video(ui, view, message, media, *seconds, *gif, width, actions);
+            let drawn = video(ui, view, message, media, *seconds, *gif, width, actions);
             caption.as_ref().and_then(|caption| {
-                rich_body(ui, view, message, caption, width, Some(reserve), actions)
+                let wrap = if message.quoted.is_some() {
+                    width.max(drawn)
+                } else {
+                    drawn
+                };
+                rich_body(ui, view, message, caption, wrap, Some(reserve), Some(wrap), actions)
             })
         }
         Content::Audio {
@@ -1913,10 +1896,11 @@ fn content(
                 Icon::FileText,
                 file_name,
                 &detail.join(" · "),
+                width,
                 actions,
             );
             caption.as_ref().and_then(|caption| {
-                rich_body(ui, view, message, caption, width, Some(reserve), actions)
+                rich_body(ui, view, message, caption, width, Some(reserve), Some(width), actions)
             })
         }
         Content::Location {
@@ -1976,9 +1960,11 @@ fn content(
             None
         }
         Content::Poll { question, options } => {
-            // A poll reads left to right on either side, as on the phone.
-            ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                ui.set_max_width(width);
+            // A poll reads left to right on either side, as on the phone;
+            // the allocation is bounded to the settled width (a bare
+            // with_layout would claim the whole bubble cap).
+            ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(width);
                 widgets::rich_text(ui, question, theme::semibold(14.0), palette.text);
                 for option in options {
                     ui.horizontal(|ui| {
@@ -2032,6 +2018,9 @@ fn content(
 /// A run of message text with WhatsApp's markup, links, mentions, and
 /// emoji. With `reserve`, the text leaves that much room beside its last
 /// line for the footer when the line is short enough, and returns where.
+/// With `span`, the row is allocated at least that wide, its words at the
+/// left, so text under a card or picture starts at the bubble's edge.
+#[allow(clippy::too_many_arguments)]
 fn rich_body(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -2039,6 +2028,7 @@ fn rich_body(
     text: &str,
     width: f32,
     reserve: Option<f32>,
+    span: Option<f32>,
     actions: &mut Vec<Action>,
 ) -> Option<Rect> {
     let palette = view.palette;
@@ -2058,26 +2048,12 @@ fn rich_body(
         Some(reserve) => vec2(size.x.max(last_row + 8.0 + reserve), size.y),
         None => size,
     };
-    if message.quoted.is_some() {
-        // The reply spans the strip's width, text anchored left (the
-        // galley paints from the allocation's start).
-        allocation.x = allocation.x.max(width);
-    } else if matches!(
-        &message.content,
-        Content::Text {
-            preview: Some(_),
-            ..
-        }
-    ) {
-        // Text under a link card spans the card's width the same way.
-        allocation.x = allocation.x.max(link_bubble_width(
-            ui,
-            view,
-            message,
-            text,
-            width,
-            reserve.unwrap_or(0.0),
-        ));
+    if let Some(span) = span {
+        // A card or picture above settled the bubble wider than the text;
+        // the row spans that width too, its words anchored left (the
+        // galley paints from the allocation's start), so an own bubble's
+        // right-aligned layout cannot push the text about.
+        allocation.x = allocation.x.max(span);
     }
     // Remembered for the frame: a copy that runs across messages gets
     // each one's clock, date, and writer put back (see `transcript`).
@@ -2138,7 +2114,6 @@ fn preview_card(
     actions: &mut Vec<Action>,
 ) {
     let palette = view.palette;
-    let own = message.from_me;
     let thumbnail = message
         .thumbnail
         .as_deref()
@@ -2157,41 +2132,56 @@ fn preview_card(
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
-            ui.set_width(width.clamp(200.0, 420.0));
-            let picture = |ui: &mut egui::Ui| {
-                if let Some(uri) = &thumbnail {
-                    ui.add(
-                        egui::Image::new(uri)
-                            .fit_to_exact_size(Vec2::splat(64.0))
-                            .corner_radius(4.0),
-                    );
-                }
-            };
-            let text = |ui: &mut egui::Ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.set_max_width(ui.available_width());
-                    if let Some(title) = &preview.title {
-                        widgets::rich_text(ui, title, theme::semibold(13.5), palette.text);
-                    }
-                    if let Some(description) = &preview.description {
-                        let line = widgets::line(
-                            ui,
-                            description,
-                            theme::regular(12.5),
-                            palette.secondary,
-                            ui.available_width(),
-                            2,
-                        );
-                        let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
-                        line.paint(ui, rect.min, palette.secondary);
-                    }
-                    theme::text(ui, &domain, theme::regular(12.0), palette.dim);
-                });
-            };
-            mirrored_row(ui, own, picture, text);
+            // Margins included, the card is exactly the settled width.
+            ui.set_width(width - 16.0);
+            // Exactly the room left beside the thumbnail and its gap; the
+            // bounded left-anchored layout keeps the card's row honest in
+            // own bubbles too (see quote_block).
+            let column = width - 16.0 - if thumbnail.is_some() { 72.0 } else { 0.0 };
+            ui.allocate_ui_with_layout(
+                vec2(width - 16.0, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_width(width - 16.0);
+                    ui.horizontal(|ui| {
+                        if let Some(uri) = &thumbnail {
+                            ui.add(
+                                egui::Image::new(uri)
+                                    .fit_to_exact_size(Vec2::splat(64.0))
+                                    .corner_radius(4.0),
+                            );
+                        }
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.set_width(column);
+                            if let Some(title) = &preview.title {
+                                widgets::rich_text(ui, title, theme::semibold(13.5), palette.text);
+                            }
+                            if let Some(description) = &preview.description {
+                                let line = widgets::line(
+                                    ui,
+                                    description,
+                                    theme::regular(12.5),
+                                    palette.secondary,
+                                    ui.available_width(),
+                                    2,
+                                );
+                                let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
+                                line.paint(ui, rect.min, palette.secondary);
+                            }
+                            theme::text(ui, &domain, theme::regular(12.0), palette.dim);
+                        });
+                    });
+                },
+            );
         })
         .response;
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            bubble_id(&view.chat.id, &message.id).with("preview"),
+            response.rect,
+        );
+    });
     let response = ui
         .interact(
             response.rect,
@@ -2232,9 +2222,9 @@ fn thumbnail_uri(ctx: &egui::Context, chat: &str, id: &str, bytes: &[u8]) -> Str
     uri
 }
 
-/// WhatsApp shows pictures up to about this wide, and tall ones taller
-/// than wide.
-const PICTURE_WIDTH: f32 = 340.0;
+/// Pictures share the cards' width (see [`CARD_WIDTH`]), so photo
+/// bubbles line up with the rest; tall ones run taller than wide.
+const PICTURE_WIDTH: f32 = CARD_WIDTH;
 const PICTURE_HEIGHT: f32 = 440.0;
 const STICKER_SIDE: f32 = 180.0;
 /// The header's content row: the picture plus a little air.
@@ -2283,7 +2273,7 @@ fn frame_size(media: &Media, thumbnail_hint: Option<(u32, u32)>, limit: f32) -> 
 
 /// A picture or sticker: the file once fetched, playing if it moves; the
 /// blurred preview with a download mark until then. `sticker` carries
-/// whether the sticker is animated.
+/// whether the sticker is animated. Returns the width it drew.
 fn picture(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -2292,7 +2282,7 @@ fn picture(
     width: f32,
     sticker: Option<bool>,
     actions: &mut Vec<Action>,
-) {
+) -> f32 {
     let palette = view.palette;
     let (max_width, max_height) = match sticker {
         Some(_) => (STICKER_SIDE, STICKER_SIDE),
@@ -2319,10 +2309,10 @@ fn picture(
             {
                 actions.push(Action::OpenFile(path.clone()));
             }
-            return;
+            return size.x;
         }
         let image = egui::Image::new(file_uri(path));
-        match image.load_for_size(ui.ctx(), vec2(max_width, max_height)) {
+        return match image.load_for_size(ui.ctx(), vec2(max_width, max_height)) {
             Ok(egui::load::TexturePoll::Ready { texture }) => {
                 let size = if sticker.is_some() {
                     fit_sticker(texture.size.x, texture.size.y)
@@ -2341,6 +2331,7 @@ fn picture(
                 {
                     actions.push(Action::OpenFile(path.clone()));
                 }
+                size.x
             }
             Ok(egui::load::TexturePoll::Pending { .. }) => {
                 let size = if sticker.is_some() {
@@ -2353,6 +2344,7 @@ fn picture(
                     ui.painter().rect_filled(rect, 6.0, palette.surface);
                     theme::paint_spinner(ui, rect, 22.0, palette.accent);
                 }
+                size.x
             }
             Err(_) => {
                 let size = if sticker.is_some() {
@@ -2375,9 +2367,9 @@ fn picture(
                 if response.clicked() {
                     actions.push(Action::OpenFile(path.clone()));
                 }
+                size.x
             }
-        }
-        return;
+        };
     }
     let size = frame_size(media, None, max_width);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -2458,10 +2450,11 @@ fn picture(
             message: message.id.clone(),
         });
     }
+    size.x
 }
 
 /// A video: its poster with a play mark and length, fetched on a click and
-/// opened with the desktop's player.
+/// opened with the desktop's player. Returns the width it drew.
 #[allow(clippy::too_many_arguments)]
 fn video(
     ui: &mut egui::Ui,
@@ -2472,7 +2465,7 @@ fn video(
     gif: bool,
     width: f32,
     actions: &mut Vec<Action>,
-) {
+) -> f32 {
     let palette = view.palette;
     let Some(thumbnail) = message.thumbnail.as_deref() else {
         let title = if gif { "GIF" } else { "Video" };
@@ -2489,9 +2482,10 @@ fn video(
             Icon::Video,
             title,
             &detail.join(" · "),
+            width,
             actions,
         );
-        return;
+        return width;
     };
     let uri = thumbnail_uri(ui.ctx(), &message.chat, &message.id, thumbnail);
     let size = frame_size(media, Some((16, 9)), width.min(PICTURE_WIDTH));
@@ -2517,7 +2511,7 @@ fn video(
         {
             actions.push(Action::OpenFile(path.clone()));
         }
-        return;
+        return size.x;
     }
     if ui.is_rect_visible(rect) {
         egui::Image::new(uri)
@@ -2591,6 +2585,7 @@ fn video(
             None => {}
         }
     }
+    size.x
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2602,6 +2597,7 @@ fn attachment(
     icon: Icon,
     title: &str,
     detail: &str,
+    width: f32,
     actions: &mut Vec<Action>,
 ) {
     let palette = view.palette;
@@ -2610,7 +2606,8 @@ fn attachment(
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            let card = ui.available_width().clamp(200.0, 360.0);
+            // Margins included, the row is exactly the settled width.
+            let card = width - 20.0;
             ui.set_width(card);
 
             let disc = |ui: &mut egui::Ui| {
@@ -2717,7 +2714,6 @@ fn voice_player(
     let status = view.player.status(&message.id);
     let button = 36.0;
     let bar_height = 30.0;
-    let width = width.clamp(220.0, 320.0);
     let wave_width = width - button - 10.0;
     let bars: Vec<u8> = if !waveform.is_empty() {
         waveform.to_vec()
@@ -2994,7 +2990,7 @@ mod tests {
         assert!((landscape.y - 255.0).abs() < 0.01);
         let tall = frame_size(&media(Some(600), Some(1200)), None, 340.0);
         assert!(tall.y > 340.0 && tall.y <= PICTURE_HEIGHT);
-        let exact = fit_picture(1200.0, 1600.0, PICTURE_WIDTH, PICTURE_HEIGHT);
+        let exact = fit_picture(900.0, 1600.0, PICTURE_WIDTH, PICTURE_HEIGHT);
         assert!((exact.y - PICTURE_HEIGHT).abs() < 0.01);
         assert!(exact.x < PICTURE_WIDTH);
         let unknown = frame_size(&media(None, None), Some((16, 9)), 340.0);
