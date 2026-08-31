@@ -223,6 +223,126 @@ fn message(chat: &str, id: &str, from_me: bool, timestamp: i64, content: Content
 
 /// A larger sample picture on disk, so the view's real picture path is
 /// exercised, plus a two-frame animated sticker.
+/// Paints a little picture for every sample person and group: nobody real,
+/// just landscapes, silhouettes, and shapes in each id's own hue, so the
+/// list looks like a lived-in WhatsApp rather than a wall of initials.
+fn plant_avatars(app: &mut App) {
+    let dir = crate::paths::AppDirs::discover().avatar_cache_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let mut everyone: Vec<String> = sample_ids().iter().map(|id| (*id).to_owned()).collect();
+    everyone.push(ME.to_owned());
+    for chat in &app.chats {
+        everyone.extend(chat.participants.iter().cloned());
+    }
+    for id in everyone {
+        let kind = if id.ends_with("@g.us") {
+            "group"
+        } else {
+            "person"
+        };
+        let path = dir.join(format!("demo-{kind}-{}.jpg", crate::util::hue(&id) as u32));
+        if !path.exists() {
+            let picture = painted_avatar(&id);
+            if picture.save(&path).is_err() {
+                continue;
+            }
+        }
+        app.adopt_avatar(&id, path);
+    }
+}
+
+/// One 128px picture, chosen and tinted by the id.
+fn painted_avatar(id: &str) -> image::RgbImage {
+    let hue = crate::util::hue(id);
+    let motif = (crate::util::hue(&format!("motif-{id}")) as u32) % 4;
+    let side = 128u32;
+    image::RgbImage::from_fn(side, side, |px, py| {
+        let x = px as f32 / side as f32;
+        let y = py as f32 / side as f32;
+        match motif {
+            0 => {
+                // A landscape: sky, a low sun, two mountains.
+                let sky = tint(hue, 0.35, 0.92 - y * 0.25);
+                let sun = ((x - 0.68) * (x - 0.68) + (y - 0.30) * (y - 0.30)).sqrt() < 0.13;
+                let near = y > 0.62 + (x - 0.30).abs() * 0.9;
+                let far = y > 0.55 + (x - 0.75).abs() * 1.1;
+                if near {
+                    tint(hue, 0.45, 0.35)
+                } else if far {
+                    tint(hue, 0.40, 0.5)
+                } else if sun {
+                    tint(hue + 40.0, 0.55, 0.95)
+                } else {
+                    sky
+                }
+            }
+            1 => {
+                // A silhouette where a portrait would be.
+                let head = ((x - 0.5) * (x - 0.5) + (y - 0.40) * (y - 0.40)).sqrt() < 0.17;
+                let shoulders = {
+                    let dx = (x - 0.5) / 0.34;
+                    let dy = (y - 1.02) / 0.42;
+                    dx * dx + dy * dy < 1.0
+                };
+                if head || shoulders {
+                    tint(hue, 0.40, 0.38)
+                } else {
+                    tint(hue, 0.30, 0.88 - y * 0.15)
+                }
+            }
+            2 => {
+                // Overlapping discs.
+                let a = ((x - 0.35) * (x - 0.35) + (y - 0.38) * (y - 0.38)).sqrt() < 0.26;
+                let b = ((x - 0.66) * (x - 0.66) + (y - 0.62) * (y - 0.62)).sqrt() < 0.30;
+                match (a, b) {
+                    (true, true) => tint(hue + 60.0, 0.55, 0.55),
+                    (true, false) => tint(hue + 30.0, 0.50, 0.70),
+                    (false, true) => tint(hue - 20.0, 0.50, 0.62),
+                    _ => tint(hue, 0.28, 0.90),
+                }
+            }
+            _ => {
+                // A leaf against the light.
+                let leaf = {
+                    let dx = (x - 0.5) / 0.24;
+                    let dy = (y - 0.48) / 0.36;
+                    let lean = dx + dy * 0.5;
+                    lean * lean + dy * dy < 1.0
+                };
+                let stem = (x - 0.52).abs() < 0.02 && y > 0.45 && y < 0.92;
+                if leaf || stem {
+                    tint(hue + 90.0, 0.45, 0.45)
+                } else {
+                    tint(hue, 0.25, 0.90 - y * 0.10)
+                }
+            }
+        }
+    })
+}
+
+/// A colour from hue (degrees), saturation, and value, as pixels.
+fn tint(hue: f32, saturation: f32, value: f32) -> image::Rgb<u8> {
+    let hue = hue.rem_euclid(360.0) / 60.0;
+    let chroma = value * saturation;
+    let second = chroma * (1.0 - (hue % 2.0 - 1.0).abs());
+    let (r, g, b) = match hue as u32 {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let base = value - chroma;
+    image::Rgb([
+        ((r + base) * 255.0) as u8,
+        ((g + base) * 255.0) as u8,
+        ((b + base) * 255.0) as u8,
+    ])
+}
+
 fn sample_files(app: &App) -> (std::path::PathBuf, std::path::PathBuf) {
     let dir = app.dirs.media_cache_dir();
     let _ = std::fs::create_dir_all(&dir);
@@ -356,6 +476,7 @@ pub fn populate(app: &mut App) {
         app.chats.push(chat);
     }
 
+    plant_avatars(app);
     // The first chat gets the full range of what a bubble can hold.
     let (photo, sticker) = sample_files(app);
     let ada = SAMPLES[0].id;

@@ -20,8 +20,8 @@ hero:
   image:
     src: /screenshot.png
     alt: "FastsApp showing a chat with a photo, a document, a voice message, a quoted reply, and a link preview"
-    width: 1894
-    height: 1066
+    width: 1387
+    height: 1040
 
 features:
   - icon: ⚡
@@ -59,11 +59,7 @@ features:
     top: auto !important;
     left: auto !important;
     transform: none !important;
-    /* A touch under full width: a dense chat interface reads as noise
-       when the screenshot shouts. */
-    width: 86% !important;
-    margin: 0 auto;
-    display: block;
+    width: 100% !important;
     height: auto !important;
     max-width: 100% !important;
     max-height: none !important;

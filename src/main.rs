@@ -31,6 +31,9 @@ struct Cli {
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "PATH")]
     demo_shot: Option<std::path::PathBuf>,
+    /// Window size for a screenshot run, as WxH logical points.
+    #[arg(long, value_name = "WxH")]
+    demo_size: Option<String>,
 
     /// How long to wait before the shot is taken, so fonts and icons are in.
     #[cfg(feature = "demo")]
@@ -227,11 +230,22 @@ fn log_panics(path: std::path::PathBuf) {
     }));
 }
 
+/// The window size a screenshot run asked for (`--demo-size WxH`), so the
+/// pictures need no compositor rule to come out right.
+fn demo_size_arg() -> Option<[f32; 2]> {
+    let value = std::env::args()
+        .skip_while(|arg| arg != "--demo-size")
+        .nth(1)?;
+    let (w, h) = value.split_once('x')?;
+    Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
+}
+
 fn native_options() -> eframe::NativeOptions {
+    let demo_size = demo_size_arg().unwrap_or([1180.0, 780.0]);
     let viewport = egui::ViewportBuilder::default()
         .with_title("FastsApp")
         .with_app_id("fastsapp")
-        .with_inner_size([1180.0, 780.0])
+        .with_inner_size(demo_size)
         .with_min_inner_size([720.0, 480.0])
         .with_icon(app_icon())
         // macOS: no title bar strip above the app. The content runs to the
@@ -243,6 +257,9 @@ fn native_options() -> eframe::NativeOptions {
         .with_title_shown(false);
     eframe::NativeOptions {
         viewport,
+        // A screenshot run must come up at the size it asked for; the
+        // restored size of the user's last window would override it.
+        persist_window: std::env::args().all(|arg| arg != "--demo" && arg != "--demo-shot"),
         // A Wayland compositor stops sending frame callbacks to a window on
         // a hidden workspace; waiting for vsync there would block the event
         // loop, leave the compositor's pings unanswered, and Hyprland then
@@ -333,7 +350,20 @@ impl eframe::App for Shell {
             app.background_frame(ctx);
         }
         #[cfg(feature = "demo")]
-        self.drive_shot(ctx);
+        {
+            // The compositor may float the window at whatever size it
+            // remembers; a screenshot run insists on the one it was asked
+            // for until it has it.
+            if self.shot.is_some()
+                && let Some([w, h]) = demo_size_arg()
+            {
+                let now = ctx.input(|input| input.raw.screen_rect.map(|rect| rect.size()));
+                if now.is_none_or(|now| (now.x - w).abs() > 1.0 || (now.y - h).abs() > 1.0) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+                }
+            }
+            self.drive_shot(ctx);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

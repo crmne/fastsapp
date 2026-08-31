@@ -772,6 +772,12 @@ impl App {
             .map(|_| path)
     }
 
+    /// Files an avatar that already exists on disk, as the demo does for
+    /// its made-up people.
+    pub fn adopt_avatar(&mut self, id: &str, path: PathBuf) {
+        self.avatars.insert(id.to_owned(), Some(path));
+    }
+
     pub fn avatar(&mut self, id: &str) -> Option<PathBuf> {
         if let Some(known) = self.avatars.get(id) {
             return known.clone();
