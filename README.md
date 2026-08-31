@@ -25,8 +25,10 @@ Documentation, downloads, and guides: **[fastsapp.rocks](https://fastsapp.rocks)
   comes over once, right after linking, and is kept on this computer from
   then on.
 - **Chats.** The list you know: pinned first, unread counts, muted and
-  archived chats, who is typing, the last message with its ticks. Search
-  by name, number, or the last message.
+  archived chats, who is typing, the last message with its ticks. One
+  search finds chats, the words inside any archived message, and
+  contacts you have not talked to yet, so a new conversation can start
+  right from the search.
 - **Conversations.** Messages in bubbles, grouped by day, with sender
   names, colours, and pictures in groups, quoted replies you can click to
   jump to, reactions, edits, deleted messages, and read receipts. Older

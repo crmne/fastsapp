@@ -49,7 +49,12 @@ across several messages copies the way the phone shares one:
 
 ## Chats
 
-Search filters chats; `Alt+↑/↓` walks them without leaving the composer.
+The search bar answers in three parts: chats whose name, number, or
+last line match; messages, found by their words across everything kept
+on this computer, where clicking one opens the chat at that very
+message; and contacts you have not talked to yet, where clicking one
+starts the conversation. `Alt+↑/↓` walks the chats without leaving the
+composer.
 The chat menu (right-click a chat) pins, archives, and mutes, for eight
 hours, a week, or for good, and the phone follows suit. A chat's header
 opens its page: the picture, the number, and in groups every member.
@@ -61,4 +66,5 @@ icon or launching the app again brings the window back. Notifications
 carry the chat's picture and open the chat when clicked; muted chats stay
 quiet. Both behaviours have switches in Settings.
 
-`Ctrl+/` lists every shortcut.
+`Ctrl+/` lists every shortcut, and so does the little keyboard button
+under the composer.
