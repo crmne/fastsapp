@@ -781,12 +781,8 @@ impl App {
                         .is_some_and(|phone| phone.contains(&needle))
             })
             .collect();
-        contacts.sort_by_key(|contact| {
-            contact
-                .display_name()
-                .unwrap_or(&contact.id)
-                .to_lowercase()
-        });
+        contacts
+            .sort_by_key(|contact| contact.display_name().unwrap_or(&contact.id).to_lowercase());
         contacts.truncate(15);
         contacts
     }
@@ -2247,10 +2243,8 @@ mod tests {
             contact("491700000002@s.whatsapp.net", "Adele Goldberg"),
         );
         // A group id and ourselves never show as contacts.
-        app.contacts.insert(
-            "12345@g.us".into(),
-            contact("12345@g.us", "Adventurers"),
-        );
+        app.contacts
+            .insert("12345@g.us".into(), contact("12345@g.us", "Adventurers"));
         app.contacts.insert(
             "490000000000@s.whatsapp.net".into(),
             contact("490000000000@s.whatsapp.net", "Adah Me"),

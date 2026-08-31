@@ -134,8 +134,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                 );
                                 ui.add_space(4.0);
                                 ui.vertical(|ui| {
-                                    let width =
-                                        (ui.available_width() - right_controls).max(80.0);
+                                    let width = (ui.available_width() - right_controls).max(80.0);
                                     ui.set_max_width(width);
                                     if subtitle.is_empty() {
                                         ui.add_space(8.0);
@@ -1988,7 +1987,16 @@ fn content(
                 } else {
                     drawn
                 };
-                rich_body(ui, view, message, caption, wrap, Some(reserve), Some(wrap), actions)
+                rich_body(
+                    ui,
+                    view,
+                    message,
+                    caption,
+                    wrap,
+                    Some(reserve),
+                    Some(wrap),
+                    actions,
+                )
             })
         }
         Content::Sticker { media, animated } => {
@@ -2008,7 +2016,16 @@ fn content(
                 } else {
                     drawn
                 };
-                rich_body(ui, view, message, caption, wrap, Some(reserve), Some(wrap), actions)
+                rich_body(
+                    ui,
+                    view,
+                    message,
+                    caption,
+                    wrap,
+                    Some(reserve),
+                    Some(wrap),
+                    actions,
+                )
             })
         }
         Content::Audio {
@@ -2046,7 +2063,16 @@ fn content(
                 actions,
             );
             caption.as_ref().and_then(|caption| {
-                rich_body(ui, view, message, caption, width, Some(reserve), Some(width), actions)
+                rich_body(
+                    ui,
+                    view,
+                    message,
+                    caption,
+                    width,
+                    Some(reserve),
+                    Some(width),
+                    actions,
+                )
             })
         }
         Content::Location {

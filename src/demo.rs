@@ -875,10 +875,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 for (chat, id) in [
                     ("120363012345678901@g.us", "group-reply"),
                     ("120363012345678901@g.us", "group-photo"),
-                    (
-                        "14155550199@s.whatsapp.net",
-                        "14155550199@s.whatsapp.net-1",
-                    ),
+                    ("14155550199@s.whatsapp.net", "14155550199@s.whatsapp.net-1"),
                 ] {
                     if let Some(message) = app
                         .conversations

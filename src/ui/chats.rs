@@ -109,8 +109,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             let id = egui::Id::new("chat-search");
             let width = ui.available_width();
             let mut text = app.search.clone();
-            let response =
-                widgets::search_field(ui, &palette, id, &mut text, "Search", width);
+            let response = widgets::search_field(ui, &palette, id, &mut text, "Search", width);
             if text != app.search {
                 app.actions.push(Action::Search(text));
             }
@@ -243,7 +242,14 @@ fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
         let avatar_rect =
             Rect::from_center_size(pos2(rect.left() + 38.0, rect.center().y), Vec2::splat(48.0));
         let picture = app.avatar(&hit.chat);
-        widgets::paint_avatar(ui, &palette, avatar_rect, &title, &hit.chat, picture.as_deref());
+        widgets::paint_avatar(
+            ui,
+            &palette,
+            avatar_rect,
+            &title,
+            &hit.chat,
+            picture.as_deref(),
+        );
         let left = rect.left() + 76.0;
         let right = rect.right() - 14.0;
         let stamp_galley = ui.painter().layout_no_wrap(

@@ -1034,7 +1034,9 @@ mod tests {
     #[test]
     fn search_finds_text_captions_and_file_names() {
         let archive = Archive::in_memory().expect("opens");
-        archive.ensure_chat("1@s.whatsapp.net", "Ada").expect("chat");
+        archive
+            .ensure_chat("1@s.whatsapp.net", "Ada")
+            .expect("chat");
         let media = || crate::model::Media {
             mime: "application/pdf".into(),
             size: 1,
@@ -1066,10 +1068,18 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "m2");
         assert!(
-            archive.search_messages("100&", 10).expect("search").is_empty(),
+            archive
+                .search_messages("100&", 10)
+                .expect("search")
+                .is_empty(),
             "the percent sign was matched literally"
         );
-        assert!(archive.search_messages("zebra", 10).expect("search").is_empty());
+        assert!(
+            archive
+                .search_messages("zebra", 10)
+                .expect("search")
+                .is_empty()
+        );
         // The limit caps the answer.
         let hits = archive.search_messages("e", 1).expect("search");
         assert_eq!(hits.len(), 1);
