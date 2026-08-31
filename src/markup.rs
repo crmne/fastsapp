@@ -147,13 +147,15 @@ pub fn paint(ui: &egui::Ui, text: &Text, pos: Pos2, fallback: Color32) {
 
 /// Paints like [`paint`], with the galley handed to egui's text selection,
 /// so the reader can sweep part of a message and copy it. The response must
-/// sense clicks and drags.
+/// sense clicks and drags. `visible` skips the emoji overlay for galleys
+/// registered off screen (a selection needs every galley, seen or not).
 pub fn paint_selectable(
     ui: &egui::Ui,
     text: &Text,
     response: &egui::Response,
     pos: Pos2,
     fallback: Color32,
+    visible: bool,
 ) {
     egui::text_selection::LabelSelectionState::label_text_selection(
         ui,
@@ -163,7 +165,9 @@ pub fn paint_selectable(
         fallback,
         egui::Stroke::NONE,
     );
-    emoji::paint(ui, &text.galley, pos, &text.placements);
+    if visible {
+        emoji::paint(ui, &text.galley, pos, &text.placements);
+    }
 }
 
 /// The text with markup removed and mentions named, for previews.

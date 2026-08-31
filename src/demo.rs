@@ -1227,10 +1227,24 @@ mod tests {
             ctx.data(|data| data.get_temp::<egui::Rect>(key))
                 .filter(|rect| screen.contains_rect(*rect))
         };
-        let start = ids
+        let sweepable = |content: &crate::model::Content| -> Option<String> {
+            match content {
+                crate::model::Content::Text { text, .. } => Some(crate::markup::plain(text, &[])),
+                crate::model::Content::Image {
+                    caption: Some(caption),
+                    ..
+                } => Some(crate::markup::plain(caption, &[])),
+                _ => None,
+            }
+        };
+        let (start, start_text) = ids
             .iter()
-            .find_map(|id| body_of(&ctx, id))
-            .expect("a text body on screen");
+            .find_map(|id| {
+                let rect = body_of(&ctx, id)?;
+                let text = sweepable(&app.conversations[&chat].message(id)?.content)?;
+                Some((rect, text))
+            })
+            .expect("a swept text body on screen");
         let from = egui::pos2(start.left() + 4.0, start.center().y);
         let press = |pos, pressed| egui::Event::PointerButton {
             pos,
@@ -1272,6 +1286,13 @@ mod tests {
         assert!(
             copied.matches("] ").count() >= 2,
             "the selection should span messages: {copied:?}"
+        );
+        // The start scrolled off the screen long before the copy; it must
+        // be in it regardless.
+        let opening: String = start_text.chars().take(12).collect();
+        assert!(
+            copied.contains(opening.trim_end()),
+            "the scrolled-away start should be copied: {copied:?}"
         );
     }
 

@@ -1823,8 +1823,18 @@ fn rich_body(
     ui.ctx().data_mut(|data| {
         data.insert_temp(bubble_id(&view.chat.id, &message.id).with("body"), rect);
     });
-    if ui.is_rect_visible(rect) {
-        markup::paint_selectable(ui, &laid, &response, rect.min, palette.text);
+    // A body off the screen still registers with the selection while one is
+    // being made or held: egui walks the labels it saw this frame, so a
+    // selection whose anchor scrolls away would otherwise lose its footing,
+    // paint nothing, and copy only what happened to be visible.
+    let visible = ui.is_rect_visible(rect);
+    let selection_alive = ui.input(|input| input.pointer.primary_down())
+        || ui
+            .ctx()
+            .plugin_opt::<egui::text_selection::LabelSelectionState>()
+            .is_some_and(|plugin| plugin.lock().has_selection());
+    if visible || selection_alive {
+        markup::paint_selectable(ui, &laid, &response, rect.min, palette.text, visible);
     }
     if !laid.links.is_empty()
         && let Some(pos) = response.hover_pos()
