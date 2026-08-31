@@ -1072,6 +1072,80 @@ fn clamp_into(pos: egui::Pos2, view: Rect) -> egui::Pos2 {
     )
 }
 
+/// The transcript row for a message: the header, its kind when it is not
+/// plain text, its reactions, and what it replied to, so a copy swept
+/// across it says more than the bare words (see `transcript`).
+fn transcript_row(
+    view: &View<'_>,
+    message: &Message,
+    body: String,
+    placements: Vec<String>,
+) -> crate::transcript::Row {
+    let who = if message.from_me {
+        (view.mention_names)(&message.sender)
+    } else {
+        (view.names_or)(&message.sender, message.sender_name.as_deref())
+    };
+    let marker = match &message.content {
+        Content::Image { .. } => Some("[photo]".to_owned()),
+        Content::Video { gif: true, .. } => Some("[GIF]".to_owned()),
+        Content::Video { .. } => Some("[video]".to_owned()),
+        Content::Audio {
+            voice_note: true,
+            seconds,
+            ..
+        } => Some(match seconds {
+            Some(seconds) => format!("[voice message, {}]", crate::util::duration(*seconds)),
+            None => "[voice message]".to_owned(),
+        }),
+        Content::Audio { .. } => Some("[audio]".to_owned()),
+        Content::Document { file_name, .. } => Some(format!("[document: {file_name}]")),
+        Content::Sticker { .. } => Some("[sticker]".to_owned()),
+        Content::Location { .. } => Some("[location]".to_owned()),
+        Content::Contact { display_name, .. } => Some(format!("[contact: {display_name}]")),
+        Content::Poll { question, .. } => Some(format!("[poll: {question}]")),
+        _ => None,
+    };
+    let reactions = if message.reactions.is_empty() {
+        String::new()
+    } else {
+        let listed: Vec<String> = message
+            .reactions
+            .iter()
+            .map(|reaction| {
+                format!(
+                    "{} {}",
+                    reaction.emoji,
+                    (view.names_or)(&reaction.sender, None)
+                )
+            })
+            .collect();
+        format!(" ({})", listed.join(", "))
+    };
+    let quote = message.quoted.as_ref().map(|quoted| {
+        let name = quoted
+            .sender_name
+            .clone()
+            .unwrap_or_else(|| (view.names_or)(&quoted.sender, None));
+        let summary = quoted.summary.clone();
+        let short: String = summary.chars().take(48).collect();
+        let cut = if summary.chars().count() > 48 {
+            "…"
+        } else {
+            ""
+        };
+        format!("(replying to {name}: \"{short}{cut}\")")
+    });
+    crate::transcript::Row {
+        header: format!("[{}] {}: ", crate::util::copy_stamp(message.timestamp), who),
+        body,
+        placements,
+        marker,
+        reactions,
+        quote,
+    }
+}
+
 /// How far a drag near the view's edge scrolls this frame: nothing in the
 /// middle, harder the closer the pointer is to the edge (or past it), so a
 /// selection can keep growing beyond the screen at a pace the hand steers.
@@ -1598,6 +1672,21 @@ fn content(
 ) -> Option<Rect> {
     let palette = view.palette;
     let own = message.from_me;
+    // A message with no selectable text still gets a transcript row, so a
+    // copy swept across it says what it was (see `transcript`).
+    let has_body = match &message.content {
+        Content::Text { .. } => true,
+        Content::Image { caption, .. }
+        | Content::Video { caption, .. }
+        | Content::Document { caption, .. } => caption.is_some(),
+        _ => false,
+    };
+    if !has_body {
+        view.copy_rows
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(transcript_row(view, message, String::new(), Vec::new()));
+    }
     match &message.content {
         Content::Text { text, preview } => {
             if let Some(preview) = preview {
@@ -1804,19 +1893,15 @@ fn rich_body(
     };
     // Remembered for the frame: a copy that runs across messages gets
     // each one's clock, date, and writer put back (see `transcript`).
-    let who = if message.from_me {
-        (view.mention_names)(&message.sender)
-    } else {
-        (view.names_or)(&message.sender, message.sender_name.as_deref())
-    };
     view.copy_rows
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .push(crate::transcript::Row {
-            header: format!("[{}] {}: ", crate::util::copy_stamp(message.timestamp), who),
-            body: laid.galley.text().to_owned(),
-            placements: laid.placements().to_vec(),
-        });
+        .push(transcript_row(
+            view,
+            message,
+            laid.galley.text().to_owned(),
+            laid.placements().to_vec(),
+        ));
     // Clicks open links; the drag is the reader sweeping text to copy.
     let (rect, response) = ui.allocate_exact_size(allocation, Sense::click_and_drag());
     // Where the body itself sits, for tests that sweep it.

@@ -92,6 +92,7 @@ pub fn selectable_rich_text(
                 header: String::new(),
                 body: line.galley.text().to_owned(),
                 placements: line.placements.clone(),
+                ..Default::default()
             });
     }
     if ui.is_rect_visible(rect) {

@@ -40,14 +40,41 @@ impl egui::plugin::Plugin for CopyAnnotator {
 /// selection sees, and the emoji behind the body's placeholder glyphs (the
 /// galley holds `emoji::PLACEHOLDER` where a colour emoji is painted, and a
 /// copy must put the emoji themselves back).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Row {
     pub header: String,
     pub body: String,
     pub placements: Vec<String>,
+    /// What kind of message this is, when it is not plain text:
+    /// "[photo]", "[video]", "[document: notes.pdf]", and so on.
+    pub marker: Option<String>,
+    /// The reactions on the message, preformatted: " (❤️ Roberta)".
+    pub reactions: String,
+    /// What the message replied to, preformatted:
+    /// `(replying to Roberta: "…")`.
+    pub quote: Option<String>,
 }
 
 impl Row {
+    /// One transcript line: the header, the reply context, the kind, the
+    /// selected text, and the reactions.
+    fn line(&self, body: &str) -> String {
+        let mut line = self.header.clone();
+        if let Some(quote) = &self.quote {
+            line.push_str(quote);
+            line.push(' ');
+        }
+        if let Some(marker) = &self.marker {
+            line.push_str(marker);
+            if !body.is_empty() {
+                line.push(' ');
+            }
+        }
+        line.push_str(body);
+        line.push_str(&self.reactions);
+        line
+    }
+
     /// The stretch of this row's body from `start`, with every placeholder
     /// replaced by the emoji it stood for.
     fn restored(&self, start: usize, segment: &str) -> String {
@@ -124,7 +151,7 @@ fn walk(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
         let Some(rest) = copied.strip_prefix(part) else {
             continue;
         };
-        let line = format!("{}{}", row.header, row.restored(cut, part));
+        let line = row.line(&row.restored(cut, part));
         if rest.is_empty() {
             return Some(vec![line]);
         }
@@ -137,8 +164,8 @@ fn walk(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
 }
 
 /// After a separator, the next contribution is a whole body, or a head of
-/// one that uses the rest up. Messages with nothing to copy sit between and
-/// are skipped.
+/// one that uses the rest up. A message with no text between two that
+/// contribute was swept over too: its kind is said on a line of its own.
 fn follow(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
     let remaining = copied
         .strip_prefix("\n\n")
@@ -146,24 +173,26 @@ fn follow(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
     if remaining.is_empty() {
         return None;
     }
+    let mut passed: Vec<String> = Vec::new();
     for (skipped, row) in rows.iter().enumerate() {
         if row.body.is_empty() {
+            if row.marker.is_some() {
+                passed.push(row.line(""));
+            }
             continue;
         }
         // The rest of the copy is the head of this body: the last message.
         if row.body.starts_with(remaining) {
-            return Some(vec![format!(
-                "{}{}",
-                row.header,
-                row.restored(0, remaining)
-            )]);
+            passed.push(row.line(&row.restored(0, remaining)));
+            return Some(passed);
         }
         // The whole body, with more after it.
         if let Some(rest) = remaining.strip_prefix(row.body.as_str())
-            && let Some(mut tail) = follow(rest, &rows[skipped + 1..])
+            && let Some(tail) = follow(rest, &rows[skipped + 1..])
         {
-            tail.insert(0, format!("{}{}", row.header, row.restored(0, &row.body)));
-            return Some(tail);
+            passed.push(row.line(&row.restored(0, &row.body)));
+            passed.extend(tail);
+            return Some(passed);
         }
     }
     None
@@ -182,6 +211,7 @@ mod tests {
                 .filter(|&c| c == crate::emoji::PLACEHOLDER)
                 .map(|_| "🎉".to_owned())
                 .collect(),
+            ..Default::default()
         }
     }
 
@@ -234,6 +264,7 @@ mod tests {
             header: "[9:00, 1/2/2026] Ada: ".to_owned(),
             body: format!("well {placeholder} done {placeholder}"),
             placements: vec!["🎂".to_owned(), "🎈".to_owned()],
+            ..Default::default()
         }];
         // Within the one message: emoji restored, no header.
         assert_eq!(
@@ -252,6 +283,7 @@ mod tests {
             header: "[9:01, 1/2/2026] Ada: ".to_owned(),
             body: "and again".to_owned(),
             placements: Vec::new(),
+            ..Default::default()
         });
         assert_eq!(
             refine(&format!("done {placeholder}\nand again"), &both).as_deref(),
@@ -260,16 +292,45 @@ mod tests {
     }
 
     #[test]
-    fn a_message_with_no_text_sits_silently_between() {
+    fn a_swept_over_picture_is_named_and_an_unknown_stays_silent() {
+        let mut photo = row("[9:01, 1/2/2026] Ada: ", "");
+        photo.marker = Some("[photo]".to_owned());
         let with_gap = vec![
             row("[9:00, 1/2/2026] Ada: ", "before the picture"),
-            row("[9:01, 1/2/2026] Ada: ", ""),
+            photo,
             row("[9:02, 1/2/2026] Ada: ", "after the picture"),
         ];
         let copied = "the picture\n\nafter the picture";
         assert_eq!(
             annotate(copied, &with_gap).as_deref(),
+            Some(
+                "[9:00, 1/2/2026] Ada: the picture\n[9:01, 1/2/2026] Ada: [photo]\n[9:02, 1/2/2026] Ada: after the picture"
+            )
+        );
+        let silent = vec![
+            row("[9:00, 1/2/2026] Ada: ", "before the picture"),
+            row("[9:01, 1/2/2026] Ada: ", ""),
+            row("[9:02, 1/2/2026] Ada: ", "after the picture"),
+        ];
+        assert_eq!(
+            annotate(copied, &silent).as_deref(),
             Some("[9:00, 1/2/2026] Ada: the picture\n[9:02, 1/2/2026] Ada: after the picture")
+        );
+    }
+
+    #[test]
+    fn reactions_quotes_and_kinds_ride_along() {
+        let mut first = row("[9:00, 1/2/2026] Ada: ", "look at this");
+        first.marker = Some("[photo]".to_owned());
+        first.reactions = " (❤️ You)".to_owned();
+        let mut second = row("[9:05, 1/2/2026] You: ", "lovely");
+        second.quote = Some("(replying to Ada: \"look at this\")".to_owned());
+        let copied = "at this\nlovely";
+        assert_eq!(
+            annotate(copied, &[first, second]).as_deref(),
+            Some(
+                "[9:00, 1/2/2026] Ada: [photo] at this (❤️ You)\n[9:05, 1/2/2026] You: (replying to Ada: \"look at this\") lovely"
+            )
         );
     }
 }
