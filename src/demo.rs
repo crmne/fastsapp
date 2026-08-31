@@ -1272,6 +1272,36 @@ mod tests {
         assert!(app.pending.is_empty(), "sent with the caption");
     }
 
+    #[test]
+    fn widths_probe() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        for id in ["ada-doc", "you-voice", "ada-reply", "ada-link", "ada-photo"] {
+            let key = crate::ui::conversation::bubble_id(&chat, id).with("rect");
+            if let Some(rect) = ctx.data(|data| data.get_temp::<egui::Rect>(key)) {
+                eprintln!(
+                    "{id}: {:.0} wide, {:.0}..{:.0}",
+                    rect.width(),
+                    rect.left(),
+                    rect.right()
+                );
+            }
+            let card = crate::ui::conversation::bubble_id(&chat, id).with("card");
+            if let Some(rect) = ctx.data(|data| data.get_temp::<egui::Rect>(card)) {
+                eprintln!(
+                    "  card: {:.0} wide, {:.0}..{:.0}",
+                    rect.width(),
+                    rect.left(),
+                    rect.right()
+                );
+            }
+        }
+    }
+
     /// Part of a message can be swept with the pointer and copied, like any
     /// text on a page.
     #[test]
@@ -1379,7 +1409,14 @@ mod tests {
         };
         // Out of the window entirely, below it, plus a spurious PointerGone
         // like the platform sends on leaving.
-        let below = egui::pos2(from.x, 1100.0);
+        let centre = app
+            .selection_view
+            .lock()
+            .expect("the view rect")
+            .expect("the conversation was drawn")
+            .center()
+            .x;
+        let below = egui::pos2(centre, 1100.0);
         let mut frames: Vec<Vec<egui::Event>> = vec![
             vec![egui::Event::PointerMoved(from), press(from, true)],
             vec![egui::Event::PointerMoved(below), egui::Event::PointerGone],

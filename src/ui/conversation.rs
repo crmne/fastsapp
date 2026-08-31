@@ -1282,11 +1282,27 @@ fn bubble_frame(
                     },
                 );
             }
-            if let Some(quoted) = &message.quoted {
-                quote_block(ui, view, message, quoted, actions);
-            }
-            let reserve = footer_width(ui, message);
-            let slot = content(ui, view, message, max_width - 20.0, reserve, actions);
+            // A quote strip and the reply under it anchor to the same left
+            // edge and share their width, as on the phone; an own bubble
+            // would otherwise right-align the strip, left-align the body,
+            // and stretch to their offset union. The footer stays outside,
+            // keeping its right edge.
+            // The strip and the reply share one width, the wider of the
+            // two (capped), the way the phone draws them; the reply's own
+            // row spans that full width with its text at the left, so no
+            // alignment fight can arise (see rich_body).
+            let slot = if let Some(quoted) = &message.quoted {
+                let available = ui.available_width();
+                let strip = quote_strip_width(ui, view, quoted);
+                let hint = quoted_content_width(ui, view, message, available);
+                let width = strip.max(hint).clamp(140.0, available.min(420.0));
+                quote_block(ui, view, message, quoted, width, actions);
+                let reserve = footer_width(ui, message);
+                content(ui, view, message, width, reserve, actions)
+            } else {
+                let reserve = footer_width(ui, message);
+                content(ui, view, message, max_width - 20.0, reserve, actions)
+            };
             footer(ui, &palette, message, slot);
         });
     ui.ctx()
@@ -1338,15 +1354,125 @@ fn bubble_frame(
     inner.response
 }
 
+/// How wide the message's own content will draw, so the quote strip above
+/// it can span the bubble the way WhatsApp draws it: as wide as the wider
+/// of the two, never a floating box narrower than the reply.
+fn quoted_content_width(ui: &egui::Ui, view: &View<'_>, message: &Message, available: f32) -> f32 {
+    let palette = view.palette;
+    let text = match &message.content {
+        Content::Text { text, .. } => Some(text),
+        Content::Image {
+            caption: Some(caption),
+            ..
+        }
+        | Content::Video {
+            caption: Some(caption),
+            ..
+        }
+        | Content::Document {
+            caption: Some(caption),
+            ..
+        } => Some(caption),
+        _ => None,
+    };
+    match (&message.content, text) {
+        (_, Some(text)) => {
+            let style = markup::Style {
+                size: BODY_SIZE,
+                color: palette.text,
+                secondary: palette.secondary,
+                link: palette.link,
+                mention: palette.accent,
+            };
+            let laid = markup::layout(ui, text, &mentions_of(view, message), &style, available);
+            let widest = laid
+                .galley
+                .rows
+                .iter()
+                .map(|row| row.row.size.x)
+                .fold(0.0, f32::max);
+            // The bubble also holds the clock beside the last line when it
+            // fits; the strip has to count that room too, or it comes up
+            // short by exactly the clock.
+            let last = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
+            let reserve = footer_width(ui, message);
+            if last + 8.0 + reserve <= available {
+                widest.max(last + 8.0 + reserve)
+            } else {
+                widest
+            }
+        }
+        (Content::Audio { .. }, None) => available.clamp(220.0, 320.0),
+        (Content::Document { .. }, None) => available.clamp(200.0, 360.0),
+        _ => available.min(300.0),
+    }
+}
+
+/// The width a link message's bubble settles on: its own text rows (with
+/// the clock beside the last, when it fits), within the card's bounds.
+fn link_bubble_width(
+    ui: &egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    text: &str,
+    max: f32,
+    reserve: f32,
+) -> f32 {
+    let palette = view.palette;
+    let style = markup::Style {
+        size: BODY_SIZE,
+        color: palette.text,
+        secondary: palette.secondary,
+        link: palette.link,
+        mention: palette.accent,
+    };
+    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, max);
+    let widest = laid
+        .galley
+        .rows
+        .iter()
+        .map(|row| row.row.size.x)
+        .fold(0.0, f32::max);
+    let last = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
+    let with_clock = if last + 8.0 + reserve <= max {
+        widest.max(last + 8.0 + reserve)
+    } else {
+        widest
+    };
+    with_clock.clamp(200.0, max)
+}
+
+/// The width the quote strip's two lines ask for by themselves.
+fn quote_strip_width(ui: &egui::Ui, view: &View<'_>, quoted: &crate::model::Quoted) -> f32 {
+    let palette = view.palette;
+    let who = if view.me == Some(quoted.sender.as_str()) {
+        "You".to_owned()
+    } else {
+        (view.names_or)(&quoted.sender, quoted.sender_name.as_deref())
+    };
+    let summary = markup::plain(&quoted.summary, &quote_mentions(view, quoted));
+    let name_width = ui
+        .painter()
+        .layout_no_wrap(who, theme::semibold(12.5), palette.accent)
+        .size()
+        .x;
+    let summary_width = ui
+        .painter()
+        .layout_no_wrap(summary, theme::regular(12.5), palette.secondary)
+        .size()
+        .x;
+    name_width.max(summary_width) + 17.0
+}
+
 fn quote_block(
     ui: &mut egui::Ui,
     view: &View<'_>,
     message: &Message,
     quoted: &crate::model::Quoted,
+    width: f32,
     actions: &mut Vec<Action>,
 ) {
     let palette = view.palette;
-    let own = message.from_me;
     let who = if view.me == Some(quoted.sender.as_str()) {
         "You".to_owned()
     } else {
@@ -1363,7 +1489,7 @@ fn quote_block(
             bottom: 5,
         })
         .show(ui, |ui| {
-            ui.set_width(ui.available_width().min(420.0));
+            ui.set_width(width);
             let bar = |ui: &mut egui::Ui| {
                 let (bar, _) = ui.allocate_exact_size(vec2(3.0, 30.0), Sense::hover());
                 ui.painter().rect_filled(bar, 2.0, palette.accent);
@@ -1376,7 +1502,12 @@ fn quote_block(
                     widgets::rich_text(ui, &summary, theme::regular(12.5), palette.secondary);
                 });
             };
-            mirrored_row(ui, own, bar, body);
+            // The bar sits at the strip's left in both bubble kinds; own
+            // bubbles right-align and would flip a plain horizontal row.
+            ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
+                bar(ui);
+                body(ui);
+            });
         })
         .response;
     let response = ui
@@ -1723,7 +1854,10 @@ fn content(
     match &message.content {
         Content::Text { text, preview } => {
             if let Some(preview) = preview {
-                preview_card(ui, view, message, preview, width, actions);
+                // The card spans the text's width, as the phone draws it:
+                // the words set the bubble, the card dresses it.
+                let card = link_bubble_width(ui, view, message, text, width, reserve);
+                preview_card(ui, view, message, preview, card, actions);
             }
             rich_body(ui, view, message, text, width, Some(reserve), actions)
         }
@@ -1920,10 +2054,31 @@ fn rich_body(
     let size = laid.galley.size();
     let last_row = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
     let inline = reserve.filter(|reserve| last_row + 8.0 + reserve <= width);
-    let allocation = match inline {
+    let mut allocation = match inline {
         Some(reserve) => vec2(size.x.max(last_row + 8.0 + reserve), size.y),
         None => size,
     };
+    if message.quoted.is_some() {
+        // The reply spans the strip's width, text anchored left (the
+        // galley paints from the allocation's start).
+        allocation.x = allocation.x.max(width);
+    } else if matches!(
+        &message.content,
+        Content::Text {
+            preview: Some(_),
+            ..
+        }
+    ) {
+        // Text under a link card spans the card's width the same way.
+        allocation.x = allocation.x.max(link_bubble_width(
+            ui,
+            view,
+            message,
+            text,
+            width,
+            reserve.unwrap_or(0.0),
+        ));
+    }
     // Remembered for the frame: a copy that runs across messages gets
     // each one's clock, date, and writer put back (see `transcript`).
     view.copy_rows
@@ -2450,13 +2605,14 @@ fn attachment(
     actions: &mut Vec<Action>,
 ) {
     let palette = view.palette;
-    let own = message.from_me;
     let response = Frame::new()
         .fill(palette.window.gamma_multiply(0.35))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width().clamp(200.0, 360.0));
+            let card = ui.available_width().clamp(200.0, 360.0);
+            ui.set_width(card);
+
             let disc = |ui: &mut egui::Ui| {
                 let (disc, _) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::hover());
                 ui.painter().circle_filled(
@@ -2480,7 +2636,9 @@ fn attachment(
             let column = |ui: &mut egui::Ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.set_width(ui.available_width() - 34.0);
+                    // The disc, the action icon, and two gaps take 70; the
+                    // words get exactly the rest of the card.
+                    ui.set_width(card - 70.0);
                     widgets::rich_text(ui, title, theme::medium(14.0), palette.text);
                     let detail = match &media.state {
                         MediaState::Failed(error) => format!("{error} · click to retry"),
@@ -2489,17 +2647,18 @@ fn attachment(
                     theme::text(ui, detail, theme::regular(12.0), palette.secondary);
                 });
             };
-            ui.horizontal(|ui| {
-                if own {
-                    action(ui);
-                    column(ui);
+            // A fixed left-to-right row at exactly the card's width: the
+            // flipped row own bubbles get otherwise lets the column ignore
+            // its width and swallow the leftover space.
+            ui.allocate_ui_with_layout(
+                vec2(card, 52.0),
+                Layout::left_to_right(egui::Align::Center),
+                |ui| {
                     disc(ui);
-                } else {
-                    disc(ui);
                     column(ui);
                     action(ui);
-                }
-            });
+                },
+            );
         })
         .response;
     let auto = ui.is_rect_visible(response.rect)
@@ -2513,6 +2672,12 @@ fn attachment(
             message: message.id.clone(),
         });
     }
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            bubble_id(&view.chat.id, &message.id).with("card"),
+            response.rect,
+        );
+    });
     let response = ui
         .interact(
             response.rect,
@@ -2911,9 +3076,40 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                         texture,
                     } => {
                         let handle = texture.get_or_insert_with(|| {
+                            // A huge paste (a full screenshot, say) exceeds
+                            // the GPU's texture side; the thumbnail only
+                            // needs so many pixels anyway.
+                            let image = if *width > 1024 || *height > 1024 {
+                                let scale = 1024.0 / (*width).max(*height) as f32;
+                                let (w, h) = (
+                                    ((*width as f32 * scale) as u32).max(1),
+                                    ((*height as f32 * scale) as u32).max(1),
+                                );
+                                match image::RgbaImage::from_raw(
+                                    *width as u32,
+                                    *height as u32,
+                                    rgba.to_vec(),
+                                ) {
+                                    Some(full) => {
+                                        let small = image::imageops::resize(
+                                            &full,
+                                            w,
+                                            h,
+                                            image::imageops::FilterType::Triangle,
+                                        );
+                                        egui::ColorImage::from_rgba_unmultiplied(
+                                            [w as usize, h as usize],
+                                            &small,
+                                        )
+                                    }
+                                    None => egui::ColorImage::example(),
+                                }
+                            } else {
+                                egui::ColorImage::from_rgba_unmultiplied([*width, *height], rgba)
+                            };
                             ui.ctx().load_texture(
                                 format!("pending-picture-{index}"),
-                                egui::ColorImage::from_rgba_unmultiplied([*width, *height], rgba),
+                                image,
                                 egui::TextureOptions::LINEAR,
                             )
                         });
