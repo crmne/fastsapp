@@ -46,7 +46,7 @@ pub struct Row {
     pub body: String,
     pub placements: Vec<String>,
     /// What kind of message this is, when it is not plain text:
-    /// "[photo]", "[video]", "[document: notes.pdf]", and so on.
+    /// "\[photo\]", "\[video\]", "\[document: notes.pdf\]", and so on.
     pub marker: Option<String>,
     /// The reactions on the message, preformatted: " (❤️ Roberta)".
     pub reactions: String,
