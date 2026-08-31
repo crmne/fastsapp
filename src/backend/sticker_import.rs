@@ -325,12 +325,17 @@ fn write_pack(packs: &Path, title: &str, files: Vec<Vec<u8>>) -> Result<String, 
         .unwrap_or_else(|| title.to_owned()))
 }
 
-/// The picture as WebP: passed through when it already is one, decoded
-/// and re-encoded (capped at 512 a side, the sticker size) when it is a
-/// PNG or JPEG, dropped when it is neither.
+/// The picture as WebP, motion intact: passed through when it already is
+/// one, turned into an animated WebP when it is an APNG or an animated
+/// GIF (Signal ships its moving stickers as APNG, WhatsApp wants WebP),
+/// re-encoded as a still (capped at 512 a side, the sticker size) when
+/// it is any other picture, dropped when it is none.
 fn webp_bytes(bytes: Vec<u8>) -> Option<Vec<u8>> {
     if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         return Some(bytes);
+    }
+    if let Some(frames) = animation_frames(&bytes) {
+        return encode_animated(frames);
     }
     let picture = image::load_from_memory(&bytes).ok()?;
     let picture = if picture.width().max(picture.height()) > 512 {
@@ -349,6 +354,68 @@ fn webp_bytes(bytes: Vec<u8>) -> Option<Vec<u8>> {
         )
         .ok()?;
     Some(out)
+}
+
+/// The frames and their delays in milliseconds, when the bytes hold an
+/// APNG or a GIF with more than one frame.
+fn animation_frames(bytes: &[u8]) -> Option<Vec<(image::RgbaImage, u32)>> {
+    use image::AnimationDecoder;
+    let cursor = std::io::Cursor::new(bytes);
+    let frames = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        let decoder = image::codecs::png::PngDecoder::new(cursor).ok()?;
+        if !decoder.is_apng().ok()? {
+            return None;
+        }
+        decoder.apng().ok()?.into_frames()
+    } else if bytes.starts_with(b"GIF8") {
+        image::codecs::gif::GifDecoder::new(cursor)
+            .ok()?
+            .into_frames()
+    } else {
+        return None;
+    };
+    let frames: Vec<(image::RgbaImage, u32)> = frames
+        .take(200)
+        .filter_map(|frame| frame.ok())
+        .map(|frame| {
+            let (numerator, denominator) = frame.delay().numer_denom_ms();
+            (frame.into_buffer(), numerator / denominator.max(1))
+        })
+        .collect();
+    (frames.len() > 1).then_some(frames)
+}
+
+/// One animated WebP out of the frames, lossy at sticker size, so a
+/// pack's motion survives the trip into WhatsApp's format.
+fn encode_animated(frames: Vec<(image::RgbaImage, u32)>) -> Option<Vec<u8>> {
+    use webp_animation::prelude::*;
+    let (source_width, source_height) = frames.first().map(|(frame, _)| frame.dimensions())?;
+    let scale = (512.0 / f64::from(source_width.max(source_height))).min(1.0);
+    let width = (f64::from(source_width) * scale).round().max(1.0) as u32;
+    let height = (f64::from(source_height) * scale).round().max(1.0) as u32;
+    let mut encoder = Encoder::new_with_options(
+        (width, height),
+        EncoderOptions {
+            encoding_config: Some(EncodingConfig {
+                quality: 80.0,
+                encoding_type: EncodingType::Lossy(LossyEncodingConfig::default()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let mut clock = 0i32;
+    for (frame, delay) in frames {
+        let frame = if frame.dimensions() == (width, height) {
+            frame
+        } else {
+            image::imageops::resize(&frame, width, height, image::imageops::FilterType::Lanczos3)
+        };
+        encoder.add_frame(frame.as_raw(), clock).ok()?;
+        clock += delay.clamp(10, 10_000) as i32;
+    }
+    Some(encoder.finalize(clock).ok()?.to_vec())
 }
 
 /// A fresh folder for the pack: the title with filesystem-hostile
@@ -488,16 +555,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn an_apng_keeps_its_motion_as_animated_webp() {
+        let mut apng = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut apng, 4, 4);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_animated(2, 0).expect("animated");
+            encoder.set_frame_delay(1, 10).expect("delay");
+            let mut writer = encoder.write_header().expect("header");
+            writer.write_image_data(&[10u8; 4 * 4 * 4]).expect("frame");
+            writer.write_image_data(&[200u8; 4 * 4 * 4]).expect("frame");
+            writer.finish().expect("finishes");
+        }
+        let webp = webp_bytes(apng).expect("converts");
+        let decoder =
+            image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&webp)).expect("is a webp");
+        assert!(decoder.has_animation(), "the motion survives");
+    }
+
+    #[test]
+    fn an_animated_gif_keeps_its_motion_too() {
+        let mut gif = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut gif);
+            let frames = [10u8, 200].map(|shade| {
+                image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(4, 4, image::Rgba([shade, 0, 0, 255])),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(100, 1),
+                )
+            });
+            encoder.encode_frames(frames).expect("encodes");
+        }
+        let webp = webp_bytes(gif).expect("converts");
+        let decoder =
+            image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&webp)).expect("is a webp");
+        assert!(decoder.has_animation(), "the motion survives");
+    }
+
     /// Signal's own example pack (Bandit the Cat, from the protocol
-    /// documentation), against the live CDN.
+    /// documentation), against the live CDN; `FASTSAPP_TEST_PACK` swaps
+    /// in any other signal.art link. Prints how many stickers came out
+    /// animated, for checking a moving pack by hand.
     #[test]
     #[ignore = "network"]
     fn fetches_a_real_pack_from_signal_on_this_machine() {
         let root = std::env::temp_dir().join(format!("fastsapp-signal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let url = "https://signal.art/addstickers/#pack_id=9acc9e8aba563d26a4994e69263e3b25&pack_key=5a6dff3948c28efb9b7aaf93ecc375c69fc316e78077ed26867a14d10a0f6a12";
-        let title = import_signal_pack(url, &root).expect("imports");
-        let files = std::fs::read_dir(root.join(&title)).expect("lists").count();
+        let url = std::env::var("FASTSAPP_TEST_PACK").unwrap_or_else(|_| {
+            "https://signal.art/addstickers/#pack_id=9acc9e8aba563d26a4994e69263e3b25&pack_key=5a6dff3948c28efb9b7aaf93ecc375c69fc316e78077ed26867a14d10a0f6a12"
+                .to_owned()
+        });
+        let title = import_signal_pack(&url, &root).expect("imports");
+        let mut files = 0;
+        let mut moving = 0;
+        for entry in std::fs::read_dir(root.join(&title))
+            .expect("lists")
+            .flatten()
+        {
+            files += 1;
+            let head = std::fs::read(entry.path()).expect("reads");
+            if head[..head.len().min(64)]
+                .windows(4)
+                .any(|window| window == b"ANIM")
+            {
+                moving += 1;
+            }
+        }
+        eprintln!("pack {title:?}: {files} stickers, {moving} of them animated");
         assert!(files > 0, "the pack holds stickers");
         let _ = std::fs::remove_dir_all(root);
     }

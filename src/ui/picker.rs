@@ -574,7 +574,29 @@ fn sticker_grid(
                     if response.hovered() {
                         ui.painter().rect_filled(rect, 8.0, palette.surface_hover);
                     }
-                    sticker_picture(ui, path, rect.shrink(4.0));
+                    let shown = rect.shrink(4.0);
+                    // A moving sticker plays while the pointer rests on it;
+                    // one at a time keeps the decoders unbothered.
+                    let played = response.hovered()
+                        && moves(path)
+                        && match crate::animation::frame(ui.ctx(), path) {
+                            crate::animation::Frame::Ready(texture) => {
+                                let size = texture.size_vec2();
+                                let scale = (shown.width() / size.x).min(shown.height() / size.y);
+                                let fitted = Rect::from_center_size(shown.center(), size * scale);
+                                ui.painter().image(
+                                    texture.id(),
+                                    fitted,
+                                    Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
+                                    egui::Color32::WHITE,
+                                );
+                                true
+                            }
+                            _ => false,
+                        };
+                    if !played {
+                        sticker_picture(ui, path, shown);
+                    }
                 }
                 egui::Popup::context_menu(&response)
                     .width(menu_width)
@@ -602,6 +624,22 @@ fn sticker_grid(
             }
         });
     }
+}
+
+/// Whether the sticker file is an animated WebP, read off its header.
+fn moves(path: &Path) -> bool {
+    let mut head = [0u8; 64];
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(read) = std::io::Read::read(&mut file, &mut head) else {
+        return false;
+    };
+    let head = &head[..read];
+    head.len() >= 12
+        && &head[0..4] == b"RIFF"
+        && &head[8..12] == b"WEBP"
+        && head.windows(4).any(|window| window == b"ANIM")
 }
 
 fn sticker_picture(ui: &egui::Ui, path: &Path, rect: Rect) {

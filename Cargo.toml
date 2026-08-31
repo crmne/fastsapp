@@ -94,6 +94,9 @@ mp4 = "0.14"
 rodio = { version = "0.22", default-features = false, features = ["playback", "recording", "mp3", "mp4", "wav", "vorbis"] }
 opus = "0.4"
 ogg = "0.9"
+# Encoding animated WebP, which image cannot: Signal packs carry their
+# animated stickers as APNG and WhatsApp wants them as animated WebP.
+webp-animation = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The status-notifier tray item, pure Rust over D-Bus.
@@ -113,6 +116,11 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [target.'cfg(windows)'.dependencies]
 # The tray thread's message loop.
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+# Authoring tiny APNGs in the sticker-import tests; already in the tree
+# through image.
+png = "0.18"
 
 [features]
 # Sample data and screenshot flags; never part of a release build.
