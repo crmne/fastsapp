@@ -52,10 +52,12 @@ const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
     ("georgian", '\u{10d0}', "georgian"),
     ("ethiopic", '\u{1200}', "ethiopic"),
     ("cherokee", '\u{13a0}', "cherokee"),
-    // Not scripts, but the styled letters and marks people put in their
-    // names: mathematical alphanumerics (the 𝓯𝓪𝓷𝓬𝔂 alphabets), enclosed
-    // letters, and the loose symbols. Inter draws none of them, and they
-    // showed as boxes wherever a name used them.
+    // Not scripts in daily use here, but the styled letters and marks
+    // people put in their names: the ꧁꧂ ornaments (Javanese, probed by the
+    // ornament itself), mathematical alphanumerics (the 𝓯𝓪𝓷𝓬𝔂 alphabets),
+    // enclosed letters, and the loose symbols. Inter draws none of them,
+    // and they showed as boxes wherever a name used them.
+    ("javanese", '\u{a9c1}', "javanese"),
     ("math", '\u{1d4d0}', "math"),
     ("enclosed", '\u{24b6}', "symbol"),
     ("symbols", '\u{2661}', "symbol"),
