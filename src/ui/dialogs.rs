@@ -230,9 +230,14 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let has_chat = app.chat(id).is_some();
     let name = app.chat_title(&chat);
     title(ui, app, if chat.is_group() { "Group" } else { "Contact" });
+    // The card follows the window: the photo takes about a third of its
+    // height and the member list gives rows up, so a small window still
+    // holds the whole card.
+    let window = ui.ctx().content_rect().height();
+    let photo = (window * 0.34).clamp(120.0, 240.0);
     let picture = app.avatar_full(id).or_else(|| app.avatar(id));
     ui.vertical_centered(|ui| {
-        super::widgets::avatar(ui, &palette, &name, id, 200.0, picture.as_deref());
+        super::widgets::avatar(ui, &palette, &name, id, photo, picture.as_deref());
         ui.add_space(6.0);
         super::widgets::selectable_rich_text(ui, &name, theme::bold(19.0), palette.text);
         if let Some(phone) = chat.phone() {
@@ -276,10 +281,13 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
         ui.add_space(4.0);
         // One row each, in a list that scrolls: a group can have thousands.
         let row_height = 30.0;
+        let rows = ((window - photo - 300.0) / row_height)
+            .floor()
+            .clamp(2.0, 8.0);
         let mut open = None;
         egui::ScrollArea::vertical()
             .id_salt("members")
-            .max_height(row_height * 8.0)
+            .max_height(row_height * rows)
             .auto_shrink([false, true])
             .show_rows(ui, row_height, members.len(), |ui, range| {
                 ui.spacing_mut().item_spacing.y = 0.0;

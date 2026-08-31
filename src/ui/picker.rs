@@ -74,15 +74,17 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 });
         });
     // A click anywhere else closes it, unless it is the button that opens
-    // it, which toggles on its own.
+    // it, which toggles on its own, or a sticker tile's menu hanging past
+    // the panel's edge.
     let rect = area.response.rect;
-    let clicked_outside = ctx.input(|input| {
-        input.pointer.any_pressed()
-            && input
-                .pointer
-                .interact_pos()
-                .is_some_and(|pos| !rect.contains(pos) && !anchor.contains(pos))
-    });
+    let clicked_outside = !egui::Popup::is_any_open(ctx)
+        && ctx.input(|input| {
+            input.pointer.any_pressed()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| !rect.contains(pos) && !anchor.contains(pos))
+        });
     if clicked_outside {
         app.actions.push(Action::ClosePicker);
     }
@@ -408,10 +410,18 @@ fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
 // --- stickers -----------------------------------------------------------
 
+/// What a click or the right-click menu asked of a sticker tile.
+#[derive(Default)]
+struct StickerChoices {
+    send: Option<std::path::PathBuf>,
+    save: Option<std::path::PathBuf>,
+    forget: Option<std::path::PathBuf>,
+}
+
 fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     ui.add_space(4.0);
-    theme::text(ui, "Recent", theme::semibold(12.5), palette.secondary);
-    if app.stickers.is_empty() {
+    if app.stickers.is_empty() && app.stickers_saved.is_empty() {
+        theme::text(ui, "Recent", theme::semibold(12.5), palette.secondary);
         ui.add_space(20.0);
         ui.vertical_centered(|ui| {
             theme::paragraph(
@@ -419,7 +429,7 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 if app.stickers_pending {
                     "Fetching your stickers…"
                 } else {
-                    "The stickers you have sent lately, and those you receive, show up here."
+                    "The stickers you have sent lately, and those you receive, show up here. Right-click one (or a sticker in a chat) to keep it."
                 },
                 theme::regular(13.0),
                 palette.secondary,
@@ -427,39 +437,82 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         });
         return;
     }
-    let stickers = app.stickers.clone();
-    let columns = 5;
-    let gap = 6.0;
-    let cell = (ui.available_width() - gap * (columns as f32 - 1.0)) / columns as f32;
-    let mut picked: Option<std::path::PathBuf> = None;
+    let saved = app.stickers_saved.clone();
+    let recent = app.stickers.clone();
+    let mut choices = StickerChoices::default();
     egui::ScrollArea::vertical()
         .id_salt("sticker-grid")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(gap, gap);
-            for row in stickers.chunks(columns) {
-                ui.horizontal(|ui| {
-                    for path in row {
-                        let (rect, response) =
-                            ui.allocate_exact_size(Vec2::splat(cell), Sense::click());
-                        if ui.is_rect_visible(rect) {
-                            if response.hovered() {
-                                ui.painter().rect_filled(rect, 8.0, palette.surface_hover);
-                            }
-                            sticker_picture(ui, path, rect.shrink(4.0));
-                        }
-                        if response
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .clicked()
-                        {
-                            picked = Some(path.clone());
-                        }
-                    }
-                });
+            if !saved.is_empty() {
+                theme::text(ui, "Saved", theme::semibold(12.5), palette.secondary);
+                sticker_grid(ui, palette, &saved, true, &mut choices);
+                ui.add_space(8.0);
+            }
+            if !recent.is_empty() {
+                theme::text(ui, "Recent", theme::semibold(12.5), palette.secondary);
+                sticker_grid(ui, palette, &recent, false, &mut choices);
             }
         });
-    if let Some(path) = picked {
+    if let Some(path) = choices.send {
         app.actions.push(Action::SendSticker(path));
+    }
+    if let Some(path) = choices.save {
+        app.actions.push(Action::SaveSticker(path));
+    }
+    if let Some(path) = choices.forget {
+        app.actions.push(Action::ForgetSticker(path));
+    }
+}
+
+/// One section's tiles: click sends, right-click keeps or lets go.
+fn sticker_grid(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    stickers: &[std::path::PathBuf],
+    saved: bool,
+    choices: &mut StickerChoices,
+) {
+    let columns = 5;
+    let gap = 6.0;
+    let cell = (ui.available_width() - gap * (columns as f32 - 1.0)) / columns as f32;
+    ui.spacing_mut().item_spacing = vec2(gap, gap);
+    let menu_width = widgets::menu_width(ui, &["Remove from saved"], true);
+    for row in stickers.chunks(columns) {
+        ui.horizontal(|ui| {
+            for path in row {
+                let (rect, response) = ui.allocate_exact_size(Vec2::splat(cell), Sense::click());
+                if ui.is_rect_visible(rect) {
+                    if response.hovered() {
+                        ui.painter().rect_filled(rect, 8.0, palette.surface_hover);
+                    }
+                    sticker_picture(ui, path, rect.shrink(4.0));
+                }
+                egui::Popup::context_menu(&response)
+                    .width(menu_width)
+                    .frame(widgets::menu_frame(palette))
+                    .show(|ui| {
+                        if saved {
+                            if widgets::menu_item(ui, palette, Some(Icon::X), "Remove from saved") {
+                                choices.forget = Some(path.clone());
+                            }
+                        } else if widgets::menu_item(
+                            ui,
+                            palette,
+                            Some(Icon::Sticker),
+                            "Save sticker",
+                        ) {
+                            choices.save = Some(path.clone());
+                        }
+                    });
+                if response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    choices.send = Some(path.clone());
+                }
+            }
+        });
     }
 }
 

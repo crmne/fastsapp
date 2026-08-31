@@ -121,6 +121,12 @@ impl AppDirs {
         self.cache.join("stickers")
     }
 
+    /// Stickers the user chose to keep, by content hash. User data, not a
+    /// cache: saving copies the file here so it outlives any cleanup.
+    pub fn saved_sticker_dir(&self) -> PathBuf {
+        self.state.join("stickers")
+    }
+
     /// Where a chat's or person's picture is kept, once fetched; `full`
     /// for the large one an info dialog shows.
     pub fn avatar_file(&self, id: &str, full: bool) -> PathBuf {

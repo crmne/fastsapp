@@ -164,6 +164,14 @@ pub enum Command {
         chat: ChatId,
         path: PathBuf,
     },
+    /// Copy a sticker into the saved collection.
+    SaveSticker {
+        path: PathBuf,
+    },
+    /// Delete a sticker from the saved collection.
+    ForgetSticker {
+        path: PathBuf,
+    },
     /// Fetch a GIF from the web and send it as WhatsApp does, a short
     /// looping video.
     SendGif {
@@ -321,8 +329,12 @@ pub enum Event {
         query: String,
         results: Result<Vec<Gif>, GifError>,
     },
-    /// Sticker files seen lately, newest first.
-    Stickers(Vec<PathBuf>),
+    /// The picker's stickers: the kept collection, then the ones seen
+    /// lately, each newest first.
+    Stickers {
+        saved: Vec<PathBuf>,
+        recent: Vec<PathBuf>,
+    },
     Media {
         chat: ChatId,
         message: String,

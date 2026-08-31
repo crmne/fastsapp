@@ -1926,6 +1926,19 @@ impl Worker {
             } => self.send_pasted_image(chat, width, height, rgba, caption),
             Command::Outbound { chat, row, raw } => self.outbound(chat, *row, raw),
             Command::SendSticker { chat, path } => self.send_sticker(chat, path),
+            Command::SaveSticker { path } => match self.save_sticker(&path) {
+                Ok(()) => self.emit_stickers(),
+                Err(error) => self.emit(Event::Error(format!("Sticker not saved: {error}"))),
+            },
+            Command::ForgetSticker { path } => {
+                // Only files of the saved collection; the path came from
+                // the picker but stays checked anyway.
+                if path.starts_with(self.dirs.saved_sticker_dir())
+                    && std::fs::remove_file(&path).is_ok()
+                {
+                    self.emit_stickers();
+                }
+            }
             Command::SendVoice {
                 chat,
                 samples,
@@ -2595,9 +2608,53 @@ impl Worker {
             Err(error) => log::warn!("could not list stickers: {error}"),
         }
         list.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
-        self.emit(Event::Stickers(
-            list.into_iter().map(|(_, path)| path).collect(),
-        ));
+        self.emit(Event::Stickers {
+            saved: self.saved_stickers(),
+            recent: list.into_iter().map(|(_, path)| path).collect(),
+        });
+    }
+
+    /// The kept collection: the files of the saved directory, newest
+    /// save first.
+    fn saved_stickers(&self) -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(self.dirs.saved_sticker_dir()) else {
+            return Vec::new();
+        };
+        let mut saved: Vec<(std::time::SystemTime, PathBuf)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                path.extension()
+                    .is_some_and(|extension| extension == "webp")
+                    .then(|| {
+                        let when = entry
+                            .metadata()
+                            .and_then(|metadata| metadata.modified())
+                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        (when, path)
+                    })
+            })
+            .collect();
+        saved.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
+        saved.into_iter().map(|(_, path)| path).collect()
+    }
+
+    /// Copies a sticker file into the saved directory, named by its
+    /// content, so saving the same sticker twice keeps one copy.
+    fn save_sticker(&self, path: &Path) -> Result<(), String> {
+        use sha2::{Digest, Sha256};
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        let hash: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let dir = self.dirs.saved_sticker_dir();
+        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        let target = dir.join(format!("{hash}.webp"));
+        if !target.exists() {
+            std::fs::write(&target, &bytes).map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     fn avatar_file(&self, id: &str, full: bool) -> PathBuf {

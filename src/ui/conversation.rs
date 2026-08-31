@@ -1855,6 +1855,12 @@ fn context_menu(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: 
     if widgets::menu_item(ui, &palette, Some(Icon::EyeOff), "Delete for me") {
         actions.push(Action::DeleteForMe(message.id.clone()));
     }
+    if let Content::Sticker { media, .. } = &message.content
+        && let Some(path) = &media.path
+        && widgets::menu_item(ui, &palette, Some(Icon::Sticker), "Save sticker")
+    {
+        actions.push(Action::SaveSticker(path.clone()));
+    }
     if let Some(media) = message.content.media() {
         match &media.path {
             Some(path) => {

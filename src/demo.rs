@@ -952,6 +952,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "stickers" => {
                 app.picker = Some(crate::model::PickerTab::Stickers);
                 let (_, sticker) = sample_files(app);
+                app.stickers_saved = vec![sticker.clone(); 3];
                 app.stickers = vec![sticker; 7];
             }
             "gifs" => {
@@ -1636,6 +1637,11 @@ mod tests {
         let ctx = egui::Context::default();
         app.attach(&ctx);
         render(&mut app, &ctx);
+        // The sample pictures decode on egui's loader threads; one landing
+        // mid-sweep costs the frame a pass and with it the selection's
+        // extension, so let them settle before the drag (this test flaked
+        // for months without the pause).
+        std::thread::sleep(std::time::Duration::from_millis(300));
         render(&mut app, &ctx);
         let chat = sample_ids()[0].to_owned();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));

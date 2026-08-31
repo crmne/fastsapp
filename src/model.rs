@@ -523,6 +523,11 @@ pub enum Action {
     /// Put an emoji into the composer where the cursor is.
     InsertEmoji(String),
     SendSticker(PathBuf),
+    /// Keep a copy of a sticker seen in a chat, for the picker's Saved
+    /// row.
+    SaveSticker(PathBuf),
+    /// Take a sticker out of the Saved row again.
+    ForgetSticker(PathBuf),
     /// Look GIFs up; an empty query lists what is trending.
     SearchGifs(String),
     SendGif(Gif),

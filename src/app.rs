@@ -188,6 +188,8 @@ pub struct App {
     pub gif_pending: bool,
     pub gif_error: Option<GifError>,
     pub stickers: Vec<PathBuf>,
+    /// The stickers the user chose to keep, newest save first.
+    pub stickers_saved: Vec<PathBuf>,
     /// The sticker list was asked for and has not come back yet.
     pub stickers_pending: bool,
     scroll_lock: Option<(ScrollAxis, Instant)>,
@@ -349,6 +351,7 @@ impl App {
             gif_pending: false,
             gif_error: None,
             stickers: Vec::new(),
+            stickers_saved: Vec::new(),
             stickers_pending: false,
             scroll_lock: None,
             scroll_from_trackpad: false,
@@ -1012,8 +1015,9 @@ impl App {
                         }
                     }
                 }
-                Event::Stickers(stickers) => {
-                    self.stickers = stickers;
+                Event::Stickers { saved, recent } => {
+                    self.stickers_saved = saved;
+                    self.stickers = recent;
                     self.stickers_pending = false;
                 }
                 Event::MessageDeleted { chat, id } => {
@@ -1624,7 +1628,8 @@ impl App {
                     self.picker_search.clear();
                     self.picker_focus = tab == PickerTab::Emoji;
                     if tab == PickerTab::Stickers {
-                        self.stickers_pending = self.stickers.is_empty();
+                        self.stickers_pending =
+                            self.stickers.is_empty() && self.stickers_saved.is_empty();
                         self.backend.send(Command::RecentStickers);
                     }
                     if tab == PickerTab::Gifs && self.gif_results.is_empty() {
@@ -1640,6 +1645,13 @@ impl App {
                 self.settings.recent_emoji.truncate(36);
                 self.mark_settings_dirty();
                 self.focus_composer = true;
+            }
+            Action::SaveSticker(path) => {
+                self.backend.send(Command::SaveSticker { path });
+                self.toast("Sticker saved");
+            }
+            Action::ForgetSticker(path) => {
+                self.backend.send(Command::ForgetSticker { path });
             }
             Action::SendSticker(path) => {
                 if let Some(chat) = self.open_chat.clone() {
