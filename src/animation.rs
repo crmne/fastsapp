@@ -241,23 +241,17 @@ fn decode(path: &Path) -> Option<Decoded> {
     }
 }
 
-/// Animated WebP and GIF, through the `image` crate.
+/// Animated GIF through the `image` crate; WebP goes to libwebp.
 fn decode_image(path: &Path, extension: &str) -> Option<Decoded> {
     use image::AnimationDecoder;
+    if extension != "gif" {
+        return decode_webp(path);
+    }
     let file = std::fs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
-    let frames = match extension {
-        "gif" => image::codecs::gif::GifDecoder::new(reader)
-            .ok()?
-            .into_frames(),
-        _ => {
-            let decoder = image::codecs::webp::WebPDecoder::new(reader).ok()?;
-            if !decoder.has_animation() {
-                return None;
-            }
-            decoder.into_frames()
-        }
-    };
+    let frames = image::codecs::gif::GifDecoder::new(reader)
+        .ok()?
+        .into_frames();
     let mut decoded = Vec::new();
     for frame in frames.take(MAX_FRAMES) {
         let frame = frame.ok()?;
@@ -267,6 +261,26 @@ fn decode_image(path: &Path, extension: &str) -> Option<Decoded> {
         decoded.push((to_color_image(&image), delay));
     }
     Some(Decoded { frames: decoded })
+}
+
+/// Animated WebP through libwebp itself. The `image` crate's WebP
+/// decoder composites frames without disposing the ones before, so a
+/// moving subject left its earlier selves behind; libwebp hands back
+/// each full canvas. Its timestamps mark where a frame ends.
+fn decode_webp(path: &Path) -> Option<Decoded> {
+    let bytes = std::fs::read(path).ok()?;
+    let decoder = webp_animation::Decoder::new(&bytes).ok()?;
+    let (width, height) = decoder.dimensions();
+    let mut decoded = Vec::new();
+    let mut previous = 0i64;
+    for frame in decoder.into_iter().take(MAX_FRAMES) {
+        let image = image::RgbaImage::from_raw(width, height, frame.data().to_vec())?;
+        let delay = (i64::from(frame.timestamp()) - previous).max(20) as u64;
+        previous = i64::from(frame.timestamp());
+        decoded.push((to_color_image(&image), Duration::from_millis(delay)));
+    }
+    // A single frame is a still; the plain picture path draws it.
+    (decoded.len() > 1).then_some(Decoded { frames: decoded })
 }
 
 fn to_color_image(image: &image::RgbaImage) -> ColorImage {
@@ -473,6 +487,45 @@ fn decode_with_ffmpeg(path: &Path) -> Option<Decoded> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug the picker showed: a moving subject left its earlier
+    /// selves behind, because the image crate's WebP decoder blends
+    /// frames without disposing the ones before.
+    #[test]
+    fn a_moving_subject_leaves_no_trace_behind() {
+        use webp_animation::prelude::*;
+        let side = 64u32;
+        let mut square = |x0: u32, y0: u32, color: [u8; 4]| {
+            let mut frame = vec![0u8; (side * side * 4) as usize];
+            for y in y0..y0 + 16 {
+                for x in x0..x0 + 16 {
+                    let at = ((y * side + x) * 4) as usize;
+                    frame[at..at + 4].copy_from_slice(&color);
+                }
+            }
+            frame
+        };
+        let mut encoder = Encoder::new((side, side)).expect("encoder");
+        encoder
+            .add_frame(&square(0, 0, [255, 0, 0, 255]), 0)
+            .expect("frame");
+        encoder
+            .add_frame(&square(40, 40, [0, 255, 0, 255]), 100)
+            .expect("frame");
+        let webp = encoder.finalize(200).expect("finalizes");
+        let dir = std::env::temp_dir().join(format!("fastsapp-ghost-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("moving.webp");
+        std::fs::write(&path, &webp).expect("writes");
+        let decoded = decode(&path).expect("decodes");
+        assert_eq!(decoded.frames.len(), 2);
+        let second = &decoded.frames[1].0;
+        let old = second.pixels[8 * second.width() + 8];
+        assert_eq!(old.a(), 0, "the first frame's square is gone: {old:?}");
+        let new = second.pixels[48 * second.width() + 48];
+        assert!(new.a() > 200, "the second frame's square shows: {new:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn animated_webp_decodes_into_frames() {

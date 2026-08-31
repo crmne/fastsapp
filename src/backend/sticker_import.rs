@@ -630,6 +630,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// The converted file itself must hold clean frames: libwebp (the
+    /// reference decoder) sees the square's old position transparent
+    /// once it has moved on.
+    #[test]
+    fn a_moving_square_converts_without_a_trace() {
+        let side = 64u32;
+        let mut apng = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut apng, side, side);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_animated(2, 0).expect("animated");
+            encoder.set_frame_delay(1, 10).expect("delay");
+            let mut writer = encoder.write_header().expect("header");
+            let mut frame1 = vec![0u8; (side * side * 4) as usize];
+            let mut frame2 = frame1.clone();
+            for y in 0..16u32 {
+                for x in 0..16u32 {
+                    let a = ((y * side + x) * 4) as usize;
+                    frame1[a..a + 4].copy_from_slice(&[255, 0, 0, 255]);
+                    let b = (((y + 40) * side + x + 40) * 4) as usize;
+                    frame2[b..b + 4].copy_from_slice(&[0, 255, 0, 255]);
+                }
+            }
+            writer.write_image_data(&frame1).expect("frame");
+            writer.write_image_data(&frame2).expect("frame");
+            writer.finish().expect("finishes");
+        }
+        let webp = webp_bytes(apng).expect("converts");
+        let frames: Vec<_> = webp_animation::Decoder::new(&webp)
+            .expect("decodes")
+            .into_iter()
+            .collect();
+        assert_eq!(frames.len(), 2);
+        let at = |frame: &webp_animation::Frame, x: u32, y: u32| {
+            let p = ((y * side + x) * 4) as usize;
+            frame.data()[p + 3]
+        };
+        assert_eq!(at(&frames[1], 8, 8), 0, "the old square is gone");
+        assert!(at(&frames[1], 48, 48) > 200, "the new square shows");
+        assert_eq!(at(&frames[0], 48, 48), 0, "frame one starts clean");
+    }
+
     fn tiny_png() -> Vec<u8> {
         use image::ImageEncoder;
         let mut bytes = Vec::new();
