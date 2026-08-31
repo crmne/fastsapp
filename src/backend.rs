@@ -100,6 +100,9 @@ pub enum Command {
     /// for again.
     GroupInfoFailed {
         chat: ChatId,
+        /// The server's refusal is final (not a member any more, say):
+        /// asking again will not change it.
+        permanent: bool,
     },
     EditText {
         chat: ChatId,

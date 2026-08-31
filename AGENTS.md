@@ -63,6 +63,12 @@ protocol. These notes are for coding agents and new contributors.
   runs after the selection plugin's own end-of-pass flush (plugins run
   in registration order and the built-ins come first, so end-pass
   callbacks fire too early).
+- Group names and members come from `groups().get_metadata`, asked one
+  turn at a time (two per 5 s tick, `pump_group_info`): dozens of unnamed
+  groups arrive with history sync and a burst of queries hits the
+  server's rate limit, which once left groups called "Group" forever.
+  Failures back off (30 s doubling, seven tries); item-not-found,
+  forbidden and not-authorized are final and stop the asking.
 - A download that answers 403/404/410 goes through
   `client.media_reupload().request(..)` (a server-error receipt; WhatsApp
   has the phone re-upload and answers with a fresh `direct_path`) and is

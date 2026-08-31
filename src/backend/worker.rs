@@ -158,6 +158,9 @@ pub async fn run(
         syncing: false,
         sync_deadline: None,
         group_info_requested: HashSet::new(),
+        group_info_queue: std::collections::VecDeque::new(),
+        group_info_tries: HashMap::new(),
+        group_info_retry: Vec::new(),
         presence_subscribed: HashSet::new(),
         pending_older: HashMap::new(),
         older_warned: HashSet::new(),
@@ -194,6 +197,7 @@ pub async fn run(
             _ = tick.tick() => {
                 worker.expire_older_requests();
                 worker.retry_avatars();
+                worker.pump_group_info();
             }
         }
     }
@@ -222,7 +226,15 @@ struct Worker {
     qr: Option<String>,
     syncing: bool,
     sync_deadline: Option<Instant>,
+    /// Groups queued or asked about already; one query goes out per turn,
+    /// since a burst at sync time runs into the server's rate limit.
     group_info_requested: HashSet<String>,
+    /// Groups waiting for their turn, front first.
+    group_info_queue: std::collections::VecDeque<String>,
+    /// Failed queries: how often each was tried, for the backoff.
+    group_info_tries: HashMap<String, u32>,
+    /// When to ask again about groups whose query failed.
+    group_info_retry: Vec<(Instant, String)>,
     presence_subscribed: HashSet<String>,
     /// Requests for older messages the phone has not answered yet, by the
     /// chat asked about: when it was asked and what its oldest message was.
@@ -726,7 +738,11 @@ impl Worker {
         }
     }
 
-    /// Asks WhatsApp about a group once, or again when `force`.
+    /// Puts a group in line to be asked about, or at the head when `force`.
+    /// One query goes out per turn (`pump_group_info`): dozens of unnamed
+    /// groups arrive together with the history, and a burst of metadata
+    /// queries runs into the server's rate limit, which is how groups were
+    /// left saying "Group".
     fn request_group_info(&mut self, id: &str, force: bool) {
         if force {
             self.group_info_requested.remove(id);
@@ -741,8 +757,70 @@ impl Worker {
         if !self.group_info_requested.insert(id.to_owned()) {
             return;
         }
+        if force {
+            self.group_info_queue.push_front(id.to_owned());
+        } else {
+            self.group_info_queue.push_back(id.to_owned());
+        }
+    }
+
+    /// How long a group whose query failed waits before its next turn.
+    fn group_retry_delay(tries: u32) -> Duration {
+        Duration::from_secs(30 * 2u64.pow(tries.saturating_sub(1).min(5)))
+            .min(Duration::from_secs(600))
+    }
+
+    /// Sends the next group metadata queries, a couple per tick, and puts
+    /// failed ones back in line when their wait is over.
+    fn pump_group_info(&mut self) {
+        let now = Instant::now();
+        let due: Vec<String> = {
+            let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.group_info_retry)
+                .into_iter()
+                .partition(|(at, _)| *at <= now);
+            self.group_info_retry = later;
+            due.into_iter().map(|(_, id)| id).collect()
+        };
+        for id in due {
+            if self.group_info_requested.insert(id.clone()) {
+                self.group_info_queue.push_back(id);
+            }
+        }
+        for _ in 0..2 {
+            let Some(id) = self.group_info_queue.pop_front() else {
+                return;
+            };
+            self.query_group_info(&id);
+        }
+    }
+
+    /// A metadata query failed: wait longer each time, or stop when the
+    /// server's refusal was final.
+    fn handle_failed_group(&mut self, chat: String, permanent: bool) {
+        self.group_info_requested.remove(&chat);
+        if permanent {
+            self.group_info_tries.remove(&chat);
+        } else {
+            let tries = self.group_info_tries.entry(chat.clone()).or_insert(0);
+            *tries += 1;
+            if *tries <= 7 {
+                self.group_info_retry
+                    .push((Instant::now() + Self::group_retry_delay(*tries), chat));
+            }
+        }
+    }
+
+    /// Asks WhatsApp about one group, now.
+    fn query_group_info(&mut self, id: &str) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(id)) else {
+            // Not linked yet: back in line for when the link is up.
             self.group_info_requested.remove(id);
+            let tries = self.group_info_tries.entry(id.to_owned()).or_insert(0);
+            *tries += 1;
+            self.group_info_retry.push((
+                Instant::now() + Self::group_retry_delay(*tries),
+                id.to_owned(),
+            ));
             return;
         };
         let commands = self.commands.clone();
@@ -790,8 +868,13 @@ impl Worker {
                     });
                 }
                 Err(error) => {
-                    log::debug!("no metadata for {chat}: {error}");
-                    let _ = commands.send(Command::GroupInfoFailed { chat });
+                    let text = error.to_string();
+                    // Not a member any more, or the group is gone: final.
+                    let permanent = ["item-not-found", "forbidden", "not-authorized"]
+                        .iter()
+                        .any(|word| text.contains(word));
+                    log::warn!("no metadata for {chat}: {text}");
+                    let _ = commands.send(Command::GroupInfoFailed { chat, permanent });
                 }
             }
         });
@@ -1042,6 +1125,9 @@ impl Worker {
         self.lid_to_pn.clear();
         self.contacts.clear();
         self.group_info_requested.clear();
+        self.group_info_queue.clear();
+        self.group_info_tries.clear();
+        self.group_info_retry.clear();
         self.presence_subscribed.clear();
         self.pending_older.clear();
         self.pending_avatars.clear();
@@ -1965,8 +2051,8 @@ impl Worker {
                 self.emit(Event::OlderFetched { chat, more: true });
                 self.emit(Event::Error(error));
             }
-            Command::GroupInfoFailed { chat } => {
-                self.group_info_requested.remove(&chat);
+            Command::GroupInfoFailed { chat, permanent } => {
+                self.handle_failed_group(chat, permanent);
             }
             Command::Sent { chat, id, error } => {
                 if id.is_empty() {
@@ -2013,6 +2099,7 @@ impl Worker {
                 participants,
                 read_only,
             } => {
+                self.group_info_tries.remove(&chat);
                 let _ =
                     self.archive
                         .set_group_info(&chat, name.as_deref(), &participants, read_only);
@@ -4129,6 +4216,42 @@ mod receipt_tests {
 
     /// A worker with an in-memory archive and nothing on the other end of
     /// its channels; the receivers live as long as the worker.
+    /// Unnamed groups line up for one metadata query at a time; a failure
+    /// waits its turn again, unless the refusal was final.
+    #[test]
+    fn group_questions_wait_in_line() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker
+            .archive
+            .ensure_chat("1-1@g.us", "Group")
+            .expect("chat");
+        worker
+            .archive
+            .ensure_chat("2-2@g.us", "Group")
+            .expect("chat");
+        worker.request_group_info("1-1@g.us", false);
+        worker.request_group_info("2-2@g.us", false);
+        worker.request_group_info("1-1@g.us", false);
+        assert_eq!(worker.group_info_queue.len(), 2, "asked once each");
+        // A forced ask goes to the head of the line.
+        worker.request_group_info("1-1@g.us", true);
+        assert_eq!(
+            worker.group_info_queue.front().map(String::as_str),
+            Some("1-1@g.us")
+        );
+        // Without a client, a turn schedules a retry instead of querying.
+        worker.pump_group_info();
+        assert!(worker.group_info_queue.is_empty() || worker.group_info_retry.len() >= 2);
+        // A failure the server calls final is not asked again.
+        worker.group_info_retry.clear();
+        worker.handle_failed_group("gone@g.us".to_owned(), true);
+        assert!(worker.group_info_retry.is_empty());
+        // An ordinary failure waits and returns.
+        worker.handle_failed_group("busy@g.us".to_owned(), false);
+        assert_eq!(worker.group_info_retry.len(), 1);
+        assert_eq!(worker.group_info_tries.get("busy@g.us"), Some(&1));
+    }
+
     fn worker() -> (
         Worker,
         std::sync::mpsc::Receiver<Event>,
@@ -4162,6 +4285,9 @@ mod receipt_tests {
             syncing: false,
             sync_deadline: None,
             group_info_requested: HashSet::new(),
+            group_info_queue: std::collections::VecDeque::new(),
+            group_info_tries: HashMap::new(),
+            group_info_retry: Vec::new(),
             presence_subscribed: HashSet::new(),
             pending_older: HashMap::new(),
             older_warned: HashSet::new(),
