@@ -429,7 +429,7 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 if app.stickers_pending {
                     "Fetching your stickers…"
                 } else {
-                    "The stickers you have sent lately, and those you receive, show up here; right-click one to keep it. Whole packs come in through a signal.art link (signalstickers.com has thousands) or a .wastickers file."
+                    "The stickers you have sent lately, and those you receive, show up here; right-click one to keep it. Whole packs come in through Find packs above: copy a pack's signal.art link there and paste it here, or open a .wastickers file."
                 },
                 theme::regular(13.0),
                 palette.secondary,
@@ -495,7 +495,10 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 /// paste itself, and the button takes a .wastickers or zip file.
 fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     ui.horizontal(|ui| {
-        let button = theme::soft_button_width(ui, "Open file", true) + ui.spacing().item_spacing.x;
+        let spacing = ui.spacing().item_spacing.x;
+        let buttons = theme::soft_button_width(ui, "Find packs", true)
+            + theme::soft_button_width(ui, "Open file", true)
+            + spacing * 2.0;
         let field = Frame::new()
             .fill(palette.surface)
             .corner_radius(CornerRadius::same(theme::RADIUS))
@@ -505,13 +508,12 @@ fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                     egui::TextEdit::singleline(&mut app.sticker_link)
                         .id(egui::Id::new("sticker-link"))
                         .hint_text(
-                            egui::RichText::new("Paste a signal.art sticker pack link")
-                                .color(palette.dim),
+                            egui::RichText::new("Paste a signal.art link").color(palette.dim),
                         )
                         .font(theme::regular(13.0))
                         .text_color(palette.text)
                         .frame(Frame::NONE)
-                        .desired_width(ui.available_width() - button - 26.0),
+                        .desired_width(ui.available_width() - buttons - 26.0),
                 )
             })
             .inner;
@@ -523,6 +525,15 @@ fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         if pasted || submitted {
             app.actions
                 .push(Action::ImportStickerUrl(app.sticker_link.trim().to_owned()));
+        }
+        // The gallery the links come from: browse there, copy a pack's
+        // signal.art address, paste it beside.
+        if theme::soft_button(ui, palette, Some(Icon::ExternalLink), "Find packs", false)
+            .on_hover_text("Browse signalstickers.org")
+            .clicked()
+        {
+            app.actions
+                .push(Action::OpenUrl("https://signalstickers.org/".to_owned()));
         }
         if theme::soft_button(ui, palette, Some(Icon::FileText), "Open file", false).clicked() {
             app.actions.push(Action::PickStickerArchive);
