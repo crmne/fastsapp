@@ -1,0 +1,117 @@
+title: Fastsapp
+fastsapp_version: "0.6.2"
+description: A fast, native WhatsApp client for Linux, macOS, and Windows, written in Rust.
+lang: en-US
+timezone: Europe/Berlin
+url: https://crmne.github.io
+baseurl: "/fastsapp"
+logo: /assets/images/logo.svg
+image: /screenshot.png
+
+markdown: kramdown
+kramdown:
+  input: GFM
+
+permalink: pretty
+theme: jekyll-vitepress-theme
+
+collections:
+  guide:
+    output: true
+    permalink: "/:name/"
+  reference:
+    output: true
+    permalink: "/:name/"
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+      image: /screenshot.png
+      topics:
+        - WhatsApp client
+        - Rust
+        - egui
+        - whatsapp-rust
+        - Linux WhatsApp desktop
+  - scope:
+      type: guide
+    values:
+      layout: default
+  - scope:
+      type: reference
+    values:
+      layout: default
+
+jekyll_vitepress:
+  seo:
+    page_type: TechArticle
+    image:
+      path: /screenshot.png
+      alt: Fastsapp showing a chat with a photo, a voice message, a quoted reply, and a link preview
+    publisher:
+      type: Person
+      name: Carmine Paolino
+      url: https://paolino.me
+      same_as:
+        - https://github.com/crmne/fastsapp
+  llms:
+    title: Fastsapp
+    description: >-
+      Documentation for Fastsapp, a fast native WhatsApp client written in
+      Rust with egui: one lightweight app for your chats, voice messages,
+      attachments, and notifications on Linux, macOS, and Windows.
+    full: true
+    details: >-
+      The canonical documentation covers installation, linking with your
+      phone, everyday use, settings, and how the client connects to
+      WhatsApp. Source is on [GitHub](https://github.com/crmne/fastsapp).
+  branding:
+    site_title: Fastsapp
+    logo:
+      default: /assets/images/logo.svg
+      alt: Fastsapp
+  syntax:
+    light_theme: github
+    dark_theme: github.dark
+  footer:
+    enabled: true
+    show_on_docs: false
+    message: >-
+      Brought to you by <a href="https://paolino.me" target="_blank" rel="noreferrer">Carmine Paolino</a>, maker of
+    copyright: >-
+      <span class="footer-brand-links"><a href="https://chatwithwork.com" class="footer-chatwithwork-link" target="_blank" rel="noreferrer"><img class="footer-chatwithwork-logo theme-image light" src="https://chatwithwork.com/logotype.svg" alt="Chat with Work"><img class="footer-chatwithwork-logo theme-image dark" src="https://chatwithwork.com/logotype-dark.svg" alt="Chat with Work"></a><a href="https://rubyllm.com" class="footer-rubyllm-link" target="_blank" rel="noreferrer"><img class="footer-rubyllm-logo theme-image light" src="https://rubyllm.com/assets/images/logotype.svg" alt="RubyLLM"><img class="footer-rubyllm-logo theme-image dark" src="https://rubyllm.com/assets/images/logotype_dark.svg" alt="RubyLLM"></a></span><br><span class="footer-built-with">Docs built with <a href="https://jekyll-vitepress.dev" target="_blank" rel="noreferrer">Jekyll VitePress</a>. Fastsapp is an independent project, not affiliated with or endorsed by WhatsApp LLC or Meta. WhatsApp is a trademark of WhatsApp LLC.</span>
+  doc_footer:
+    enabled: true
+    previous_label: Previous page
+    next_label: Next page
+  last_updated:
+    enabled: true
+    text: Last updated
+    format: "%Y-%m-%d %H:%M"
+  edit_link:
+    enabled: true
+    pattern: "https://github.com/crmne/fastsapp/edit/main/docs/:path"
+    text: Edit this page on GitHub
+  github_star:
+    enabled: true
+    repository: crmne/fastsapp
+    text: Star
+    show_count: true
+  github_sponsor:
+    enabled: true
+    user: crmne
+    text: Sponsor
+
+plugins:
+  - jekyll-vitepress-theme
+
+exclude:
+  - _site
+  - .jekyll-cache
+  - .sass-cache
+  - .bundle
+  - vendor
+  - Gemfile
+  - Gemfile.lock

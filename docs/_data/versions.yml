@@ -1,0 +1,8 @@
+current: v0.6.2
+items:
+  - id: v0.6.2
+    title: v0.6.2
+    url: /download/
+  - title: Changelog
+    url: https://github.com/crmne/fastsapp/releases
+    external: true

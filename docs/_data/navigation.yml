@@ -1,0 +1,10 @@
+- title: Guide
+  url: /what-is-fastsapp/
+  collections:
+    - guide
+- title: Reference
+  url: /settings-and-files/
+  collections:
+    - reference
+- title: Download
+  url: /download/

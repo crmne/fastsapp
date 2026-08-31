@@ -1,0 +1,59 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/**
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/configure-pages@v6
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+
+      - name: Install site dependencies
+        working-directory: docs
+        run: |
+          bundle config set path vendor/bundle
+          bundle install
+
+      - name: Build site
+        working-directory: docs
+        env:
+          # Analytics is only included in production builds, so a local
+          # `jekyll serve` does not report visits.
+          JEKYLL_ENV: production
+        run: bundle exec jekyll build --destination ./_site
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ./docs/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
