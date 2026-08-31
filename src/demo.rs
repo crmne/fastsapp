@@ -1204,6 +1204,27 @@ mod tests {
         assert!(!copied.trim().is_empty(), "{copied:?}");
     }
 
+    /// A selection dragged to the edge scrolls; in the middle it does not.
+    #[test]
+    fn a_drag_at_the_edge_scrolls_and_in_the_middle_does_not() {
+        use crate::ui::conversation::edge_scroll;
+        assert_eq!(edge_scroll(300.0, 100.0, 700.0), 0.0);
+        assert!(edge_scroll(110.0, 100.0, 700.0) < 0.0, "near the top: up");
+        assert!(
+            edge_scroll(690.0, 100.0, 700.0) > 0.0,
+            "near the bottom: down"
+        );
+        assert!(
+            edge_scroll(105.0, 100.0, 700.0) < edge_scroll(130.0, 100.0, 700.0),
+            "closer pulls harder"
+        );
+        assert_eq!(
+            edge_scroll(-500.0, 100.0, 700.0),
+            edge_scroll(20.0, 100.0, 700.0),
+            "the pull tops out past the edge"
+        );
+    }
+
     /// A copy that runs across messages carries each one's clock, date,
     /// and writer, the way the phone hands a selection on.
     #[test]

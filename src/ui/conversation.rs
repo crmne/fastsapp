@@ -792,6 +792,32 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         actions.push(Action::LoadOlder(chat.id.clone()));
     }
     app.actions.extend(actions);
+    // A selection dragged to the view's edge keeps going: the list scrolls
+    // under the pointer, so messages beyond the screen can join it.
+    let dragging_inside = ui.input(|input| {
+        input.pointer.primary_down()
+            && input
+                .pointer
+                .press_origin()
+                .is_some_and(|origin| output.inner_rect.contains(origin) && !bar.contains(origin))
+    });
+    if dragging_inside && let Some(pointer) = ui.input(|input| input.pointer.latest_pos()) {
+        let delta = edge_scroll(
+            pointer.y,
+            output.inner_rect.top(),
+            output.inner_rect.bottom(),
+        );
+        if delta != 0.0 {
+            if delta < 0.0 {
+                // Heading up releases the pin to the end.
+                app.scroll_to_bottom = false;
+            }
+            let mut state = output.state;
+            state.offset.y = (state.offset.y + delta).max(0.0);
+            state.store(ui.ctx(), output.id);
+            ui.ctx().request_repaint();
+        }
+    }
     // A way back down while reading old messages.
     if !at_bottom {
         let rect = output.inner_rect;
@@ -964,6 +990,21 @@ fn bubble(
         },
     );
     response
+}
+
+/// How far a drag near the view's edge scrolls this frame: nothing in the
+/// middle, harder the closer the pointer is to the edge (or past it), so a
+/// selection can keep growing beyond the screen at a pace the hand steers.
+pub fn edge_scroll(pointer: f32, top: f32, bottom: f32) -> f32 {
+    const EDGE: f32 = 36.0;
+    const PACE: f32 = 0.35;
+    if pointer < top + EDGE {
+        -(top + EDGE - pointer).min(EDGE * 2.0) * PACE
+    } else if pointer > bottom - EDGE {
+        (pointer - (bottom - EDGE)).min(EDGE * 2.0) * PACE
+    } else {
+        0.0
+    }
 }
 
 /// The id of a message's bubble, the same on every frame and knowable from
