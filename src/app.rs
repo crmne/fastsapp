@@ -174,6 +174,8 @@ pub struct App {
     /// Every message body drawn this frame, in order, for rebuilding a
     /// copied selection that spans messages (see `transcript`).
     pub copy_rows: std::sync::Arc<std::sync::Mutex<Vec<crate::transcript::Row>>>,
+    /// Where the message list was last frame, for the selection leash.
+    pub selection_view: std::sync::Arc<std::sync::Mutex<Option<egui::Rect>>>,
     pub gif_query: String,
     pub gif_results: Vec<Gif>,
     /// A GIF search is on its way.
@@ -333,6 +335,7 @@ impl App {
             recording: None,
             played_told: HashSet::new(),
             copy_rows: Default::default(),
+            selection_view: Default::default(),
             gif_query: String::new(),
             gif_results: Vec::new(),
             gif_pending: false,
@@ -489,6 +492,9 @@ impl App {
                 std::sync::Arc::clone(&self.copy_rows),
             );
         });
+        ctx.add_plugin(crate::ui::conversation::SelectionLeash::new(
+            std::sync::Arc::clone(&self.selection_view),
+        ));
         crate::theme::install(ctx);
         // Three lines per wheel notch is what egui ships; a chat of short
         // rows wants the pace every other client scrolls at.
@@ -1791,6 +1797,10 @@ impl App {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clear();
+        *self
+            .selection_view
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
         self.apply_theme(ctx);
         let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
         // Coming back to the window is reading what arrived meanwhile.

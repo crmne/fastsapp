@@ -1204,6 +1204,77 @@ mod tests {
         assert!(!copied.trim().is_empty(), "{copied:?}");
     }
 
+    /// A drag that leaves the window keeps selecting: the pointer is
+    /// leashed to the view's edge, the list scrolls past it, and the copy
+    /// spans messages that were never on screen together.
+    #[test]
+    fn a_drag_out_of_the_window_keeps_selecting() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        // Scroll away from the end first, so there is somewhere to go.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
+        let ids: Vec<String> = app.conversations[&chat]
+            .messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect();
+        let body_of = |ctx: &egui::Context, id: &str| {
+            let key = crate::ui::conversation::bubble_id(&chat, id).with("body");
+            ctx.data(|data| data.get_temp::<egui::Rect>(key))
+                .filter(|rect| screen.contains_rect(*rect))
+        };
+        let start = ids
+            .iter()
+            .find_map(|id| body_of(&ctx, id))
+            .expect("a text body on screen");
+        let from = egui::pos2(start.left() + 4.0, start.center().y);
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // Out of the window entirely, below it, plus a spurious PointerGone
+        // like the platform sends on leaving.
+        let below = egui::pos2(from.x, 1100.0);
+        let mut frames: Vec<Vec<egui::Event>> = vec![
+            vec![egui::Event::PointerMoved(from), press(from, true)],
+            vec![egui::Event::PointerMoved(below), egui::Event::PointerGone],
+        ];
+        frames.extend((0..14).map(|_| vec![egui::Event::PointerMoved(below)]));
+        frames.push(vec![press(below, false)]);
+        frames.push(vec![egui::Event::Copy]);
+        frames.push(vec![]);
+        let mut copied = None;
+        for events in frames {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            });
+            output.textures_delta.clear();
+            for command in output.platform_output.commands {
+                if let egui::OutputCommand::CopyText(text) = command {
+                    copied = Some(text);
+                }
+            }
+        }
+        let copied = copied.expect("the drag still put text on the clipboard");
+        assert!(
+            copied.matches("] ").count() >= 2,
+            "the selection should span messages: {copied:?}"
+        );
+    }
+
     /// Holding a drag near the top of the list scrolls it upward, even
     /// though the list starts stuck to its end.
     #[test]

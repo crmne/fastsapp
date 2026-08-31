@@ -688,6 +688,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             // also releases stick-to-bottom; writing the offset directly
             // left the stuck end pinning every upward step right back.
             let viewport = ui.clip_rect();
+            *app.selection_view.lock().unwrap_or_else(|p| p.into_inner()) = Some(viewport);
             let held_inside = ui.input(|input| {
                 input.pointer.primary_down()
                     && input.pointer.press_origin().is_some_and(|origin| {
@@ -994,6 +995,81 @@ fn bubble(
         },
     );
     response
+}
+
+/// Keeps a selection drag inside the message view: once the button goes
+/// down in the view, pointer positions that stray out of it (below into
+/// the composer, or out of the window entirely, where the platform still
+/// reports the grabbed pointer) are clamped to just inside its edge. The
+/// selection then always has a row under it while the edge scroll brings
+/// more past, instead of freezing the moment the pointer crosses out.
+///
+/// An input hook, because the positions must be adjusted before egui
+/// processes them; the view rectangle is last frame's, stored by the
+/// conversation as it renders.
+pub struct SelectionLeash {
+    pub view: std::sync::Arc<std::sync::Mutex<Option<Rect>>>,
+    holding: bool,
+}
+
+impl SelectionLeash {
+    pub fn new(view: std::sync::Arc<std::sync::Mutex<Option<Rect>>>) -> Self {
+        Self {
+            view,
+            holding: false,
+        }
+    }
+}
+
+impl egui::plugin::Plugin for SelectionLeash {
+    fn debug_name(&self) -> &'static str {
+        "fastsapp-selection-leash"
+    }
+
+    fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        let Some(view) = *self.view.lock().unwrap_or_else(|p| p.into_inner()) else {
+            self.holding = false;
+            return;
+        };
+        let inside = |pos: &egui::Pos2| view.contains(*pos) && pos.x < view.right() - 16.0;
+        let mut gone = Vec::new();
+        for (index, event) in input.events.iter_mut().enumerate() {
+            match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    ..
+                } => {
+                    if *pressed {
+                        self.holding = inside(pos);
+                    } else {
+                        if self.holding && !view.contains(*pos) {
+                            *pos = clamp_into(*pos, view);
+                        }
+                        self.holding = false;
+                    }
+                }
+                egui::Event::PointerMoved(pos) if self.holding && !view.contains(*pos) => {
+                    *pos = clamp_into(*pos, view);
+                }
+                // The platform reports the pointer gone when it leaves the
+                // window; mid-drag that would break the selection.
+                egui::Event::PointerGone if self.holding => gone.push(index),
+                _ => {}
+            }
+        }
+        for index in gone.into_iter().rev() {
+            input.events.remove(index);
+        }
+    }
+}
+
+fn clamp_into(pos: egui::Pos2, view: Rect) -> egui::Pos2 {
+    egui::pos2(
+        pos.x.clamp(view.left() + 2.0, view.right() - 18.0),
+        pos.y.clamp(view.top() + 2.0, view.bottom() - 2.0),
+    )
 }
 
 /// How far a drag near the view's edge scrolls this frame: nothing in the

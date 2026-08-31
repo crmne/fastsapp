@@ -55,7 +55,12 @@ protocol. These notes are for coding agents and new contributors.
   `egui::text_selection::LabelSelectionState` (which paints it) and only
   overlay the colour emoji, so text can be swept and copied while
   `style.interaction.selectable_labels` stays false for every other label.
-  The response must sense clicks and drags. A copy that sweeps across
+  The response must sense clicks and drags. `SelectionLeash` (an egui
+  `input_hook` plugin) clamps a drag that started in the message view to
+  just inside its edge once the pointer strays out (the platform keeps
+  reporting a grabbed pointer beyond the window), and drops mid-drag
+  `PointerGone`, so the selection keeps a row under it while the edge
+  scroll brings more past. A copy that sweeps across
   messages is rebuilt by `src/transcript.rs` with `[time, date] Name:`
   per message (the phone's sharing format): every drawn body lands in
   `App::copy_rows` each frame, and the `CopyAnnotator` egui plugin
