@@ -495,7 +495,7 @@ mod tests {
     fn a_moving_subject_leaves_no_trace_behind() {
         use webp_animation::prelude::*;
         let side = 64u32;
-        let mut square = |x0: u32, y0: u32, color: [u8; 4]| {
+        let square = |x0: u32, y0: u32, color: [u8; 4]| {
             let mut frame = vec![0u8; (side * side * 4) as usize];
             for y in y0..y0 + 16 {
                 for x in x0..x0 + 16 {
