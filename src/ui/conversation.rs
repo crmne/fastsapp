@@ -425,35 +425,68 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                             .min_scrolled_height(0.0)
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
-                                let response = ui.add(
-                                    egui::TextEdit::multiline(&mut app.composer)
-                                        .id(id)
-                                        .frame(Frame::NONE)
-                                        .margin(Margin::ZERO)
-                                        .hint_text(
-                                            egui::RichText::new(if app.pending.is_empty() {
-                                                "Type a message"
-                                            } else {
-                                                "Add a caption"
-                                            })
-                                            .color(palette.dim),
-                                        )
-                                        .font(theme::regular(BODY_SIZE))
-                                        .text_color(palette.text)
-                                        .desired_rows(1)
-                                        .desired_width(f32::INFINITY)
-                                        .return_key(if enter_sends {
-                                            Some(KeyboardShortcut::new(
-                                                Modifiers::SHIFT,
-                                                Key::Enter,
-                                            ))
-                                        } else {
-                                            Some(KeyboardShortcut::new(
-                                                Modifiers::NONE,
-                                                Key::Enter,
-                                            ))
-                                        }),
+                                // The field lays out through the emoji
+                                // pipeline: same text, emoji invisible, and
+                                // the colour pictures painted over them, so
+                                // typing shows what will be sent.
+                                let mut clusters: Vec<(usize, usize, String)> = Vec::new();
+                                let format = egui::TextFormat::simple(
+                                    theme::regular(BODY_SIZE),
+                                    palette.text,
                                 );
+                                let mut layouter = |ui: &egui::Ui,
+                                                    text: &dyn egui::TextBuffer,
+                                                    wrap: f32| {
+                                    let (mut job, found) =
+                                        crate::emoji::editor_job(text.as_str(), &format);
+                                    job.wrap.max_width = wrap;
+                                    clusters = found;
+                                    ui.fonts_mut(|fonts| fonts.layout_job(job))
+                                };
+                                let output = egui::TextEdit::multiline(&mut app.composer)
+                                    .id(id)
+                                    .frame(Frame::NONE)
+                                    .margin(Margin::ZERO)
+                                    .hint_text(
+                                        egui::RichText::new(if app.pending.is_empty() {
+                                            "Type a message"
+                                        } else {
+                                            "Add a caption"
+                                        })
+                                        .color(palette.dim),
+                                    )
+                                    .font(theme::regular(BODY_SIZE))
+                                    .text_color(palette.text)
+                                    .desired_rows(1)
+                                    .desired_width(f32::INFINITY)
+                                    .return_key(if enter_sends {
+                                        Some(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter))
+                                    } else {
+                                        Some(KeyboardShortcut::new(Modifiers::NONE, Key::Enter))
+                                    })
+                                    .layouter(&mut layouter)
+                                    .show(ui);
+                                for (start, length, cluster) in &clusters {
+                                    let left = output
+                                        .galley
+                                        .pos_from_cursor(egui::text::CCursor::new(*start));
+                                    let right = output.galley.pos_from_cursor(
+                                        egui::text::CCursor::new(start + length),
+                                    );
+                                    // A cluster wrapped across rows has no
+                                    // one rectangle; leave it invisible
+                                    // rather than paint it somewhere odd.
+                                    if (left.top() - right.top()).abs() > 1.0 {
+                                        continue;
+                                    }
+                                    let rect = Rect::from_min_max(
+                                        left.left_top(),
+                                        egui::pos2(right.left(), left.bottom()),
+                                    )
+                                    .translate(output.galley_pos.to_vec2());
+                                    crate::emoji::paint_cluster(ui, cluster, rect);
+                                }
+                                let response = &output.response.response;
                                 if response.changed() {
                                     app.actions.push(Action::Composing {
                                         chat: chat.id.clone(),

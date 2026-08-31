@@ -750,6 +750,9 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 }
             }
             "recording" => app.recording = Some(crate::audio::Recorder::rehearsal()),
+            "compose-emoji" => {
+                app.composer = "Andiamo 😊 con due 👍🏽 e poi testo normale".to_owned();
+            }
             "staged" => {
                 let (photo, _) = sample_files(app);
                 let side = 48usize;
@@ -917,6 +920,7 @@ mod tests {
             "typing",
             "nosidebar",
             "staged",
+            "compose-emoji",
             "voice",
             "recording",
             "gifs",

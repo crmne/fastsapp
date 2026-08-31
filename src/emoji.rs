@@ -421,11 +421,76 @@ pub fn append(
 }
 
 /// Paints the pictures over a laid-out galley's placeholders.
+/// Paints one emoji's picture centred in `rect`, or the sequence in the
+/// monochrome face when no picture exists for it.
+pub fn paint_cluster(ui: &egui::Ui, cluster: &str, rect: Rect) {
+    let painter = ui.painter();
+    match texture(ui.ctx(), cluster) {
+        Some(texture) => {
+            let side = rect.height() * 1.08;
+            let size = texture.size_vec2();
+            let scale = (side / size.x).min(side / size.y);
+            let image_rect = Rect::from_center_size(
+                rect.center() + vec2(0.0, rect.height() * 0.02),
+                size * scale,
+            );
+            painter.image(
+                texture.id(),
+                image_rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+        None => {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                cluster,
+                egui::FontId::proportional(rect.height() * 0.8),
+                ui.visuals().text_color(),
+            );
+        }
+    }
+}
+
+/// A layout job for text being edited: the text is kept character for
+/// character (a galley that differs from the buffer breaks the cursor), the
+/// emoji are styled invisible, and each one's place is answered so the
+/// editor can paint the pictures over them.
+pub fn editor_job(
+    text: &str,
+    format: &egui::TextFormat,
+) -> (egui::text::LayoutJob, Vec<(usize, usize, String)>) {
+    let mut job = egui::text::LayoutJob::default();
+    let mut clusters = Vec::new();
+    if !available() {
+        job.append(text, 0.0, format.clone());
+        return (job, clusters);
+    }
+    let mut at = 0usize;
+    for piece in pieces(text) {
+        match piece {
+            Piece::Text(run) => {
+                job.append(run, 0.0, format.clone());
+                at += run.chars().count();
+            }
+            Piece::Emoji(cluster) => {
+                let mut hidden = format.clone();
+                hidden.color = Color32::TRANSPARENT;
+                job.append(cluster, 0.0, hidden);
+                let length = cluster.chars().count();
+                clusters.push((at, length, cluster.to_owned()));
+                at += length;
+            }
+        }
+    }
+    (job, clusters)
+}
+
 pub fn paint(ui: &egui::Ui, galley: &egui::Galley, origin: Pos2, placements: &[String]) {
     if placements.is_empty() {
         return;
     }
-    let painter = ui.painter();
     let mut next = 0;
     for row in &galley.rows {
         for glyph in &row.row.glyphs {
@@ -439,34 +504,7 @@ pub fn paint(ui: &egui::Ui, galley: &egui::Galley, origin: Pos2, placements: &[S
             let rect = glyph
                 .logical_rect()
                 .translate(origin.to_vec2() + row.pos.to_vec2());
-            match texture(ui.ctx(), cluster) {
-                Some(texture) => {
-                    let side = rect.height() * 1.08;
-                    let size = texture.size_vec2();
-                    let scale = (side / size.x).min(side / size.y);
-                    let image_rect = Rect::from_center_size(
-                        rect.center() + vec2(0.0, rect.height() * 0.02),
-                        size * scale,
-                    );
-                    painter.image(
-                        texture.id(),
-                        image_rect,
-                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
-                }
-                None => {
-                    // The font has no picture for it: draw the sequence in
-                    // the monochrome face after all.
-                    painter.text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        cluster,
-                        egui::FontId::proportional(rect.height() * 0.8),
-                        ui.visuals().text_color(),
-                    );
-                }
-            }
+            paint_cluster(ui, cluster, rect);
         }
     }
 }
@@ -474,6 +512,27 @@ pub fn paint(ui: &egui::Ui, galley: &egui::Galley, origin: Pos2, placements: &[S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_editor_job_keeps_the_text_and_places_the_emoji() {
+        let format = egui::TextFormat::simple(egui::FontId::proportional(14.0), Color32::WHITE);
+        let text = "hi 😊 and 👍🏽!";
+        let (job, clusters) = editor_job(text, &format);
+        assert_eq!(job.text, text, "the galley must mirror the buffer");
+        if available() {
+            assert_eq!(clusters.len(), 2);
+            let (start, length, cluster) = &clusters[0];
+            assert_eq!(
+                text.chars().skip(*start).take(*length).collect::<String>(),
+                *cluster
+            );
+            let (start, length, cluster) = &clusters[1];
+            assert_eq!(
+                text.chars().skip(*start).take(*length).collect::<String>(),
+                *cluster
+            );
+        }
+    }
 
     #[test]
     fn pieces_split_emoji_out_of_text() {
