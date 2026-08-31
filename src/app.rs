@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use crate::audio::{Player, Recorder};
 use crate::backend::{Backend, Command, Event, LinkStatus, Waker};
 use crate::model::{
-    Action, Chat, ChatId, Contact, Content, Delivery, Dialog, Gif, Media, MediaState, Message,
-    Page, PickerTab, Toast, ToastKind,
+    Action, Chat, ChatId, Contact, Content, Delivery, Dialog, Gif, GifError, Media, MediaState,
+    Message, Page, PickerTab, Toast, ToastKind,
 };
 use crate::paths::AppDirs;
 use crate::settings::{Settings, ThemeChoice};
@@ -150,6 +150,10 @@ pub struct App {
     /// Who is typing in each chat, and since when.
     pub typing: HashMap<ChatId, Vec<(String, Instant)>>,
     pub presence: HashMap<String, Presence>,
+    /// The account's own privacy has read receipts off, as WhatsApp said
+    /// on connect; whatsapp-rust then sends none in direct chats no
+    /// matter our own toggle.
+    pub account_receipts_off: bool,
     avatars: HashMap<String, Option<PathBuf>>,
     avatar_requests: HashSet<String>,
     /// The large pictures, for info dialogs.
@@ -182,7 +186,7 @@ pub struct App {
     pub gif_results: Vec<Gif>,
     /// A GIF search is on its way.
     pub gif_pending: bool,
-    pub gif_error: Option<String>,
+    pub gif_error: Option<GifError>,
     pub stickers: Vec<PathBuf>,
     /// The sticker list was asked for and has not come back yet.
     pub stickers_pending: bool,
@@ -324,6 +328,7 @@ impl App {
             search_hits: Vec::new(),
             typing: HashMap::new(),
             presence: HashMap::new(),
+            account_receipts_off: false,
             avatars: HashMap::new(),
             avatar_requests: HashSet::new(),
             avatars_full: HashMap::new(),
@@ -857,14 +862,15 @@ impl App {
             && crate::util::now() - message.timestamp <= REVOKE_WINDOW.as_secs() as i64
     }
 
-    /// Who is typing in a chat right now, by name.
-    pub fn typing_in(&self, chat: &str) -> Vec<String> {
+    /// Who is typing in a chat right now: each typer's id (for their
+    /// picture) and name.
+    pub fn typing_in(&self, chat: &str) -> Vec<(String, String)> {
         self.typing
             .get(chat)
             .map(|typers| {
                 typers
                     .iter()
-                    .map(|(sender, _)| self.display_name(sender))
+                    .map(|(sender, _)| (sender.clone(), self.display_name(sender)))
                     .collect()
             })
             .unwrap_or_default()
@@ -1053,6 +1059,7 @@ impl App {
                     // it came late: page the archive again before asking.
                     conversation.complete = false;
                 }
+                Event::ReceiptsPrivacy { disabled } => self.account_receipts_off = disabled,
                 Event::Error(message) => self.toast_error(message),
             }
         }
@@ -2156,6 +2163,8 @@ mod tests {
             timestamp,
             content: Content::text(id),
             status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
             quoted: None,
             reactions: Vec::new(),
             edited: false,
@@ -2398,6 +2407,8 @@ mod name_tests {
             timestamp: 0,
             content: Content::text("ciao @15550001111"),
             status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
             quoted: None,
             reactions: Vec::new(),
             edited: false,

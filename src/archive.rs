@@ -100,6 +100,8 @@ const MIGRATIONS: &[(&str, &str, &str)] = &[
     ("chats", "participants", "TEXT NOT NULL DEFAULT '[]'"),
     ("chats", "read_only", "INTEGER NOT NULL DEFAULT 0"),
     ("messages", "forwarded", "INTEGER NOT NULL DEFAULT 0"),
+    ("messages", "delivered_at", "INTEGER"),
+    ("messages", "read_at", "INTEGER"),
 ];
 const CHAT_JOIN: &str = "FROM chats c
              LEFT JOIN messages m ON m.chat = c.id AND m.rowid = (
@@ -149,6 +151,16 @@ fn status_rank(status: Delivery) -> i64 {
         Delivery::Read => 4,
         Delivery::Played => 5,
         Delivery::Failed => 6,
+    }
+}
+
+/// The column that keeps when a stage was reached, for the stages worth
+/// remembering.
+fn stamp_column(status: Delivery) -> Option<&'static str> {
+    match status {
+        Delivery::Delivered => Some("delivered_at"),
+        Delivery::Read | Delivery::Played => Some("read_at"),
+        _ => None,
     }
 }
 
@@ -425,8 +437,8 @@ impl Archive {
             _ => status_rank(message.status),
         };
         self.connection.execute(
-            "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded, delivered_at, read_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(chat, id) DO UPDATE SET
                 sender_name = COALESCE(excluded.sender_name, sender_name),
                 content = excluded.content,
@@ -437,7 +449,9 @@ impl Archive {
                 raw = COALESCE(excluded.raw, raw),
                 thumbnail = COALESCE(excluded.thumbnail, thumbnail),
                 mentions = excluded.mentions,
-                forwarded = excluded.forwarded",
+                forwarded = excluded.forwarded,
+                delivered_at = COALESCE(delivered_at, excluded.delivered_at),
+                read_at = COALESCE(read_at, excluded.read_at)",
             params![
                 message.chat,
                 message.id,
@@ -457,6 +471,8 @@ impl Archive {
                 message.thumbnail.as_deref(),
                 serde_json::to_string(&message.mentions).unwrap_or_default(),
                 message.forwarded,
+                message.delivered_at,
+                message.read_at,
             ],
         )?;
         self.connection.execute(
@@ -477,7 +493,7 @@ impl Archive {
         limit: usize,
     ) -> Result<Vec<Message>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded
+            "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at
              FROM messages
              WHERE chat = ?1 AND (timestamp < ?2 OR (timestamp = ?2 AND rowid <
                  (SELECT rowid FROM messages WHERE chat = ?1 AND id = ?3)))
@@ -502,6 +518,8 @@ impl Archive {
                         what: "unreadable".into(),
                     }),
                     status: status_from_rank(row.get(6)?),
+                    delivered_at: row.get(13)?,
+                    read_at: row.get(14)?,
                     quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
                     reactions: serde_json::from_str(&reactions).unwrap_or_default(),
                     edited: row.get(9)?,
@@ -528,7 +546,7 @@ impl Archive {
                 .replace('_', "\\_")
         );
         let mut statement = self.connection.prepare(
-            "SELECT chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded
+            "SELECT chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at
              FROM messages
              WHERE json_valid(content) AND lower(
                      coalesce(json_extract(content, '$.text'), '') || char(10) ||
@@ -558,6 +576,8 @@ impl Archive {
                     what: "unreadable".into(),
                 }),
                 status: status_from_rank(row.get(7)?),
+                delivered_at: row.get(14)?,
+                read_at: row.get(15)?,
                 quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
                 reactions: serde_json::from_str(&reactions).unwrap_or_default(),
                 edited: row.get(10)?,
@@ -580,7 +600,7 @@ impl Archive {
         limit: usize,
     ) -> Result<Vec<Message>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded
+            "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at
              FROM messages
              WHERE chat = ?1 AND timestamp >= ?2 AND (timestamp < ?3 OR (timestamp = ?3 AND rowid <
                  (SELECT rowid FROM messages WHERE chat = ?1 AND id = ?4)))
@@ -605,6 +625,8 @@ impl Archive {
                         what: "unreadable".into(),
                     }),
                     status: status_from_rank(row.get(6)?),
+                    delivered_at: row.get(13)?,
+                    read_at: row.get(14)?,
                     quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
                     reactions: serde_json::from_str(&reactions).unwrap_or_default(),
                     edited: row.get(9)?,
@@ -753,7 +775,7 @@ impl Archive {
 
     pub fn message(&self, chat: &str, id: &str) -> Result<Option<Message>> {
         let mut statement = self.connection.prepare(
-            "SELECT sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded
+            "SELECT sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at
              FROM messages WHERE chat = ?1 AND id = ?2",
         )?;
         statement
@@ -773,6 +795,8 @@ impl Archive {
                         what: "unreadable".into(),
                     }),
                     status: status_from_rank(row.get(5)?),
+                    delivered_at: row.get(12)?,
+                    read_at: row.get(13)?,
                     quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
                     reactions: serde_json::from_str(&reactions).unwrap_or_default(),
                     edited: row.get(8)?,
@@ -814,13 +838,23 @@ impl Archive {
     }
 
     /// Moves a message's status forward; a receipt never moves it back,
-    /// except to `Failed`.
-    pub fn set_status(&self, chat: &str, id: &str, status: Delivery) -> Result<bool> {
+    /// except to `Failed`. `at` is the receipt's time, kept as the moment
+    /// the message was delivered or read; the first receipt of a stage
+    /// wins.
+    pub fn set_status(&self, chat: &str, id: &str, status: Delivery, at: i64) -> Result<bool> {
         let rank = status_rank(status);
         let changed = if status == Delivery::Failed {
             self.connection.execute(
                 "UPDATE messages SET status = ?3 WHERE chat = ?1 AND id = ?2",
                 params![chat, id, rank],
+            )?
+        } else if let Some(column) = stamp_column(status) {
+            self.connection.execute(
+                &format!(
+                    "UPDATE messages SET status = ?3, {column} = COALESCE({column}, ?4)
+                     WHERE chat = ?1 AND id = ?2 AND status < ?3"
+                ),
+                params![chat, id, rank, at],
             )?
         } else {
             self.connection.execute(
@@ -838,6 +872,7 @@ impl Archive {
         chat: &str,
         up_to: i64,
         status: Delivery,
+        at: i64,
     ) -> Result<Vec<String>> {
         let rank = status_rank(status);
         let mut statement = self.connection.prepare(
@@ -846,10 +881,20 @@ impl Archive {
         let ids: Vec<String> = statement
             .query_map(params![chat, up_to, rank], |row| row.get(0))?
             .collect::<Result<_>>()?;
-        self.connection.execute(
-            "UPDATE messages SET status = ?3 WHERE chat = ?1 AND from_me = 1 AND timestamp <= ?2 AND status > 0 AND status < ?3",
-            params![chat, up_to, rank],
-        )?;
+        if let Some(column) = stamp_column(status) {
+            self.connection.execute(
+                &format!(
+                    "UPDATE messages SET status = ?3, {column} = COALESCE({column}, ?4)
+                     WHERE chat = ?1 AND from_me = 1 AND timestamp <= ?2 AND status > 0 AND status < ?3"
+                ),
+                params![chat, up_to, rank, at],
+            )?;
+        } else {
+            self.connection.execute(
+                "UPDATE messages SET status = ?3 WHERE chat = ?1 AND from_me = 1 AND timestamp <= ?2 AND status > 0 AND status < ?3",
+                params![chat, up_to, rank],
+            )?;
+        }
         Ok(ids)
     }
 
@@ -975,6 +1020,8 @@ mod tests {
             } else {
                 Delivery::None
             },
+            delivered_at: None,
+            read_at: None,
             quoted: None,
             reactions: Vec::new(),
             edited: false,
@@ -1137,22 +1184,18 @@ mod tests {
             .expect("insert");
         assert!(
             archive
-                .set_status(chat, "m1", Delivery::Read)
+                .set_status(chat, "m1", Delivery::Read, 500)
                 .expect("status")
         );
         assert!(
             !archive
-                .set_status(chat, "m1", Delivery::Delivered)
+                .set_status(chat, "m1", Delivery::Delivered, 600)
                 .expect("status")
         );
-        assert_eq!(
-            archive
-                .message(chat, "m1")
-                .expect("read")
-                .expect("exists")
-                .status,
-            Delivery::Read
-        );
+        let stored = archive.message(chat, "m1").expect("read").expect("exists");
+        assert_eq!(stored.status, Delivery::Read);
+        assert_eq!(stored.read_at, Some(500));
+        assert_eq!(stored.delivered_at, None);
         // Reinserting the same message (a history sync replay) keeps Read.
         archive
             .insert_message(&message(chat, "m1", 100, true), None)
@@ -1167,7 +1210,7 @@ mod tests {
         );
         assert!(
             archive
-                .set_status(chat, "m1", Delivery::Failed)
+                .set_status(chat, "m1", Delivery::Failed, 700)
                 .expect("status")
         );
     }
@@ -1186,7 +1229,7 @@ mod tests {
             .insert_message(&message(chat, "theirs", 250, false), None)
             .expect("insert");
         let changed = archive
-            .advance_statuses(chat, 200, Delivery::Read)
+            .advance_statuses(chat, 200, Delivery::Read, 400)
             .expect("advance");
         assert_eq!(changed, vec!["m1", "m2"]);
         let messages = archive.messages(chat, None, 10).expect("messages");
@@ -1200,6 +1243,7 @@ mod tests {
                 Delivery::Pending
             ]
         );
+        assert_eq!(messages[0].read_at, Some(400));
     }
 
     #[test]
@@ -1413,6 +1457,8 @@ mod sticker_tests {
                 animated: false,
             },
             status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
             quoted: None,
             reactions: Vec::new(),
             edited: false,
@@ -1497,6 +1543,8 @@ mod media_path_tests {
                 caption: None,
             },
             status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
             quoted: None,
             reactions: Vec::new(),
             edited: false,

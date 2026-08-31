@@ -39,8 +39,8 @@ use super::{Command, Event, LinkStatus, Waker};
 use crate::app::PAGE;
 use crate::archive::Archive;
 use crate::model::{
-    Chat, ChatId, ChatKind, Contact, Content, Delivery, Gif, LinkPreview, Media, MentionRef,
-    Message, Quoted, Reaction,
+    Chat, ChatId, ChatKind, Contact, Content, Delivery, Gif, GifError, LinkPreview, Media,
+    MentionRef, Message, Quoted, Reaction,
 };
 use crate::paths::AppDirs;
 
@@ -937,6 +937,22 @@ impl Worker {
                         if let Err(error) = client.presence().set_available().await {
                             log::debug!("presence not announced: {error}");
                         }
+                        // The account's read receipts privacy, to tell the
+                        // settings page; whatsapp-rust enforces it on its
+                        // own when receipts are sent.
+                        match client.fetch_privacy_settings().await {
+                            Ok(settings) => {
+                                use whatsapp_rust::wacore::iq::privacy::{
+                                    PrivacyCategory, PrivacyValue,
+                                };
+                                let disabled = matches!(
+                                    settings.get_value(&PrivacyCategory::ReadReceipts),
+                                    Some(PrivacyValue::None)
+                                );
+                                let _ = commands.send(Command::ReceiptsPrivacy { disabled });
+                            }
+                            Err(error) => log::debug!("privacy settings not fetched: {error}"),
+                        }
                         if let Some(me) = me {
                             match client
                                 .contacts()
@@ -1213,10 +1229,11 @@ impl Worker {
             ReceiptType::Sender if chat == self.me() => Delivery::Read,
             _ => return,
         };
+        let at = receipt.timestamp.timestamp();
         let mut newest = 0;
         let mut changed = 0;
         for id in &receipt.message_ids {
-            match self.archive.set_status(&chat, id, status) {
+            match self.archive.set_status(&chat, id, status, at) {
                 Ok(true) => {
                     changed += 1;
                     self.emit_message(&chat, id);
@@ -1235,7 +1252,7 @@ impl Worker {
         // A read receipt covers everything before it too.
         if status >= Delivery::Read
             && newest > 0
-            && let Ok(ids) = self.archive.advance_statuses(&chat, newest, status)
+            && let Ok(ids) = self.archive.advance_statuses(&chat, newest, status, at)
         {
             for id in ids {
                 self.emit_message(&chat, &id);
@@ -1343,6 +1360,8 @@ impl Worker {
             } else {
                 Delivery::None
             },
+            delivered_at: None,
+            read_at: None,
             quoted,
             reactions: Vec::new(),
             edited: false,
@@ -1380,6 +1399,8 @@ impl Worker {
                 what: "waiting for this message; open WhatsApp on your phone".to_owned(),
             },
             status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
             quoted: None,
             reactions: Vec::new(),
             edited: false,
@@ -1716,6 +1737,8 @@ impl Worker {
                     timestamp: message.timestamp,
                     content: message.content,
                     status: message.status,
+                    delivered_at: None,
+                    read_at: None,
                     quoted,
                     reactions,
                     edited: false,
@@ -1922,6 +1945,9 @@ impl Worker {
                     let _ = commands.send(Command::GifResults { query, results });
                 });
             }
+            Command::ReceiptsPrivacy { disabled } => {
+                self.emit(Event::ReceiptsPrivacy { disabled });
+            }
             Command::GifResults { query, results } => {
                 self.emit(Event::Gifs { query, results });
             }
@@ -2072,7 +2098,9 @@ impl Worker {
                     Some(_) => Delivery::Failed,
                     None => Delivery::Sent,
                 };
-                let _ = self.archive.set_status(&chat, &id, status);
+                let _ = self
+                    .archive
+                    .set_status(&chat, &id, status, crate::util::now());
                 self.emit_message(&chat, &id);
                 self.emit_chat(&chat);
                 if let Some(error) = error {
@@ -2150,6 +2178,8 @@ impl Worker {
             timestamp: crate::util::now(),
             content: Content::text(text),
             status: Delivery::Pending,
+            delivered_at: None,
+            read_at: None,
             quoted: quoted_row.map(|row| Quoted {
                 mentions: row.mentions.clone(),
                 id: row.id,
@@ -3775,9 +3805,16 @@ fn percent_encode(text: &str) -> String {
 
 /// Asks GIPHY, and fetches a still of each answer so the picker can show
 /// it. An empty query lists what is trending.
-fn search_gifs(query: &str, key: &str, dir: &Path) -> Result<Vec<Gif>, String> {
+fn search_gifs(query: &str, key: &str, dir: &Path) -> Result<Vec<Gif>, GifError> {
+    let plain = |message: String| GifError {
+        message,
+        bad_key: false,
+    };
     if key.is_empty() {
-        return Err("Add a GIPHY API key in Settings to search GIFs".to_owned());
+        return Err(GifError {
+            message: "GIF search needs a GIPHY API key.".to_owned(),
+            bad_key: true,
+        });
     }
     let url = if query.trim().is_empty() {
         format!("https://api.giphy.com/v1/gifs/trending?api_key={key}&limit=24&rating=pg-13")
@@ -3787,23 +3824,37 @@ fn search_gifs(query: &str, key: &str, dir: &Path) -> Result<Vec<Gif>, String> {
             percent_encode(query.trim())
         )
     };
-    let body = ureq::get(&url)
-        .call()
-        .and_then(|mut response| response.body_mut().read_to_string())
-        .map_err(|error| format!("GIPHY did not answer: {error}"))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&body).map_err(|error| format!("GIPHY answered oddly: {error}"))?;
+    let body = match ureq::get(&url).call() {
+        Ok(mut response) => response
+            .body_mut()
+            .read_to_string()
+            .map_err(|error| plain(format!("GIPHY did not answer: {error}")))?,
+        // 401 and 403 are about the key itself: missing, revoked, or over
+        // its limits. The picker turns this into the set-a-key screen.
+        Err(ureq::Error::StatusCode(code @ (401 | 403))) => {
+            return Err(GifError {
+                message: format!("GIPHY refused the API key (error {code})."),
+                bad_key: true,
+            });
+        }
+        Err(error) => return Err(plain(format!("GIPHY did not answer: {error}"))),
+    };
+    let json: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| plain(format!("GIPHY answered oddly: {error}")))?;
     if let Some(message) = json["meta"]["msg"].as_str()
-        && json["meta"]["status"]
+        && let Some(status) = json["meta"]["status"]
             .as_u64()
-            .is_some_and(|status| status >= 400)
+            .filter(|status| *status >= 400)
     {
-        return Err(format!("GIPHY: {message}"));
+        return Err(GifError {
+            message: format!("GIPHY: {message}"),
+            bad_key: status == 401 || status == 403,
+        });
     }
     let data = json["data"]
         .as_array()
-        .ok_or_else(|| "GIPHY answered without results".to_owned())?;
-    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+        .ok_or_else(|| plain("GIPHY answered without results".to_owned()))?;
+    std::fs::create_dir_all(dir).map_err(|error| plain(error.to_string()))?;
     let mut gifs: Vec<(Gif, Option<String>)> = data
         .iter()
         .filter_map(|item| {
@@ -3921,6 +3972,8 @@ async fn file_outbound(
         timestamp: crate::util::now(),
         content,
         status: Delivery::Pending,
+        delivered_at: None,
+        read_at: None,
         quoted: None,
         reactions: Vec::new(),
         edited: false,
@@ -4326,6 +4379,8 @@ mod receipt_tests {
             timestamp,
             content: Content::text("hi"),
             status: Delivery::Sent,
+            delivered_at: None,
+            read_at: None,
             quoted: None,
             reactions: Vec::new(),
             edited: false,

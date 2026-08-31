@@ -9,6 +9,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Baked into the binary by settings.rs; releases built without the
+  # secret simply ship keyless and the picker asks for one.
+  FASTSAPP_GIPHY_KEY: ${{ secrets.FASTSAPP_GIPHY_KEY }}
 
 jobs:
   build:

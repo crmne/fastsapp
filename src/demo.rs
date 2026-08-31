@@ -212,6 +212,8 @@ fn message(chat: &str, id: &str, from_me: bool, timestamp: i64, content: Content
         } else {
             Delivery::None
         },
+        delivered_at: None,
+        read_at: None,
         quoted: None,
         reactions: Vec::new(),
         edited: false,
@@ -844,6 +846,28 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     .join("\n");
                 app.focus_composer = true;
             }
+            // The group with two people typing at once, for the stacked
+            // pictures and the dots.
+            "typers" => {
+                let group = SAMPLES[1].id;
+                app.open_chat = Some(group.to_owned());
+                if let Some(chat) = app.chats.iter_mut().find(|chat| chat.id == group) {
+                    chat.unread = 0;
+                }
+                app.typing.insert(
+                    group.to_owned(),
+                    vec![
+                        (
+                            "491702222222@s.whatsapp.net".to_owned(),
+                            std::time::Instant::now(),
+                        ),
+                        (
+                            "491703333333@s.whatsapp.net".to_owned(),
+                            std::time::Instant::now(),
+                        ),
+                    ],
+                );
+            }
             "nosidebar" => app.sidebar_visible = false,
             "search" => {
                 app.search = "do".into();
@@ -945,6 +969,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         height: if index % 2 == 0 { 150 } else { 200 },
                     })
                     .collect();
+            }
+            // What the picker says when GIPHY turns the key away.
+            "gifs-badkey" => {
+                app.picker = Some(crate::model::PickerTab::Gifs);
+                app.settings.giphy_key = "demo".into();
+                app.gif_error = Some(crate::model::GifError {
+                    message: "GIPHY refused the API key (error 401).".into(),
+                    bad_key: true,
+                });
             }
             other => {
                 if app.chat(other).is_some() {
@@ -1070,6 +1103,7 @@ mod tests {
             "picker",
             "stickers",
             "typing",
+            "typers",
             "nosidebar",
             "search",
             "staged",
@@ -1077,6 +1111,7 @@ mod tests {
             "voice",
             "recording",
             "gifs",
+            "gifs-badkey",
         ] {
             let mut app = self::app();
             apply_flags(&mut app, Some(page));

@@ -660,6 +660,16 @@ pub fn soft_button(
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// The width [`soft_button`] will take, with its metrics, so a row of
+/// them can be centred before any is laid out.
+pub fn soft_button_width(ui: &egui::Ui, label: &str, icon: bool) -> f32 {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), medium(13.0), Color32::WHITE);
+    let icon_width = if icon { 15.0 + 6.0 } else { 0.0 };
+    galley.size().x + icon_width + 24.0
+}
+
 /// An animated busy indicator paced independently of the graphics driver.
 pub fn spinner(ui: &mut egui::Ui, size: f32, color: Color32) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());

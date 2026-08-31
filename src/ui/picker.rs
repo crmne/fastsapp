@@ -66,7 +66,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             PickerTab::Stickers => sticker_tab(app, ui, &palette),
                         },
                     );
-                    tabs(app, ui, &palette, tab);
+                    // Anchored to the panel's bottom edge even when a tab's
+                    // body comes up short (the ask-for-a-key screen).
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                        tabs(app, ui, &palette, tab);
+                    });
                 });
         });
     // A click anywhere else closes it, unless it is the button that opens
@@ -91,7 +95,12 @@ fn tabs(app: &mut App, ui: &mut egui::Ui, palette: &Palette, current: PickerTab)
             (PickerTab::Gifs, Icon::Gif, "GIF"),
             (PickerTab::Stickers, Icon::Sticker, "Stickers"),
         ];
-        let total = entries.len() as f32 * 100.0 + 12.0;
+        let spacing = ui.spacing().item_spacing.x;
+        let total = entries
+            .iter()
+            .map(|(_, _, label)| theme::soft_button_width(ui, label, true))
+            .sum::<f32>()
+            + spacing * (entries.len() as f32 - 1.0);
         ui.add_space((ui.available_width() - total).max(0.0) / 2.0);
         for (tab, icon, label) in entries {
             if theme::soft_button(ui, palette, Some(icon), label, tab == current).clicked()
@@ -259,11 +268,22 @@ fn emoji_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 // --- GIFs ---------------------------------------------------------------
 
 fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
-    if app.settings.effective_giphy_key().is_none() {
+    // No key, or a key GIPHY refuses: either way the fix is a key of
+    // one's own, pasted right here.
+    let bad_key = app.gif_error.as_ref().is_some_and(|error| error.bad_key);
+    if app.settings.effective_giphy_key().is_none() || bad_key {
         ui.add_space(8.0);
+        if let Some(error) = app.gif_error.as_ref().filter(|error| error.bad_key) {
+            theme::paragraph(ui, &error.message, theme::regular(13.0), palette.danger);
+            ui.add_space(6.0);
+        }
         theme::paragraph(
             ui,
-            "GIF search needs a free GIPHY API key. Create one at developers.giphy.com and paste it here; it is kept in your settings file.",
+            if bad_key {
+                "Create a free GIPHY API key of your own at developers.giphy.com and paste it here; it is kept in your settings file."
+            } else {
+                "GIF search needs a free GIPHY API key. Create one at developers.giphy.com and paste it here; it is kept in your settings file."
+            },
             theme::regular(13.0),
             palette.text,
         );
@@ -324,7 +344,7 @@ fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             theme::text(ui, "Looking…", theme::regular(12.5), palette.secondary);
         });
     } else if let Some(error) = &app.gif_error {
-        theme::paragraph(ui, error, theme::regular(13.0), palette.danger);
+        theme::paragraph(ui, &error.message, theme::regular(13.0), palette.danger);
     }
     let results = app.gif_results.clone();
     let columns = 3;

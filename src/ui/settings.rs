@@ -71,7 +71,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
                     section(ui, app, "Chats");
                     toggle(ui, app, "Enter sends", "Off, Enter adds a line and Ctrl+Enter sends.", |settings| &mut settings.enter_sends);
-                    toggle(ui, app, "Send read receipts", "Let people see when you have read their messages. WhatsApp's own privacy setting still applies.", |settings| &mut settings.send_read_receipts);
+                    let receipts_note = if app.account_receipts_off {
+                        "Your WhatsApp account has read receipts turned off, so none go out in one-to-one chats whatever this says. Groups always get them, as on the phone."
+                    } else {
+                        "Let people see when you have read their messages. WhatsApp's own privacy setting still applies."
+                    };
+                    toggle(ui, app, "Send read receipts", receipts_note, |settings| &mut settings.send_read_receipts);
                     toggle(ui, app, "Show when you are typing", "", |settings| &mut settings.send_typing);
                     toggle(ui, app, "Download attachments automatically", "Pictures, videos, voice messages, and documents up to 64 MB are fetched as they come into view. Off, each is fetched when you click it.", |settings| &mut settings.auto_download);
                     toggle(ui, app, "Show sender pictures in every chat", "WhatsApp shows them in groups only.", |settings| &mut settings.show_sender_pictures);

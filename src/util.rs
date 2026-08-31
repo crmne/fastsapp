@@ -59,6 +59,25 @@ fn stamp_relative_to(date: Date, today: Date, when: &Zoned) -> String {
     }
 }
 
+/// The stamp on a message's info rows: the day as the chat list says it,
+/// with the minute it happened.
+pub fn moment_stamp(unix_seconds: i64) -> String {
+    let Some(when) = zoned(unix_seconds) else {
+        return String::new();
+    };
+    let time = format!("{:02}:{:02}", when.hour(), when.minute());
+    let days = today()
+        .since(when.date())
+        .map(|span| span.get_days())
+        .unwrap_or(i32::MAX);
+    match days {
+        0 => time,
+        1 => format!("Yesterday at {time}"),
+        2..=6 => format!("{} at {time}", weekday_name(when.date().weekday())),
+        _ => format!("{} at {time}", short_date(when.date())),
+    }
+}
+
 /// The label of a day separator in a conversation.
 pub fn day_label(unix_seconds: i64) -> String {
     let Some(when) = zoned(unix_seconds) else {

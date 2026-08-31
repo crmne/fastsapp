@@ -134,10 +134,9 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                 );
                                 ui.add_space(4.0);
                                 ui.vertical(|ui| {
-                                    ui.spacing_mut().item_spacing.y = 1.0;
-                                    ui.set_max_width(
-                                        (ui.available_width() - right_controls).max(80.0),
-                                    );
+                                    let width =
+                                        (ui.available_width() - right_controls).max(80.0);
+                                    ui.set_max_width(width);
                                     if subtitle.is_empty() {
                                         ui.add_space(8.0);
                                         widgets::rich_text(
@@ -147,17 +146,31 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                             palette.text,
                                         );
                                     } else {
-                                        widgets::rich_text(
-                                            ui,
-                                            &title,
-                                            theme::semibold(15.0),
-                                            palette.text,
-                                        );
-                                        widgets::rich_text(
-                                            ui,
-                                            &subtitle,
-                                            theme::regular(12.5),
-                                            color,
+                                        // The name along the picture's top
+                                        // edge, the line under it along its
+                                        // bottom edge.
+                                        ui.allocate_ui_with_layout(
+                                            vec2(width, 40.0),
+                                            Layout::top_down(Align::Min),
+                                            |ui| {
+                                                widgets::rich_text(
+                                                    ui,
+                                                    &title,
+                                                    theme::semibold(15.0),
+                                                    palette.text,
+                                                );
+                                                ui.with_layout(
+                                                    Layout::bottom_up(Align::Min),
+                                                    |ui| {
+                                                        widgets::rich_text(
+                                                            ui,
+                                                            &subtitle,
+                                                            theme::regular(12.5),
+                                                            color,
+                                                        );
+                                                    },
+                                                );
+                                            },
                                         );
                                     }
                                 });
@@ -243,7 +256,12 @@ fn subtitle(app: &App, chat: &Chat) -> (String, Color32) {
     let typing = app.typing_in(&chat.id);
     if !typing.is_empty() {
         let text = if chat.is_group() {
-            format!("{} typing…", typing.join(", "))
+            let names: Vec<&str> = typing.iter().map(|(_, name)| name.as_str()).collect();
+            match names.as_slice() {
+                [] => String::new(),
+                [one] => format!("{one} is typing…"),
+                [rest @ .., last] => format!("{} and {last} are typing…", rest.join(", ")),
+            }
         } else {
             "typing…".to_owned()
         };
@@ -686,12 +704,14 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let typing = app.typing_in(&chat.id);
     let mut avatars = HashMap::new();
     if chat.is_group() || app.settings.show_sender_pictures {
-        let senders: HashSet<String> = conversation
+        let mut senders: HashSet<String> = conversation
             .messages
             .iter()
             .filter(|message| !message.from_me)
             .map(|message| message.sender.clone())
             .collect();
+        // Someone typing may not have a message on screen yet.
+        senders.extend(typing.iter().map(|(id, _)| id.clone()));
         for sender in senders {
             let picture = app.avatar(&sender);
             avatars.insert(sender, picture);
@@ -797,7 +817,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                         previous = Some(message);
                     }
                     if !typing.is_empty() {
-                        typing_bubble(ui, &palette, &typing, chat.is_group());
+                        typing_bubble(ui, &view, &typing);
                     }
                     ui.add_space(4.0);
                     if scroll_to_bottom {
@@ -956,19 +976,79 @@ fn top_of_history(
     });
 }
 
-fn typing_bubble(ui: &mut egui::Ui, palette: &Palette, typers: &[String], group: bool) {
-    Frame::new()
-        .fill(palette.bubble_in)
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::symmetric(12, 7))
-        .show(ui, |ui| {
-            let label = if group {
-                format!("{} typing…", typers.join(", "))
-            } else {
-                "typing…".to_owned()
-            };
-            widgets::rich_text(ui, &label, theme::regular(13.5), palette.secondary);
-        });
+/// Who is typing, the way the phone shows it: their picture (pictures
+/// half-stacked when several type at once) and a bubble of three dots
+/// rising in turn.
+fn typing_bubble(ui: &mut egui::Ui, view: &View<'_>, typers: &[(String, String)]) {
+    let palette = view.palette;
+    ui.horizontal(|ui| {
+        if view.chat.is_group() || view.pictures {
+            let count = typers.len().min(3);
+            let step = SENDER_AVATAR * 0.6;
+            let width = SENDER_AVATAR + step * (count.saturating_sub(1)) as f32;
+            let (rect, _) = ui.allocate_exact_size(vec2(width, SENDER_AVATAR), Sense::hover());
+            if ui.is_rect_visible(rect) {
+                for (index, (id, name)) in typers.iter().take(count).enumerate() {
+                    let avatar = Rect::from_min_size(
+                        rect.min + vec2(step * index as f32, 0.0),
+                        Vec2::splat(SENDER_AVATAR),
+                    );
+                    if index > 0 {
+                        // A sliver of background so the stacked circles
+                        // read as separate.
+                        ui.painter().circle_filled(
+                            avatar.center(),
+                            SENDER_AVATAR / 2.0 + 1.5,
+                            palette.chat,
+                        );
+                    }
+                    widgets::paint_avatar(
+                        ui,
+                        &palette,
+                        avatar,
+                        name.trim_start_matches('~'),
+                        id,
+                        view.avatars.get(id).and_then(|picture| picture.as_deref()),
+                    );
+                }
+            }
+            ui.add_space(2.0);
+        }
+        Frame::new()
+            .fill(palette.bubble_in)
+            .corner_radius(CornerRadius::same(10))
+            .inner_margin(Margin::symmetric(12, 9))
+            .show(ui, |ui| typing_dots(ui, &palette));
+    });
+}
+
+fn typing_dots(ui: &mut egui::Ui, palette: &Palette) {
+    let radius = 3.0;
+    let gap = 5.0;
+    let lift = 3.0;
+    let (rect, _) = ui.allocate_exact_size(
+        vec2(radius * 6.0 + gap * 2.0, radius * 2.0 + lift),
+        Sense::hover(),
+    );
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(33));
+    let time = ui.input(|input| input.time);
+    for index in 0..3 {
+        let wave = ((time * std::f64::consts::TAU / 1.2) - f64::from(index) * 0.9).sin() as f32;
+        let rise = wave.max(0.0);
+        let center = pos2(
+            rect.left() + radius + (radius * 2.0 + gap) * index as f32,
+            rect.bottom() - radius - rise * lift,
+        );
+        ui.painter().circle_filled(
+            center,
+            radius,
+            palette.secondary.gamma_multiply(0.45 + 0.55 * rise),
+        );
+    }
 }
 
 /// One message, aligned to its side, with the sender's picture in a
@@ -1352,7 +1432,11 @@ fn bubble_frame(
     let quick = quick_reactions(message).len() as f32;
     let width = widgets::menu_width(
         ui,
-        &["Delete for everyone", "Show in folder", "Sent Yesterday"],
+        &[
+            "Delete for everyone",
+            "Show in folder",
+            "Delivered Yesterday at 20:45",
+        ],
         true,
     )
     .max(quick * 36.0 + 12.0);
@@ -1612,21 +1696,27 @@ fn footer(ui: &mut egui::Ui, palette: &Palette, message: &Message, slot: Option<
 
 fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mut Vec<Action>) {
     let palette = view.palette;
-    let mut counts: Vec<(String, u32, bool)> = Vec::new();
+    let mut counts: Vec<(String, u32, bool, Vec<String>)> = Vec::new();
     for reaction in &message.reactions {
+        let who = if reaction.from_me {
+            "You".to_owned()
+        } else {
+            (view.names_or)(&reaction.sender, None)
+        };
         match counts
             .iter_mut()
-            .find(|(emoji, _, _)| *emoji == reaction.emoji)
+            .find(|(emoji, _, _, _)| *emoji == reaction.emoji)
         {
-            Some((_, count, mine)) => {
+            Some((_, count, mine, names)) => {
                 *count += 1;
                 *mine |= reaction.from_me;
+                names.push(who);
             }
-            None => counts.push((reaction.emoji.clone(), 1, reaction.from_me)),
+            None => counts.push((reaction.emoji.clone(), 1, reaction.from_me, vec![who])),
         }
     }
     ui.spacing_mut().item_spacing.x = 3.0;
-    for (emoji, count, mine) in counts {
+    for (emoji, count, mine, names) in counts {
         let label = if count > 1 {
             format!("{emoji} {count}")
         } else {
@@ -1646,7 +1736,9 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
             );
             line.paint(ui, rect.center() - line.size() / 2.0, palette.text);
         }
-        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let response = response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(names.join(", "));
         if response.clicked() {
             // Clicking a reaction of ours takes it back; another's adds
             // the same one.
@@ -1787,13 +1879,44 @@ fn context_menu(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: 
         }
     }
     widgets::menu_separator(ui, &palette);
+    // The info screen of the phone, without the screen: when the message
+    // was sent, and for our own, when it arrived and when it was read.
     if widgets::menu_item(
         ui,
         &palette,
-        Some(Icon::Info),
-        &format!("Sent {}", crate::util::chat_stamp(message.timestamp)),
+        Some(Icon::Check),
+        &format!("Sent {}", crate::util::moment_stamp(message.timestamp)),
     ) {
         actions.push(Action::CopyText(message.id.clone()));
+    }
+    if message.from_me {
+        if message.delivered_at.is_some() || message.status == Delivery::Delivered {
+            let _ = widgets::menu_item(
+                ui,
+                &palette,
+                Some(Icon::CheckCheck),
+                &match message.delivered_at {
+                    Some(when) => format!("Delivered {}", crate::util::moment_stamp(when)),
+                    None => "Delivered".to_owned(),
+                },
+            );
+        }
+        if matches!(message.status, Delivery::Read | Delivery::Played) {
+            let what = if message.status == Delivery::Played {
+                "Played"
+            } else {
+                "Read"
+            };
+            let _ = widgets::menu_item(
+                ui,
+                &palette,
+                Some(Icon::CheckCheck),
+                &match message.read_at {
+                    Some(when) => format!("{what} {}", crate::util::moment_stamp(when)),
+                    None => what.to_owned(),
+                },
+            );
+        }
     }
 }
 
@@ -3038,6 +3161,8 @@ mod reaction_tests {
             timestamp: 0,
             content: Content::text("hi"),
             status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
             quoted: None,
             reactions,
             edited: false,

@@ -232,7 +232,7 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     title(ui, app, if chat.is_group() { "Group" } else { "Contact" });
     let picture = app.avatar_full(id).or_else(|| app.avatar(id));
     ui.vertical_centered(|ui| {
-        super::widgets::avatar(ui, &palette, &name, id, 160.0, picture.as_deref());
+        super::widgets::avatar(ui, &palette, &name, id, 200.0, picture.as_deref());
         ui.add_space(6.0);
         super::widgets::selectable_rich_text(ui, &name, theme::bold(19.0), palette.text);
         if let Some(phone) = chat.phone() {
@@ -348,59 +348,82 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
         );
     }
     ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        if let Some(phone) = chat.phone()
-            && theme::soft_button(ui, &palette, Some(Icon::Copy), "Copy number", false).clicked()
-        {
-            app.actions.push(Action::CopyText(format!("+{phone}")));
-        }
-        if has_chat {
-            let muted = chat.muted(crate::util::now());
-            let (icon, label) = if muted {
-                (Icon::Bell, "Unmute")
-            } else {
-                (Icon::BellOff, "Mute")
-            };
-            if theme::soft_button(ui, &palette, Some(icon), label, false).clicked() {
-                app.actions.push(Action::SetMuted(
-                    chat.id.clone(),
-                    if muted { None } else { Some(0) },
-                ));
-            }
-        }
-        if !has_chat {
-            return;
-        }
-        if theme::soft_button(
-            ui,
-            &palette,
-            Some(if chat.pinned { Icon::PinOff } else { Icon::Pin }),
+    // The buttons that apply, in rows centred under the picture.
+    let mut buttons: Vec<(Icon, &str, Vec<Action>)> = Vec::new();
+    if let Some(phone) = chat.phone() {
+        buttons.push((
+            Icon::Copy,
+            "Copy number",
+            vec![Action::CopyText(format!("+{phone}"))],
+        ));
+    }
+    if has_chat {
+        let muted = chat.muted(crate::util::now());
+        buttons.push(if muted {
+            (
+                Icon::Bell,
+                "Unmute",
+                vec![Action::SetMuted(chat.id.clone(), None)],
+            )
+        } else {
+            (
+                Icon::BellOff,
+                "Mute",
+                vec![Action::SetMuted(chat.id.clone(), Some(0))],
+            )
+        });
+        buttons.push((
+            if chat.pinned { Icon::PinOff } else { Icon::Pin },
             if chat.pinned { "Unpin" } else { "Pin" },
-            false,
-        )
-        .clicked()
-        {
-            app.actions
-                .push(Action::SetPinned(chat.id.clone(), !chat.pinned));
-        }
-        if theme::soft_button(
-            ui,
-            &palette,
-            Some(Icon::Archive),
+            vec![Action::SetPinned(chat.id.clone(), !chat.pinned)],
+        ));
+        buttons.push((
+            Icon::Archive,
             if chat.archived {
                 "Unarchive"
             } else {
                 "Archive"
             },
-            false,
-        )
-        .clicked()
-        {
-            app.actions
-                .push(Action::SetArchived(chat.id.clone(), !chat.archived));
-            app.actions.push(Action::CloseDialog);
+            vec![
+                Action::SetArchived(chat.id.clone(), !chat.archived),
+                Action::CloseDialog,
+            ],
+        ));
+    }
+    let spacing = ui.spacing().item_spacing.x;
+    let available = ui.available_width();
+    let mut fired: Option<Vec<Action>> = None;
+    let mut start = 0;
+    while start < buttons.len() {
+        // As many buttons as the row holds, then the row centred.
+        let mut end = start;
+        let mut total = 0.0;
+        while end < buttons.len() {
+            let width = theme::soft_button_width(ui, buttons[end].1, true);
+            let grown = if end == start {
+                width
+            } else {
+                total + spacing + width
+            };
+            if end > start && grown > available {
+                break;
+            }
+            total = grown;
+            end += 1;
         }
-    });
+        ui.horizontal(|ui| {
+            ui.add_space((available - total).max(0.0) / 2.0);
+            for (icon, label, actions) in &buttons[start..end] {
+                if theme::soft_button(ui, &palette, Some(*icon), label, false).clicked() {
+                    fired = Some(actions.clone());
+                }
+            }
+        });
+        start = end;
+    }
+    if let Some(actions) = fired {
+        app.actions.extend(actions);
+    }
 }
 
 /// A filled button in the danger colour, for the one irreversible action.

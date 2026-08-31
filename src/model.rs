@@ -133,6 +133,13 @@ pub struct Message {
     pub timestamp: i64,
     pub content: Content,
     pub status: Delivery,
+    /// Unix seconds when the first delivered receipt came, for our own
+    /// messages; `None` for what predates the receipt log.
+    #[serde(default)]
+    pub delivered_at: Option<i64>,
+    /// Unix seconds when the first read (or played) receipt came.
+    #[serde(default)]
+    pub read_at: Option<i64>,
     pub quoted: Option<Quoted>,
     pub reactions: Vec<Reaction>,
     pub edited: bool,
@@ -391,6 +398,15 @@ pub enum PickerTab {
     Emoji,
     Gifs,
     Stickers,
+}
+
+/// Why a GIF search came back empty.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GifError {
+    pub message: String,
+    /// GIPHY refused the key itself, so searching again is pointless
+    /// until another key is set.
+    pub bad_key: bool,
 }
 
 /// A GIF found through GIPHY.

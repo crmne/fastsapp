@@ -514,7 +514,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         };
         let preview = if !typing.is_empty() {
             let who = if chat.is_group() {
-                format!("{} is typing…", typing[0].trim_start_matches('~'))
+                format!("{} is typing…", typing[0].1.trim_start_matches('~'))
             } else {
                 "typing…".to_owned()
             };

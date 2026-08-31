@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::model::{Chat, ChatId, Contact, Gif, Message};
+use crate::model::{Chat, ChatId, Contact, Gif, GifError, Message};
 use crate::paths::AppDirs;
 
 mod worker;
@@ -220,7 +220,7 @@ pub enum Command {
     /// Internal: GIPHY answered.
     GifResults {
         query: String,
-        results: Result<Vec<Gif>, String>,
+        results: Result<Vec<Gif>, GifError>,
     },
     /// Internal: the file picker closed.
     Picked {
@@ -244,6 +244,11 @@ pub enum Command {
     /// Internal: pairing by phone number produced a code, or failed.
     PairCode {
         result: Result<String, String>,
+    },
+    /// Internal: WhatsApp answered whether the account sends read
+    /// receipts, asked on connect.
+    ReceiptsPrivacy {
+        disabled: bool,
     },
 }
 
@@ -309,7 +314,7 @@ pub enum Event {
     /// GIFs for a query, or why there are none.
     Gifs {
         query: String,
-        results: Result<Vec<Gif>, String>,
+        results: Result<Vec<Gif>, GifError>,
     },
     /// Sticker files seen lately, newest first.
     Stickers(Vec<PathBuf>),
@@ -327,6 +332,12 @@ pub enum Event {
     OlderFetched {
         chat: ChatId,
         more: bool,
+    },
+    /// The account's own privacy setting has read receipts off, so
+    /// whatsapp-rust sends none in direct chats whatever our own toggle
+    /// says.
+    ReceiptsPrivacy {
+        disabled: bool,
     },
     Error(String),
 }
