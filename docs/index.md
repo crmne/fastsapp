@@ -59,7 +59,11 @@ features:
     top: auto !important;
     left: auto !important;
     transform: none !important;
-    width: 100% !important;
+    /* A touch under full width: a dense chat interface reads as noise
+       when the screenshot shouts. */
+    width: 86% !important;
+    margin: 0 auto;
+    display: block;
     height: auto !important;
     max-width: 100% !important;
     max-height: none !important;
