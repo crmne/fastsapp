@@ -58,7 +58,8 @@ Documentation, downloads, and guides: **[fastsapp.rocks](https://fastsapp.rocks)
   paperclip or dropped on the window: pictures, videos, audio, and
   documents. Reply to a message from its menu, react with one of the quick
   emoji, edit or delete your own messages, and see when the other side is
-  typing.
+  typing. The same menu tells a message's journey: sent, delivered, and
+  read, each with its moment; hovering a reaction names who gave it.
 - **Attachments.** Everything up to 64 MB is fetched as it scrolls into
   view (or on a click, in Settings), with WhatsApp's blurred preview until
   then. A file the servers have let go of is asked for again (WhatsApp
@@ -71,10 +72,19 @@ Documentation, downloads, and guides: **[fastsapp.rocks](https://fastsapp.rocks)
   with whatever your desktop uses for them. Locations open in a map;
   contacts and polls are shown; forwarded messages say so.
 - **Picker.** The smiley next to the composer opens emoji (searchable, by
-  category, with your recent ones), stickers (the ones your phone used
-  lately, synced when you link, plus those you have sent or received here),
-  and GIF search through GIPHY (paste a free API key from
-  developers.giphy.com in Settings, unless your build carries one).
+  category, with your recent ones), stickers, and GIF search through GIPHY
+  (the tab itself asks for a free developers.giphy.com key unless your
+  build carries one).
+- **Stickers, including whole packs.** The sticker tab gathers the ones
+  your phone used lately (synced when you link), those sent or received
+  here, and any sticker you keep with a right-click. Whole packs come in
+  through one paste: the Find packs button opens the
+  [signalstickers.org](https://signalstickers.org) gallery, and a copied
+  signal.art link imports the pack the moment it lands in the field (the
+  files come from Signal's sticker CDN); a `.wastickers` file from any
+  sticker site works too. Animated packs keep their motion (APNG is
+  converted to animated WebP, the form WhatsApp plays) and a moving
+  sticker plays while the pointer rests on it.
 - **One name per person.** From your address book, or as people call
   themselves on WhatsApp (a setting), and the same in the chat list,
   senders, replies, mentions, and notifications.
@@ -188,6 +198,7 @@ in the chat list, or `Ctrl+,`.
 | Device keys | `~/.local/state/fastsapp/session.db` | Owned by whatsapp-rust; deleting it unlinks |
 | Messages | `~/.local/state/fastsapp/archive.db` | SQLite; the raw message keeps the keys to fetch its attachment later |
 | Attachments, avatars | `~/.cache/fastsapp/` | Safe to delete |
+| Saved stickers and packs | `~/.local/state/fastsapp/stickers/` | Plain WebP files; each pack is a folder |
 | Log of the last run | `~/.local/state/fastsapp/fastsapp.log` | `--verbose` for more |
 
 macOS and Windows use their platform's equivalents through the

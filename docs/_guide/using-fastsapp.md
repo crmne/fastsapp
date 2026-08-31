@@ -14,8 +14,22 @@ Mentions in a group are written with `@`; the smiley opens emoji
 phone.
 
 Reply, react, edit, forward, and delete live in a message's right-click
-menu, on the whole bubble. Editing your own message reuses the composer;
-Escape backs out of anything.
+menu, on the whole bubble, along with the message's journey: sent,
+delivered, and read, each with its moment. Hovering a reaction names who
+gave it. Editing your own message reuses the composer; Escape backs out
+of anything.
+
+## Stickers
+
+Right-click any sticker, in a chat or in the picker, to keep it; the
+kept ones live in a Saved row of the sticker tab. Whole packs come in
+through one paste: the Find packs button opens the
+[signalstickers.org](https://signalstickers.org) gallery, and a copied
+signal.art link imports its pack the moment it lands in the field. A
+`.wastickers` file from any sticker site works through Open file.
+Animated packs keep their motion, and a moving sticker plays while the
+pointer rests on it. A pack leaves through the little bin beside its
+name; everything lives as plain WebP files in a folder of yours.
 
 ## Attachments
 
