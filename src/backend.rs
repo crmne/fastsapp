@@ -12,9 +12,11 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::model::{Chat, ChatId, Contact, Gif, GifError, Message};
+use crate::model::{Chat, ChatId, Contact, Gif, GifError, Message, StickerPack};
 use crate::paths::AppDirs;
 
+// The picker peeks at `looks_like_signal_url` to import on paste.
+pub(crate) mod sticker_import;
 mod worker;
 
 /// Where the link to the phone stands.
@@ -171,6 +173,22 @@ pub enum Command {
     /// Delete a sticker from the saved collection.
     ForgetSticker {
         path: PathBuf,
+    },
+    /// Fetch a whole pack from a signal.art link.
+    ImportStickerUrl {
+        url: String,
+    },
+    /// Open the file picker for a .wastickers or zip archive and import
+    /// what is chosen.
+    PickStickerArchive,
+    /// Delete an imported pack's folder.
+    DeleteStickerPack {
+        dir: PathBuf,
+    },
+    /// Internal: a pack import finished. `Ok` carries the pack's name;
+    /// an empty error means the picker dialog was simply closed.
+    StickerPackImported {
+        result: Result<String, String>,
     },
     /// Fetch a GIF from the web and send it as WhatsApp does, a short
     /// looping video.
@@ -329,10 +347,11 @@ pub enum Event {
         query: String,
         results: Result<Vec<Gif>, GifError>,
     },
-    /// The picker's stickers: the kept collection, then the ones seen
-    /// lately, each newest first.
+    /// The picker's stickers: the kept collection, the imported packs,
+    /// then the ones seen lately, each newest first.
     Stickers {
         saved: Vec<PathBuf>,
+        packs: Vec<StickerPack>,
         recent: Vec<PathBuf>,
     },
     Media {
@@ -356,6 +375,8 @@ pub enum Event {
     ReceiptsPrivacy {
         disabled: bool,
     },
+    /// Something worth a quiet toast: a pack that landed, say.
+    Info(String),
     Error(String),
 }
 

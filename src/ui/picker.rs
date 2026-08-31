@@ -419,9 +419,9 @@ struct StickerChoices {
 }
 
 fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
+    import_row(app, ui, palette);
     ui.add_space(4.0);
-    if app.stickers.is_empty() && app.stickers_saved.is_empty() {
-        theme::text(ui, "Recent", theme::semibold(12.5), palette.secondary);
+    if app.stickers.is_empty() && app.stickers_saved.is_empty() && app.sticker_packs.is_empty() {
         ui.add_space(20.0);
         ui.vertical_centered(|ui| {
             theme::paragraph(
@@ -429,7 +429,7 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 if app.stickers_pending {
                     "Fetching your stickers…"
                 } else {
-                    "The stickers you have sent lately, and those you receive, show up here. Right-click one (or a sticker in a chat) to keep it."
+                    "The stickers you have sent lately, and those you receive, show up here; right-click one to keep it. Whole packs come in through a signal.art link (signalstickers.com has thousands) or a .wastickers file."
                 },
                 theme::regular(13.0),
                 palette.secondary,
@@ -438,8 +438,10 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         return;
     }
     let saved = app.stickers_saved.clone();
+    let packs = app.sticker_packs.clone();
     let recent = app.stickers.clone();
     let mut choices = StickerChoices::default();
+    let mut delete_pack = None;
     egui::ScrollArea::vertical()
         .id_salt("sticker-grid")
         .auto_shrink([false, false])
@@ -447,6 +449,27 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             if !saved.is_empty() {
                 theme::text(ui, "Saved", theme::semibold(12.5), palette.secondary);
                 sticker_grid(ui, palette, &saved, true, &mut choices);
+                ui.add_space(8.0);
+            }
+            for pack in &packs {
+                ui.horizontal(|ui| {
+                    theme::text(ui, &pack.name, theme::semibold(12.5), palette.secondary);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::icon_button(
+                            ui,
+                            Icon::Trash,
+                            14.0,
+                            palette.dim,
+                            palette.danger,
+                            "Remove this pack",
+                        )
+                        .clicked()
+                        {
+                            delete_pack = Some(pack.dir.clone());
+                        }
+                    });
+                });
+                sticker_grid(ui, palette, &pack.stickers, false, &mut choices);
                 ui.add_space(8.0);
             }
             if !recent.is_empty() {
@@ -462,6 +485,60 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     }
     if let Some(path) = choices.forget {
         app.actions.push(Action::ForgetSticker(path));
+    }
+    if let Some(dir) = delete_pack {
+        app.actions.push(Action::DeleteStickerPack(dir));
+    }
+}
+
+/// The way in for whole packs: a pasted signal.art link imports on the
+/// paste itself, and the button takes a .wastickers or zip file.
+fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
+    ui.horizontal(|ui| {
+        let button = theme::soft_button_width(ui, "Open file", true) + ui.spacing().item_spacing.x;
+        let field = Frame::new()
+            .fill(palette.surface)
+            .corner_radius(CornerRadius::same(theme::RADIUS))
+            .inner_margin(Margin::symmetric(10, 6))
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.sticker_link)
+                        .id(egui::Id::new("sticker-link"))
+                        .hint_text(
+                            egui::RichText::new("Paste a signal.art sticker pack link")
+                                .color(palette.dim),
+                        )
+                        .font(theme::regular(13.0))
+                        .text_color(palette.text)
+                        .frame(Frame::NONE)
+                        .desired_width(ui.available_width() - button - 26.0),
+                )
+            })
+            .inner;
+        let pasted = field.changed()
+            && crate::backend::sticker_import::looks_like_signal_url(app.sticker_link.trim());
+        let submitted = field.lost_focus()
+            && ui.input(|input| input.key_pressed(Key::Enter))
+            && !app.sticker_link.trim().is_empty();
+        if pasted || submitted {
+            app.actions
+                .push(Action::ImportStickerUrl(app.sticker_link.trim().to_owned()));
+        }
+        if theme::soft_button(ui, palette, Some(Icon::FileText), "Open file", false).clicked() {
+            app.actions.push(Action::PickStickerArchive);
+        }
+    });
+    if app.sticker_import_pending {
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            theme::spinner(ui, 14.0, palette.accent);
+            theme::text(
+                ui,
+                "Fetching the pack…",
+                theme::regular(12.5),
+                palette.secondary,
+            );
+        });
     }
 }
 

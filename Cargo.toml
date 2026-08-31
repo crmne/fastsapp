@@ -21,6 +21,14 @@ path = "src/main.rs"
 anyhow = "1"
 # Content hashes for saved stickers; already in the tree through wacore.
 sha2 = "0.11"
+# Signal sticker pack decryption (HKDF -> AES-256-CBC + HMAC); all four
+# already in the tree through wacore at these exact versions.
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc", "block-padding"] }
+hkdf = "0.13"
+hmac = "0.13"
+# Reading .wastickers archives, which are plain zips.
+zip = { version = "5", default-features = false, features = ["deflate"] }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

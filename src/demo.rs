@@ -953,6 +953,11 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.picker = Some(crate::model::PickerTab::Stickers);
                 let (_, sticker) = sample_files(app);
                 app.stickers_saved = vec![sticker.clone(); 3];
+                app.sticker_packs = vec![crate::model::StickerPack {
+                    name: "Happy Frogs".to_owned(),
+                    dir: std::path::PathBuf::from("Happy Frogs"),
+                    stickers: vec![sticker.clone(); 6],
+                }];
                 app.stickers = vec![sticker; 7];
             }
             "gifs" => {

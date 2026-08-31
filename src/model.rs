@@ -400,6 +400,15 @@ pub enum PickerTab {
     Stickers,
 }
 
+/// A named set of stickers imported together, kept as one folder of
+/// WebP files whose folder name is the pack's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StickerPack {
+    pub name: String,
+    pub dir: PathBuf,
+    pub stickers: Vec<PathBuf>,
+}
+
 /// Why a GIF search came back empty.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GifError {
@@ -528,6 +537,12 @@ pub enum Action {
     SaveSticker(PathBuf),
     /// Take a sticker out of the Saved row again.
     ForgetSticker(PathBuf),
+    /// Fetch a whole pack from a pasted signal.art link.
+    ImportStickerUrl(String),
+    /// Ask for a .wastickers (or zip) file and import it as a pack.
+    PickStickerArchive,
+    /// Delete an imported pack, folder and all.
+    DeleteStickerPack(PathBuf),
     /// Look GIFs up; an empty query lists what is trending.
     SearchGifs(String),
     SendGif(Gif),

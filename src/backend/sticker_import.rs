@@ -1,0 +1,514 @@
+//! Whole sticker packs, imported in one gesture.
+//!
+//! Two doors in: a `signal.art` link (the open pack format behind
+//! signalstickers.com; the URL fragment carries the pack id and the key,
+//! the CDN serves the encrypted files to anyone holding them) and a
+//! `.wastickers` archive (a plain zip, what most WhatsApp sticker sites
+//! hand out). Either way a pack becomes one folder of WebP files under
+//! the saved-sticker directory, and the folder's name is the pack's.
+
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+/// A pack id (32 hex characters) and the key that opens it, out of a
+/// pasted `signal.art/addstickers/#pack_id=…&pack_key=…` address. The
+/// bare `pack_id=…&pack_key=…` tail works too.
+pub fn parse_signal_url(url: &str) -> Result<(String, [u8; 32]), String> {
+    let tail = url.rsplit('#').next().unwrap_or(url);
+    let mut id = None;
+    let mut key = None;
+    for part in tail.split(['&', '?', ';']) {
+        if let Some(value) = part.strip_prefix("pack_id=") {
+            id = Some(value.trim().to_lowercase());
+        }
+        if let Some(value) = part.strip_prefix("pack_key=") {
+            key = Some(value.trim().to_lowercase());
+        }
+    }
+    let id = id
+        .filter(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or("the link carries no pack_id; copy the whole signal.art address")?;
+    let key = key
+        .and_then(|key| hex_bytes(&key))
+        .ok_or("the link carries no usable pack_key; copy the whole signal.art address")?;
+    Ok((id, key))
+}
+
+fn hex_bytes(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0u8; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(bytes)
+}
+
+/// Whether a pasted text looks like a complete pack link, so the picker
+/// can import on the paste itself.
+pub fn looks_like_signal_url(text: &str) -> bool {
+    parse_signal_url(text).is_ok()
+}
+
+/// Opens one encrypted pack file: HKDF splits the pack key into an AES
+/// and an HMAC half, the tail MAC is checked over IV and ciphertext,
+/// then AES-256-CBC unwraps the content. The format of Signal's own
+/// clients.
+pub fn decrypt_blob(payload: &[u8], pack_key: &[u8; 32]) -> Result<Vec<u8>, String> {
+    use aes::cipher::{BlockModeDecrypt, KeyInit, KeyIvInit, block_padding::Pkcs7};
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    if payload.len() < 16 + 16 + 32 {
+        return Err("the pack answered with too little data".to_owned());
+    }
+    let mut keys = [0u8; 64];
+    hkdf::Hkdf::<Sha256>::new(Some(&[0u8; 32]), pack_key)
+        .expand(b"Sticker Pack", &mut keys)
+        .map_err(|_| "the key would not derive".to_owned())?;
+    let (aes_key, mac_key) = keys.split_at(32);
+    let (iv, rest) = payload.split_at(16);
+    let (ciphertext, mac) = rest.split_at(rest.len() - 32);
+    let mut hmac = <Hmac<Sha256> as KeyInit>::new_from_slice(mac_key)
+        .map_err(|_| "the key would not derive".to_owned())?;
+    hmac.update(iv);
+    hmac.update(ciphertext);
+    hmac.verify_slice(mac)
+        .map_err(|_| "the key does not open this pack".to_owned())?;
+    let iv: [u8; 16] = iv.try_into().expect("split at 16");
+    let aes_key: [u8; 32] = aes_key.try_into().expect("split at 32");
+    cbc::Decryptor::<aes::Aes256>::new(&aes_key.into(), &iv.into())
+        .decrypt_padded_vec::<Pkcs7>(ciphertext)
+        .map_err(|_| "the pack would not decrypt".to_owned())
+}
+
+/// The pack's title and its sticker ids, out of the manifest protobuf
+/// (`StickerPack { title = 1, stickers = 4 { id = 1 } }`). Read by hand:
+/// two fields do not earn a codegen step.
+pub fn parse_manifest(bytes: &[u8]) -> Result<(String, Vec<u64>), String> {
+    let mut title = String::new();
+    let mut ids = Vec::new();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        let (field, wire) = read_tag(bytes, &mut pos)?;
+        match (field, wire) {
+            (1, 2) => {
+                title = String::from_utf8_lossy(read_chunk(bytes, &mut pos)?).into_owned();
+            }
+            (4, 2) => {
+                let sticker = read_chunk(bytes, &mut pos)?;
+                let mut inner = 0;
+                while inner < sticker.len() {
+                    let (field, wire) = read_tag(sticker, &mut inner)?;
+                    match (field, wire) {
+                        (1, 0) => ids.push(read_varint(sticker, &mut inner)?),
+                        _ => skip_field(sticker, &mut inner, wire)?,
+                    }
+                }
+            }
+            _ => skip_field(bytes, &mut pos, wire)?,
+        }
+    }
+    Ok((title, ids))
+}
+
+fn read_varint(bytes: &[u8], pos: &mut usize) -> Result<u64, String> {
+    let mut value = 0u64;
+    for shift in 0..10 {
+        let byte = *bytes
+            .get(*pos)
+            .ok_or("the manifest ends mid-number".to_owned())?;
+        *pos += 1;
+        value |= u64::from(byte & 0x7f) << (shift * 7);
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err("the manifest holds a number too long".to_owned())
+}
+
+fn read_tag(bytes: &[u8], pos: &mut usize) -> Result<(u64, u64), String> {
+    let tag = read_varint(bytes, pos)?;
+    Ok((tag >> 3, tag & 7))
+}
+
+fn read_chunk<'a>(bytes: &'a [u8], pos: &mut usize) -> Result<&'a [u8], String> {
+    let length = read_varint(bytes, pos)? as usize;
+    let end = pos
+        .checked_add(length)
+        .filter(|end| *end <= bytes.len())
+        .ok_or("the manifest ends mid-field".to_owned())?;
+    let chunk = &bytes[*pos..end];
+    *pos = end;
+    Ok(chunk)
+}
+
+fn skip_field(bytes: &[u8], pos: &mut usize, wire: u64) -> Result<(), String> {
+    match wire {
+        0 => {
+            read_varint(bytes, pos)?;
+        }
+        1 => *pos += 8,
+        2 => {
+            read_chunk(bytes, pos)?;
+        }
+        5 => *pos += 4,
+        _ => return Err("the manifest uses an unknown field kind".to_owned()),
+    }
+    if *pos > bytes.len() {
+        return Err("the manifest ends mid-field".to_owned());
+    }
+    Ok(())
+}
+
+/// Signal's own certificate authority, as their clients pin it (from
+/// Signal Desktop's config/default.json; valid to 2032). The sticker CDN
+/// answers with a chain this CA signs, which no public root store knows.
+const SIGNAL_CA: &str = "-----BEGIN CERTIFICATE-----\n\
+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\n\
+9qfgAJizyy3kqM4lOwBH\n\
+-----END CERTIFICATE-----";
+
+/// A client that trusts exactly Signal's CA, for the sticker CDN.
+fn signal_agent() -> Result<ureq::Agent, String> {
+    use ureq::tls::{Certificate, RootCerts, TlsConfig};
+    let ca = Certificate::from_pem(SIGNAL_CA.as_bytes())
+        .map_err(|error| format!("the Signal certificate would not parse: {error}"))?;
+    let tls = TlsConfig::builder()
+        .root_certs(RootCerts::new_with_certs(&[ca]))
+        .build();
+    Ok(ureq::Agent::config_builder().tls_config(tls).build().into())
+}
+
+fn fetch(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
+    agent
+        .get(url)
+        .call()
+        .map_err(|error| format!("signal.art did not answer: {error}"))?
+        .body_mut()
+        .read_to_vec()
+        .map_err(|error| format!("signal.art did not answer: {error}"))
+}
+
+/// Fetches, decrypts, and files a whole pack; the folder's name is the
+/// pack's title. Returns that title.
+pub fn import_signal_pack(url: &str, packs: &Path) -> Result<String, String> {
+    let (id, key) = parse_signal_url(url)?;
+    let agent = signal_agent()?;
+    let manifest = decrypt_blob(
+        &fetch(
+            &agent,
+            &format!("https://cdn.signal.org/stickers/{id}/manifest.proto"),
+        )?,
+        &key,
+    )?;
+    let (title, ids) = parse_manifest(&manifest)?;
+    if ids.is_empty() {
+        return Err("the pack lists no stickers".to_owned());
+    }
+    // A pack holds up to 200 files; a few lanes keep the wait short.
+    let mut blobs: Vec<Option<Vec<u8>>> = vec![None; ids.len()];
+    let lane = ids.len().div_ceil(6).max(1);
+    std::thread::scope(|scope| {
+        for (chunk, out) in ids.chunks(lane).zip(blobs.chunks_mut(lane)) {
+            let id = &id;
+            let key = &key;
+            let agent = &agent;
+            scope.spawn(move || {
+                for (sticker, slot) in chunk.iter().zip(out) {
+                    if let Ok(payload) = fetch(
+                        agent,
+                        &format!("https://cdn.signal.org/stickers/{id}/full/{sticker}"),
+                    ) && let Ok(bytes) = decrypt_blob(&payload, key)
+                    {
+                        *slot = Some(bytes);
+                    }
+                }
+            });
+        }
+    });
+    let files: Vec<Vec<u8>> = blobs.into_iter().flatten().filter_map(webp_bytes).collect();
+    write_pack(packs, &title, files)
+}
+
+/// Unpacks a `.wastickers` file (or any zip of sticker pictures) into a
+/// pack folder. The title comes from the archive's `title.txt` when it
+/// has one, else from the file's own name.
+pub fn import_archive(path: &Path, packs: &Path) -> Result<String, String> {
+    let file =
+        std::fs::File::open(path).map_err(|error| format!("the file would not open: {error}"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| format!("the file is not a sticker archive: {error}"))?;
+    let mut title: Option<String> = None;
+    let mut pictures: Vec<(String, Vec<u8>)> = Vec::new();
+    for index in 0..archive.len() {
+        let Ok(mut entry) = archive.by_index(index) else {
+            continue;
+        };
+        let name = entry.name().to_lowercase();
+        let mut bytes = Vec::new();
+        if entry.read_to_end(&mut bytes).is_err() {
+            continue;
+        }
+        if name.ends_with("title.txt") {
+            let text = String::from_utf8_lossy(&bytes).trim().to_owned();
+            if !text.is_empty() {
+                title = Some(text);
+            }
+            continue;
+        }
+        let picture = [".webp", ".png", ".jpg", ".jpeg"]
+            .iter()
+            .any(|extension| name.ends_with(extension));
+        // The tray icon is the pack's thumbnail, not a sticker.
+        if picture && !name.contains("tray") {
+            pictures.push((name, bytes));
+        }
+    }
+    pictures.sort_by(|a, b| a.0.cmp(&b.0));
+    let title = title
+        .or_else(|| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    let files: Vec<Vec<u8>> = pictures
+        .into_iter()
+        .filter_map(|(_, bytes)| webp_bytes(bytes))
+        .collect();
+    write_pack(packs, &title, files)
+}
+
+/// Files the pack's pictures under a fresh folder named after the title.
+fn write_pack(packs: &Path, title: &str, files: Vec<Vec<u8>>) -> Result<String, String> {
+    if files.is_empty() {
+        return Err("no sticker of the pack could be read".to_owned());
+    }
+    let dir = unique_pack_dir(packs, title)?;
+    for (index, bytes) in files.iter().enumerate() {
+        std::fs::write(dir.join(format!("{index:03}.webp")), bytes)
+            .map_err(|error| format!("the pack could not be written: {error}"))?;
+    }
+    Ok(dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| title.to_owned()))
+}
+
+/// The picture as WebP: passed through when it already is one, decoded
+/// and re-encoded (capped at 512 a side, the sticker size) when it is a
+/// PNG or JPEG, dropped when it is neither.
+fn webp_bytes(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some(bytes);
+    }
+    let picture = image::load_from_memory(&bytes).ok()?;
+    let picture = if picture.width().max(picture.height()) > 512 {
+        picture.resize(512, 512, image::imageops::FilterType::Lanczos3)
+    } else {
+        picture
+    };
+    let mut out = Vec::new();
+    let picture = picture.to_rgba8();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut out)
+        .encode(
+            &picture,
+            picture.width(),
+            picture.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .ok()?;
+    Some(out)
+}
+
+/// A fresh folder for the pack: the title with filesystem-hostile
+/// characters dropped, counted up when the name is taken.
+fn unique_pack_dir(root: &Path, title: &str) -> Result<PathBuf, String> {
+    let clean: String = title
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '/' | '\\' | ':'))
+        .take(60)
+        .collect();
+    let base = if clean.trim().is_empty() {
+        "Stickers".to_owned()
+    } else {
+        clean.trim().to_owned()
+    };
+    for attempt in 0..100 {
+        let name = if attempt == 0 {
+            base.clone()
+        } else {
+            format!("{base} {}", attempt + 1)
+        };
+        let dir = root.join(&name);
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir)
+                .map_err(|error| format!("the pack folder could not be made: {error}"))?;
+            return Ok(dir);
+        }
+    }
+    Err("too many packs already carry this name".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_signal_link_gives_up_its_id_and_key() {
+        let url = format!(
+            "https://signal.art/addstickers/#pack_id={}&pack_key={}",
+            "0123456789abcdef0123456789abcdef",
+            "aa".repeat(32)
+        );
+        let (id, key) = parse_signal_url(&url).expect("parses");
+        assert_eq!(id, "0123456789abcdef0123456789abcdef");
+        assert_eq!(key, [0xaa; 32]);
+        assert!(looks_like_signal_url(&url));
+        assert!(!looks_like_signal_url("https://signal.art/addstickers/"));
+        assert!(!looks_like_signal_url("pack_id=zz&pack_key=short"));
+    }
+
+    #[test]
+    fn a_pack_blob_decrypts_back_to_its_content() {
+        use aes::cipher::{BlockModeEncrypt, KeyInit, KeyIvInit, block_padding::Pkcs7};
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let pack_key = [7u8; 32];
+        let mut keys = [0u8; 64];
+        hkdf::Hkdf::<Sha256>::new(Some(&[0u8; 32]), &pack_key)
+            .expand(b"Sticker Pack", &mut keys)
+            .expect("expands");
+        let (aes_key, mac_key) = keys.split_at(32);
+        let aes_key: [u8; 32] = aes_key.try_into().expect("32");
+        let iv = [9u8; 16];
+        let plain = b"RIFF....WEBP pretend sticker bytes";
+        let ciphertext = cbc::Encryptor::<aes::Aes256>::new(&aes_key.into(), &iv.into())
+            .encrypt_padded_vec::<Pkcs7>(plain);
+        let mut hmac = <Hmac<Sha256> as KeyInit>::new_from_slice(mac_key).expect("keys");
+        hmac.update(&iv);
+        hmac.update(&ciphertext);
+        let mac = hmac.finalize().into_bytes();
+        let payload: Vec<u8> = iv
+            .iter()
+            .chain(ciphertext.iter())
+            .chain(mac.iter())
+            .copied()
+            .collect();
+        assert_eq!(decrypt_blob(&payload, &pack_key).expect("opens"), plain);
+        let mut wrong = payload.clone();
+        *wrong.last_mut().expect("bytes") ^= 1;
+        assert!(
+            decrypt_blob(&wrong, &pack_key).is_err(),
+            "a bad MAC refuses"
+        );
+    }
+
+    #[test]
+    fn the_manifest_yields_title_and_sticker_ids() {
+        // StickerPack { title: "Ducks", author: "A", stickers: [{id:0},{id:1,emoji:"x"}] }
+        let mut bytes = vec![0x0a, 5];
+        bytes.extend(b"Ducks");
+        bytes.extend([0x12, 1]);
+        bytes.extend(b"A");
+        bytes.extend([0x22, 2, 0x08, 0]);
+        bytes.extend([0x22, 5, 0x08, 1, 0x12, 1, b'x']);
+        let (title, ids) = parse_manifest(&bytes).expect("parses");
+        assert_eq!(title, "Ducks");
+        assert_eq!(ids, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_wastickers_archive_becomes_a_named_pack() {
+        let root = std::env::temp_dir().join(format!("fastsapp-packs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let archive_path = root.join("in").join("Frogs.wastickers");
+        std::fs::create_dir_all(archive_path.parent().expect("dir")).expect("dirs");
+        let webp = webp_bytes(tiny_png()).expect("encodes");
+        let file = std::fs::File::create(&archive_path).expect("creates");
+        let mut writer = zip::ZipWriter::new(file);
+        let plain: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        writer.start_file("title.txt", plain).expect("entry");
+        std::io::Write::write_all(&mut writer, b"Happy Frogs\n").expect("writes");
+        writer.start_file("tray.png", plain).expect("entry");
+        std::io::Write::write_all(&mut writer, &tiny_png()).expect("writes");
+        writer.start_file("02.webp", plain).expect("entry");
+        std::io::Write::write_all(&mut writer, &webp).expect("writes");
+        writer.start_file("01.png", plain).expect("entry");
+        std::io::Write::write_all(&mut writer, &tiny_png()).expect("writes");
+        writer.finish().expect("finishes");
+        let packs = root.join("packs");
+        let title = import_archive(&archive_path, &packs).expect("imports");
+        assert_eq!(title, "Happy Frogs");
+        let mut files: Vec<String> = std::fs::read_dir(packs.join("Happy Frogs"))
+            .expect("lists")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+        assert_eq!(
+            files,
+            vec!["000.webp", "001.webp"],
+            "tray and title stay out"
+        );
+        // The same pack again lands beside, not on top.
+        let again = import_archive(&archive_path, &packs).expect("imports");
+        assert_eq!(again, "Happy Frogs 2");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Signal's own example pack (Bandit the Cat, from the protocol
+    /// documentation), against the live CDN.
+    #[test]
+    #[ignore = "network"]
+    fn fetches_a_real_pack_from_signal_on_this_machine() {
+        let root = std::env::temp_dir().join(format!("fastsapp-signal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let url = "https://signal.art/addstickers/#pack_id=9acc9e8aba563d26a4994e69263e3b25&pack_key=5a6dff3948c28efb9b7aaf93ecc375c69fc316e78077ed26867a14d10a0f6a12";
+        let title = import_signal_pack(url, &root).expect("imports");
+        let files = std::fs::read_dir(root.join(&title)).expect("lists").count();
+        assert!(files > 0, "the pack holds stickers");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut bytes = Vec::new();
+        let picture = image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 255, 0, 255]));
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(&picture, 4, 4, image::ExtendedColorType::Rgba8)
+            .expect("encodes");
+        bytes
+    }
+}

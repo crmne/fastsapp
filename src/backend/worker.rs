@@ -1939,6 +1939,44 @@ impl Worker {
                     self.emit_stickers();
                 }
             }
+            Command::ImportStickerUrl { url } => {
+                let commands = self.commands.clone();
+                let packs = self.packs_dir();
+                tokio::task::spawn_blocking(move || {
+                    let result = super::sticker_import::import_signal_pack(&url, &packs);
+                    let _ = commands.send(Command::StickerPackImported { result });
+                });
+            }
+            Command::PickStickerArchive => {
+                let commands = self.commands.clone();
+                let packs = self.packs_dir();
+                tokio::task::spawn_blocking(move || {
+                    let result = match rfd::FileDialog::new()
+                        .set_title("Add a sticker pack")
+                        .add_filter("Sticker packs", &["wastickers", "zip"])
+                        .pick_file()
+                    {
+                        Some(path) => super::sticker_import::import_archive(&path, &packs),
+                        // The dialog was closed; nothing to say.
+                        None => Err(String::new()),
+                    };
+                    let _ = commands.send(Command::StickerPackImported { result });
+                });
+            }
+            Command::StickerPackImported { result } => match result {
+                Ok(name) => {
+                    self.emit_stickers();
+                    self.emit(Event::Info(format!("The pack \"{name}\" is in")));
+                }
+                Err(error) if error.is_empty() => self.emit_stickers(),
+                Err(error) => self.emit(Event::Error(format!("Sticker pack not added: {error}"))),
+            },
+            Command::DeleteStickerPack { dir } => {
+                let root = self.packs_dir();
+                if dir.starts_with(&root) && dir != root && std::fs::remove_dir_all(&dir).is_ok() {
+                    self.emit_stickers();
+                }
+            }
             Command::SendVoice {
                 chat,
                 samples,
@@ -2610,8 +2648,58 @@ impl Worker {
         list.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
         self.emit(Event::Stickers {
             saved: self.saved_stickers(),
+            packs: self.sticker_packs(),
             recent: list.into_iter().map(|(_, path)| path).collect(),
         });
+    }
+
+    /// Where imported packs live, one folder each.
+    fn packs_dir(&self) -> PathBuf {
+        self.dirs.saved_sticker_dir().join("packs")
+    }
+
+    /// The imported packs, newest first; a pack is its folder's WebP
+    /// files in name order.
+    fn sticker_packs(&self) -> Vec<crate::model::StickerPack> {
+        let Ok(entries) = std::fs::read_dir(self.packs_dir()) else {
+            return Vec::new();
+        };
+        let mut packs: Vec<(std::time::SystemTime, crate::model::StickerPack)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let dir = entry.path();
+                if !dir.is_dir() {
+                    return None;
+                }
+                let mut stickers: Vec<PathBuf> = std::fs::read_dir(&dir)
+                    .ok()?
+                    .flatten()
+                    .map(|file| file.path())
+                    .filter(|path| {
+                        path.extension()
+                            .is_some_and(|extension| extension == "webp")
+                    })
+                    .collect();
+                if stickers.is_empty() {
+                    return None;
+                }
+                stickers.sort();
+                let when = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                Some((
+                    when,
+                    crate::model::StickerPack {
+                        name: entry.file_name().to_string_lossy().into_owned(),
+                        dir,
+                        stickers,
+                    },
+                ))
+            })
+            .collect();
+        packs.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
+        packs.into_iter().map(|(_, pack)| pack).collect()
     }
 
     /// The kept collection: the files of the saved directory, newest

@@ -11,7 +11,7 @@ use crate::audio::{Player, Recorder};
 use crate::backend::{Backend, Command, Event, LinkStatus, Waker};
 use crate::model::{
     Action, Chat, ChatId, Contact, Content, Delivery, Dialog, Gif, GifError, Media, MediaState,
-    Message, Page, PickerTab, Toast, ToastKind,
+    Message, Page, PickerTab, StickerPack, Toast, ToastKind,
 };
 use crate::paths::AppDirs;
 use crate::settings::{Settings, ThemeChoice};
@@ -190,8 +190,14 @@ pub struct App {
     pub stickers: Vec<PathBuf>,
     /// The stickers the user chose to keep, newest save first.
     pub stickers_saved: Vec<PathBuf>,
+    /// The packs imported from links and archives, newest first.
+    pub sticker_packs: Vec<StickerPack>,
     /// The sticker list was asked for and has not come back yet.
     pub stickers_pending: bool,
+    /// A pack import is on its way.
+    pub sticker_import_pending: bool,
+    /// The signal.art link typed or pasted into the sticker tab.
+    pub sticker_link: String,
     scroll_lock: Option<(ScrollAxis, Instant)>,
     scroll_from_trackpad: bool,
     scroll_history: egui::util::History<egui::Vec2>,
@@ -352,7 +358,10 @@ impl App {
             gif_error: None,
             stickers: Vec::new(),
             stickers_saved: Vec::new(),
+            sticker_packs: Vec::new(),
             stickers_pending: false,
+            sticker_import_pending: false,
+            sticker_link: String::new(),
             scroll_lock: None,
             scroll_from_trackpad: false,
             scroll_history: egui::util::History::new(2..16, 0.1),
@@ -1015,10 +1024,16 @@ impl App {
                         }
                     }
                 }
-                Event::Stickers { saved, recent } => {
+                Event::Stickers {
+                    saved,
+                    packs,
+                    recent,
+                } => {
                     self.stickers_saved = saved;
+                    self.sticker_packs = packs;
                     self.stickers = recent;
                     self.stickers_pending = false;
+                    self.sticker_import_pending = false;
                 }
                 Event::MessageDeleted { chat, id } => {
                     if let Some(conversation) = self.conversations.get_mut(&chat) {
@@ -1060,7 +1075,11 @@ impl App {
                     conversation.complete = false;
                 }
                 Event::ReceiptsPrivacy { disabled } => self.account_receipts_off = disabled,
-                Event::Error(message) => self.toast_error(message),
+                Event::Info(message) => self.toast(message),
+                Event::Error(message) => {
+                    self.sticker_import_pending = false;
+                    self.toast_error(message);
+                }
             }
         }
     }
@@ -1628,8 +1647,9 @@ impl App {
                     self.picker_search.clear();
                     self.picker_focus = tab == PickerTab::Emoji;
                     if tab == PickerTab::Stickers {
-                        self.stickers_pending =
-                            self.stickers.is_empty() && self.stickers_saved.is_empty();
+                        self.stickers_pending = self.stickers.is_empty()
+                            && self.stickers_saved.is_empty()
+                            && self.sticker_packs.is_empty();
                         self.backend.send(Command::RecentStickers);
                     }
                     if tab == PickerTab::Gifs && self.gif_results.is_empty() {
@@ -1652,6 +1672,18 @@ impl App {
             }
             Action::ForgetSticker(path) => {
                 self.backend.send(Command::ForgetSticker { path });
+            }
+            Action::ImportStickerUrl(url) => {
+                self.sticker_import_pending = true;
+                self.sticker_link.clear();
+                self.backend.send(Command::ImportStickerUrl { url });
+            }
+            Action::PickStickerArchive => {
+                self.sticker_import_pending = true;
+                self.backend.send(Command::PickStickerArchive);
+            }
+            Action::DeleteStickerPack(dir) => {
+                self.backend.send(Command::DeleteStickerPack { dir });
             }
             Action::SendSticker(path) => {
                 if let Some(chat) = self.open_chat.clone() {
