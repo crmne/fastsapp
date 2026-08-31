@@ -559,7 +559,24 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                     "Ctrl+Enter sends · *bold* _italic_ ~strike~ · Ctrl+V pastes a picture"
                 });
                 ui.add_space(2.0);
-                theme::text(ui, &hint, theme::regular(11.0), palette.dim);
+                ui.horizontal(|ui| {
+                    theme::text(ui, &hint, theme::regular(11.0), palette.dim);
+                    // A tiny way into the full list; "?" is taken by typing.
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if theme::icon_button(
+                            ui,
+                            Icon::Keyboard,
+                            13.0,
+                            palette.dim,
+                            palette.secondary,
+                            &format!("All shortcuts ({})", super::keys::label("Ctrl+/")),
+                        )
+                        .clicked()
+                        {
+                            app.actions.push(Action::ShowDialog(Dialog::Shortcuts));
+                        }
+                    });
+                });
             }
         });
 }

@@ -97,7 +97,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Enter", "Send (Shift+Enter for a new line)"),
     (
         "Escape",
-        "Close dialog, discard recording, cancel edit or reply, clear search",
+        "Close dialog, cancel recording, edit, reply, or search",
     ),
     ("Ctrl+V", "Paste text, or send a picture from the clipboard"),
     ("Ctrl+B", "Show or hide the chat list"),

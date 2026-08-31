@@ -27,7 +27,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .backdrop_color(palette.shadow)
         .show(ctx, |ui| {
             ui.set_width(match dialog {
-                Dialog::Shortcuts => 420.0,
+                Dialog::Shortcuts => 540.0,
                 Dialog::About => 380.0,
                 Dialog::ConfirmUnlink => 380.0,
                 Dialog::PairWithPhone => 380.0,
@@ -65,8 +65,24 @@ fn title(ui: &mut egui::Ui, app: &mut App, label: &str) {
 fn shortcuts(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     title(ui, app, "Keyboard shortcuts");
+    // The keys column gets its widest label's room up front; the grid
+    // would otherwise elide the labels while its columns settle.
+    let keys_width = super::keys::SHORTCUTS
+        .iter()
+        .map(|(keys, _)| {
+            ui.painter()
+                .layout_no_wrap(
+                    super::keys::label(keys),
+                    theme::semibold(13.0),
+                    egui::Color32::WHITE,
+                )
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
     egui::Grid::new("shortcuts")
         .num_columns(2)
+        .min_col_width(keys_width)
         .spacing([18.0, 8.0])
         .show(ui, |ui| {
             for (keys, what) in super::keys::SHORTCUTS {
