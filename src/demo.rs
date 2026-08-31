@@ -1324,7 +1324,15 @@ mod tests {
             .filter_map(|id| rect_of(&ctx, id).map(|rect| (id.clone(), rect.top())))
             .collect();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
-        let hold = egui::pos2(400.0, 80.0);
+        // Where the message view actually is: the app stores it each frame
+        // for the selection leash, and on macOS the titlebar inset moves it
+        // down, so no fixed coordinate serves every platform.
+        let view = app
+            .selection_view
+            .lock()
+            .expect("the view rect")
+            .expect("the conversation was drawn");
+        let hold = egui::pos2(view.center().x, view.top() + 10.0);
         let press = egui::Event::PointerButton {
             pos: hold,
             button: egui::PointerButton::Primary,
