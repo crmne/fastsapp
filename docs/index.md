@@ -45,3 +45,31 @@ features:
     link: https://github.com/crmne/fastsapp
     link_text: Read the source
 ---
+
+<style>
+  /* The hero image slot is sized for a square logo; the screenshot needs the
+     room. Page-scoped overrides, so the theme stays untouched. */
+  .VPHero .image-container {
+    width: 100% !important;
+    height: auto !important;
+    transform: none !important;
+  }
+  .VPHero .image-src {
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    height: auto !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    padding: 0 !important;
+    border-radius: 12px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.45);
+  }
+  @media (max-width: 959px) {
+    .VPHero .image {
+      margin: 0 0 24px !important;
+    }
+  }
+</style>
