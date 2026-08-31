@@ -3,7 +3,7 @@
 use egui::{Align, Frame, Layout, Margin, Rect, Sense, Vec2, pos2, vec2};
 
 use crate::app::App;
-use crate::model::{Action, Chat, Dialog, Page};
+use crate::model::{Action, Chat, Contact, Dialog, Message, Page};
 use crate::theme::{self, Icon, Palette};
 
 use super::widgets;
@@ -110,7 +110,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             let width = ui.available_width();
             let mut text = app.search.clone();
             let response =
-                widgets::search_field(ui, &palette, id, &mut text, "Search chats", width);
+                widgets::search_field(ui, &palette, id, &mut text, "Search", width);
             if text != app.search {
                 app.actions.push(Action::Search(text));
             }
@@ -123,13 +123,15 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
 
 fn list(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
+    if !app.search.trim().is_empty() {
+        results(app, ui);
+        return;
+    }
     let chats: Vec<Chat> = app.visible_chats().into_iter().cloned().collect();
     let archived = app.archived_count();
-    let show_archive_row = !app.show_archived && archived > 0 && app.search.trim().is_empty();
+    let show_archive_row = !app.show_archived && archived > 0;
     if chats.is_empty() && !show_archive_row {
-        let (title, body) = if !app.search.trim().is_empty() {
-            ("No chats match", "Try another name or number.")
-        } else if app.show_archived {
+        let (title, body) = if app.show_archived {
             ("Nothing archived", "Archived chats will show up here.")
         } else if app.syncing {
             (
@@ -162,6 +164,215 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
                 ui.push_id(("chat", &chat.id), |ui| row(app, ui, chat));
             }
         });
+}
+
+/// What the one search bar finds, in sections: chats whose name or last
+/// words match, archived messages with the words in them, and contacts
+/// not yet talked to — so a chat can start from here too.
+fn results(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let chats: Vec<Chat> = app.visible_chats().into_iter().cloned().collect();
+    let hits: Vec<Message> = app.search_hits.clone();
+    let contacts: Vec<Contact> = app.matching_contacts().into_iter().cloned().collect();
+    if chats.is_empty() && hits.is_empty() && contacts.is_empty() {
+        widgets::empty_state(
+            ui,
+            &palette,
+            Icon::Search,
+            "No results",
+            "Try another name, number, or words from a message.",
+        );
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("search-results")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if !chats.is_empty() {
+                section(ui, &palette, "Chats");
+                for chat in &chats {
+                    ui.push_id(("chat", &chat.id), |ui| row(app, ui, chat));
+                }
+            }
+            if !hits.is_empty() {
+                section(ui, &palette, "Messages");
+                for hit in &hits {
+                    ui.push_id(("hit", &hit.chat, &hit.id), |ui| hit_row(app, ui, hit));
+                }
+            }
+            if !contacts.is_empty() {
+                section(ui, &palette, "Contacts");
+                for contact in &contacts {
+                    ui.push_id(("contact", &contact.id), |ui| contact_row(app, ui, contact));
+                }
+            }
+            ui.add_space(8.0);
+        });
+}
+
+fn section(ui: &mut egui::Ui, palette: &Palette, label: &str) {
+    ui.add_space(10.0);
+    Frame::new()
+        .inner_margin(Margin {
+            left: 14,
+            right: 14,
+            top: 0,
+            bottom: 4,
+        })
+        .show(ui, |ui| {
+            theme::text(ui, label, theme::semibold(12.5), palette.accent);
+        });
+}
+
+/// A message the search found: the chat it lives in, what it says, and
+/// when. Clicking opens the chat at that message.
+fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
+    let palette = app.palette;
+    let title = match app.chat(&hit.chat) {
+        Some(chat) => app.chat_title(&chat.clone()),
+        None => app.display_name_or(&hit.chat, None),
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), theme::ROW_HEIGHT),
+        Sense::click(),
+    );
+    if ui.is_rect_visible(rect) {
+        if response.hovered() {
+            ui.painter().rect_filled(rect, 0.0, palette.surface_hover);
+        }
+        let avatar_rect =
+            Rect::from_center_size(pos2(rect.left() + 38.0, rect.center().y), Vec2::splat(48.0));
+        let picture = app.avatar(&hit.chat);
+        widgets::paint_avatar(ui, &palette, avatar_rect, &title, &hit.chat, picture.as_deref());
+        let left = rect.left() + 76.0;
+        let right = rect.right() - 14.0;
+        let stamp_galley = ui.painter().layout_no_wrap(
+            crate::util::chat_stamp(hit.timestamp),
+            theme::regular(11.5),
+            palette.dim,
+        );
+        let name_top = rect.top() + 14.0;
+        ui.painter().galley(
+            pos2(right - stamp_galley.size().x, name_top + 1.0),
+            stamp_galley.clone(),
+            palette.dim,
+        );
+        let name_width = (right - stamp_galley.size().x - 8.0 - left).max(0.0);
+        let name = widgets::line(ui, &title, theme::medium(14.5), palette.text, name_width, 1);
+        name.paint(ui, pos2(left, name_top), palette.text);
+        // The words that matched, with their writer in a group.
+        let line_y = rect.top() + 38.0;
+        let mut x = left;
+        if hit.from_me {
+            let who = widgets::line(
+                ui,
+                "You: ",
+                theme::regular(13.0),
+                palette.dim,
+                (right - x) * 0.5,
+                1,
+            );
+            who.paint(ui, pos2(x, line_y), palette.dim);
+            x += who.size().x;
+        } else if crate::model::ChatKind::from_id(&hit.chat) == crate::model::ChatKind::Group {
+            let sender = app.display_name_or(&hit.sender, hit.sender_name.as_deref());
+            let first = sender.split_whitespace().next().unwrap_or(&sender);
+            let who = widgets::line(
+                ui,
+                &format!("{first}: "),
+                theme::regular(13.0),
+                palette.dim,
+                (right - x) * 0.5,
+                1,
+            );
+            who.paint(ui, pos2(x, line_y), palette.dim);
+            x += who.size().x;
+        }
+        let words = widgets::line(
+            ui,
+            &crate::markup::plain(&app.resolve_mention_tokens(&hit.summary()), &[]),
+            theme::regular(13.0),
+            palette.dim,
+            (right - x).max(0.0),
+            1,
+        );
+        words.paint(ui, pos2(x, line_y), palette.dim);
+        ui.painter().hline(
+            left..=rect.right(),
+            rect.bottom() - 0.5,
+            egui::Stroke::new(1.0, palette.outline),
+        );
+    }
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        app.actions.push(Action::OpenMessage {
+            chat: hit.chat.clone(),
+            message: hit.id.clone(),
+        });
+    }
+}
+
+/// Someone from the phone's contacts with no chat yet; clicking starts
+/// one.
+fn contact_row(app: &mut App, ui: &mut egui::Ui, contact: &Contact) {
+    let palette = app.palette;
+    let name = contact
+        .display_name()
+        .map(str::to_owned)
+        .unwrap_or_else(|| app.display_name_or(&contact.id, None));
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), theme::ROW_HEIGHT),
+        Sense::click(),
+    );
+    if ui.is_rect_visible(rect) {
+        if response.hovered() {
+            ui.painter().rect_filled(rect, 0.0, palette.surface_hover);
+        }
+        let avatar_rect =
+            Rect::from_center_size(pos2(rect.left() + 38.0, rect.center().y), Vec2::splat(48.0));
+        let picture = app.avatar(&contact.id);
+        widgets::paint_avatar(
+            ui,
+            &palette,
+            avatar_rect,
+            &name,
+            &contact.id,
+            picture.as_deref(),
+        );
+        let left = rect.left() + 76.0;
+        let name_line = widgets::line(
+            ui,
+            &name,
+            theme::medium(14.5),
+            palette.text,
+            rect.right() - 14.0 - left,
+            1,
+        );
+        name_line.paint(ui, pos2(left, rect.top() + 14.0), palette.text);
+        if let Some(phone) = crate::model::phone_of(&contact.id) {
+            let phone_line = widgets::line(
+                ui,
+                &format!("+{phone}"),
+                theme::regular(13.0),
+                palette.dim,
+                rect.right() - 14.0 - left,
+                1,
+            );
+            phone_line.paint(ui, pos2(left, rect.top() + 38.0), palette.dim);
+        }
+        ui.painter().hline(
+            left..=rect.right(),
+            rect.bottom() - 0.5,
+            egui::Stroke::new(1.0, palette.outline),
+        );
+    }
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        app.actions.push(Action::StartChat {
+            id: contact.id.clone(),
+            name,
+        });
+    }
 }
 
 fn archive_row(app: &mut App, ui: &mut egui::Ui, count: usize) {

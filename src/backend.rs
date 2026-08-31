@@ -91,6 +91,11 @@ pub enum Command {
         id: String,
         before: PageKey,
     },
+    /// Archived messages whose visible text contains the query.
+    SearchMessages { query: String },
+    /// Make sure the archive knows a chat, so a first message can land in
+    /// a conversation started from a contact.
+    EnsureChat { chat: ChatId, name: String },
     /// Internal: the phone could not be asked for older messages.
     OlderFailed {
         chat: ChatId,
@@ -276,6 +281,12 @@ pub enum Event {
         message: Box<Message>,
     },
     Contacts(Vec<Contact>),
+    /// What a message search found, newest first, echoing its query so a
+    /// stale answer cannot overwrite a newer search.
+    SearchHits {
+        query: String,
+        messages: Vec<Message>,
+    },
     Typing {
         chat: ChatId,
         sender: String,

@@ -857,8 +857,14 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             .conversations
             .get(&chat.id)
             .is_some_and(|c| c.message(&anchor).is_some())
+        && app
+            .conversations
+            .get(&chat.id)
+            .is_none_or(|c| c.complete || !c.messages.is_empty())
     {
         // Asked for a message that is not loaded; nothing to scroll to.
+        // A chat still waiting for its first page keeps the anchor: the
+        // page's arrival chases it into the archive (see Event::Messages).
         app.scroll_anchor = None;
     }
     // Reaching the top asks for more, from the archive and then the phone;

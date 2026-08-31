@@ -515,6 +515,61 @@ impl Archive {
         Ok(messages)
     }
 
+    /// Messages whose visible text — body, caption, file name, poll
+    /// question, contact or place name — contains `needle`, newest first.
+    /// Case-insensitive over ASCII, exact beyond it, like SQLite itself.
+    pub fn search_messages(&self, needle: &str, limit: usize) -> Result<Vec<Message>> {
+        let pattern = format!(
+            "%{}%",
+            needle
+                .to_lowercase()
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let mut statement = self.connection.prepare(
+            "SELECT chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded
+             FROM messages
+             WHERE json_valid(content) AND lower(
+                     coalesce(json_extract(content, '$.text'), '') || char(10) ||
+                     coalesce(json_extract(content, '$.caption'), '') || char(10) ||
+                     coalesce(json_extract(content, '$.file_name'), '') || char(10) ||
+                     coalesce(json_extract(content, '$.question'), '') || char(10) ||
+                     coalesce(json_extract(content, '$.display_name'), '') || char(10) ||
+                     coalesce(json_extract(content, '$.name'), '')
+                 ) LIKE ?1 ESCAPE '\\'
+             ORDER BY timestamp DESC, rowid DESC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![pattern, limit as i64], |row| {
+            let chat: String = row.get(0)?;
+            let content: String = row.get(6)?;
+            let quoted: Option<String> = row.get(8)?;
+            let reactions: String = row.get(9)?;
+            let mentions: String = row.get(12)?;
+            Ok(Message {
+                id: row.get(1)?,
+                chat,
+                sender: row.get(2)?,
+                sender_name: row.get(3)?,
+                from_me: row.get(4)?,
+                timestamp: row.get(5)?,
+                content: serde_json::from_str(&content).unwrap_or(Content::Unsupported {
+                    what: "unreadable".into(),
+                }),
+                status: status_from_rank(row.get(7)?),
+                quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
+                reactions: serde_json::from_str(&reactions).unwrap_or_default(),
+                edited: row.get(10)?,
+                mentions: serde_json::from_str(&mentions).unwrap_or_default(),
+                forwarded: row.get(13)?,
+                thumbnail: row.get(11)?,
+            })
+        })?;
+        let messages: Vec<Message> = rows.collect::<Result<_>>()?;
+        Ok(messages)
+    }
+
     /// Every message from `from` (inclusive) up to `before` (exclusive),
     /// oldest first, capped at `limit`.
     pub fn messages_range(
@@ -927,6 +982,51 @@ mod tests {
             forwarded: false,
             thumbnail: None,
         }
+    }
+
+    #[test]
+    fn search_finds_text_captions_and_file_names() {
+        let archive = Archive::in_memory().expect("opens");
+        archive.ensure_chat("1@s.whatsapp.net", "Ada").expect("chat");
+        let media = || crate::model::Media {
+            mime: "application/pdf".into(),
+            size: 1,
+            width: None,
+            height: None,
+            path: None,
+            state: crate::model::MediaState::Idle,
+        };
+        let mut plain = message("1@s.whatsapp.net", "m1", 10, false);
+        plain.content = Content::text("The Difference Engine assembles");
+        let mut caption = message("1@s.whatsapp.net", "m2", 20, true);
+        caption.content = Content::Document {
+            media: media(),
+            file_name: "Notes on the Engine.pdf".into(),
+            caption: Some("progress at 100% now".into()),
+            pages: None,
+        };
+        let mut other = message("1@s.whatsapp.net", "m3", 30, false);
+        other.content = Content::text("Nothing of note");
+        for row in [&plain, &caption, &other] {
+            archive.insert_message(row, None).expect("insert");
+        }
+        // Body and file name both match, newest first, whatever the case.
+        let hits = archive.search_messages("ENGINE", 10).expect("search");
+        let ids: Vec<&str> = hits.iter().map(|hit| hit.id.as_str()).collect();
+        assert_eq!(ids, vec!["m2", "m1"]);
+        // A LIKE wildcard in the query is a character, not a wildcard.
+        let hits = archive.search_messages("100%", 10).expect("search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "m2");
+        assert!(
+            archive.search_messages("100&", 10).expect("search").is_empty(),
+            "the percent sign was matched literally"
+        );
+        assert!(archive.search_messages("zebra", 10).expect("search").is_empty());
+        // The limit caps the answer.
+        let hits = archive.search_messages("e", 1).expect("search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "m3", "newest first");
     }
 
     #[test]

@@ -416,6 +416,15 @@ pub fn populate(app: &mut App) {
             },
         );
     }
+    // A contact with no chat yet, so a search can offer to start one.
+    app.contacts.insert(
+        "12025550137@s.whatsapp.net".to_owned(),
+        Contact {
+            id: "12025550137@s.whatsapp.net".to_owned(),
+            full_name: Some("Dorothy Vaughan".to_owned()),
+            push_name: None,
+        },
+    );
     for sample in SAMPLES {
         let mut chat = Chat::new(sample.id.to_owned(), sample.name.to_owned());
         chat.last_activity = now - sample.minutes_ago * 60;
@@ -836,6 +845,28 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.focus_composer = true;
             }
             "nosidebar" => app.sidebar_visible = false,
+            "search" => {
+                app.search = "do".into();
+                let mut hits = Vec::new();
+                for (chat, id) in [
+                    ("120363012345678901@g.us", "group-reply"),
+                    ("120363012345678901@g.us", "group-photo"),
+                    (
+                        "14155550199@s.whatsapp.net",
+                        "14155550199@s.whatsapp.net-1",
+                    ),
+                ] {
+                    if let Some(message) = app
+                        .conversations
+                        .get(chat)
+                        .and_then(|conversation| conversation.message(id))
+                    {
+                        hits.push(message.clone());
+                    }
+                }
+                hits.sort_by_key(|message| std::cmp::Reverse(message.timestamp));
+                app.search_hits = hits;
+            }
             "voice" => {
                 // A real clip, so the player has something to play.
                 let tone: Vec<f32> = (0..crate::voice::RATE * 6)
@@ -1040,6 +1071,7 @@ mod tests {
             "stickers",
             "typing",
             "nosidebar",
+            "search",
             "staged",
             "compose-emoji",
             "voice",

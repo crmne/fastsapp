@@ -145,6 +145,8 @@ pub struct App {
     composing: bool,
     last_keystroke: Option<Instant>,
     pub search: String,
+    /// Archived messages matching the search, newest first.
+    pub search_hits: Vec<Message>,
     /// Who is typing in each chat, and since when.
     pub typing: HashMap<ChatId, Vec<(String, Instant)>>,
     pub presence: HashMap<String, Presence>,
@@ -319,6 +321,7 @@ impl App {
             composing: false,
             last_keystroke: None,
             search: String::new(),
+            search_hits: Vec::new(),
             typing: HashMap::new(),
             presence: HashMap::new(),
             avatars: HashMap::new(),
@@ -749,6 +752,40 @@ impl App {
         chats
     }
 
+    /// Contacts matching the search that have no chat yet: the people one
+    /// could start talking to. Individuals only, sorted by name.
+    pub fn matching_contacts(&self) -> Vec<&Contact> {
+        let needle = self.search.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut contacts: Vec<&Contact> = self
+            .contacts
+            .values()
+            .filter(|contact| crate::model::phone_of(&contact.id).is_some())
+            .filter(|contact| self.me.as_deref() != Some(contact.id.as_str()))
+            .filter(|contact| !self.chats.iter().any(|chat| chat.id == contact.id))
+            .filter(|contact| {
+                contact
+                    .display_name()
+                    .is_some_and(|name| name.to_lowercase().contains(&needle))
+                    || contact
+                        .id
+                        .split('@')
+                        .next()
+                        .is_some_and(|phone| phone.contains(&needle))
+            })
+            .collect();
+        contacts.sort_by_key(|contact| {
+            contact
+                .display_name()
+                .unwrap_or(&contact.id)
+                .to_lowercase()
+        });
+        contacts.truncate(15);
+        contacts
+    }
+
     pub fn archived_count(&self) -> usize {
         self.chats.iter().filter(|chat| chat.archived).count()
     }
@@ -883,6 +920,29 @@ impl App {
                         if bare {
                             self.fetch_older(&chat);
                         }
+                        // A waiting anchor (a search hit in a chat that was
+                        // not loaded): the first page is in, chase it into
+                        // the archive. Only on that first page, so a hit
+                        // deleted from the archive cannot chase forever.
+                        if !older
+                            && let Some(anchor) = self.scroll_anchor.clone()
+                            && let Some(conversation) = self.conversations.get_mut(&chat)
+                            && conversation.message(&anchor).is_none()
+                            && !conversation.loading_older
+                            && let Some(oldest) = conversation.messages.first()
+                        {
+                            conversation.loading_older = true;
+                            self.backend.send(Command::LoadUntil {
+                                chat,
+                                id: anchor,
+                                before: (oldest.timestamp, oldest.id.clone()),
+                            });
+                        }
+                    }
+                }
+                Event::SearchHits { query, messages } => {
+                    if query == self.search.trim() {
+                        self.search_hits = messages;
                     }
                 }
                 Event::Incoming { chat, message } => self.maybe_notify(&chat, &message),
@@ -1389,6 +1449,38 @@ impl App {
                 self.dialog = None;
             }
             Action::OpenChat(id) => self.open_chat(id),
+            Action::StartChat { id, name } => {
+                if self.chat(&id).is_none() {
+                    self.chats.push(Chat::new(id.clone(), name.clone()));
+                    self.backend.send(Command::EnsureChat {
+                        chat: id.clone(),
+                        name,
+                    });
+                }
+                self.open_chat(id);
+            }
+            Action::OpenMessage { chat, message } => {
+                self.open_chat(chat.clone());
+                // Not the end of the chat: the hit itself.
+                self.scroll_to_bottom = false;
+                self.at_bottom = false;
+                self.scroll_anchor = Some(message.clone());
+                let conversation = self.conversations.entry(chat.clone()).or_default();
+                if conversation.message(&message).is_none()
+                    && !conversation.loading_older
+                    && let Some(oldest) = conversation.messages.first()
+                {
+                    // Older than what is loaded: bring the archive up to it.
+                    // A chat still waiting for its first page chases the
+                    // anchor when that page lands (see Event::Messages).
+                    conversation.loading_older = true;
+                    self.backend.send(Command::LoadUntil {
+                        chat,
+                        id: message,
+                        before: (oldest.timestamp, oldest.id.clone()),
+                    });
+                }
+            }
             Action::CloseChat => {
                 if let Some(chat) = self.open_chat.take() {
                     self.stop_composing(&chat);
@@ -1647,7 +1739,15 @@ impl App {
                 }
                 self.scroll_anchor = Some(id);
             }
-            Action::Search(text) => self.search = text,
+            Action::Search(text) => {
+                self.search = text;
+                let query = self.search.trim().to_owned();
+                if query.is_empty() {
+                    self.search_hits.clear();
+                } else {
+                    self.backend.send(Command::SearchMessages { query });
+                }
+            }
             Action::SettingsChanged => self.mark_settings_dirty(),
             Action::ZoomBy(delta) => {
                 self.settings.zoom = (self.settings.zoom + delta).clamp(0.6, 2.0);
@@ -2078,6 +2178,86 @@ mod tests {
         assert_eq!(ids, vec!["a", "b", "c"]);
         conversation.merge(vec![message("c", "c", 3)], false);
         assert_eq!(conversation.messages.len(), 3);
+    }
+
+    #[test]
+    fn a_search_hit_opens_its_chat_at_the_message() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let chat = "1@s.whatsapp.net";
+        app.chats.push(Chat::new(chat.into(), "Ada".into()));
+        let conversation = Conversation {
+            requested: true,
+            complete: true,
+            messages: vec![message(chat, "old", 10)],
+            ..Default::default()
+        };
+        app.conversations.insert(chat.into(), conversation);
+        app.apply(
+            Action::OpenMessage {
+                chat: chat.into(),
+                message: "old".into(),
+            },
+            &ctx,
+        );
+        assert_eq!(app.open_chat.as_deref(), Some(chat));
+        assert_eq!(app.scroll_anchor.as_deref(), Some("old"));
+        assert!(!app.scroll_to_bottom, "aims at the hit, not the end");
+    }
+
+    #[test]
+    fn clearing_the_search_clears_its_hits() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.search_hits.push(message("1@s.whatsapp.net", "m", 1));
+        app.apply(Action::Search(String::new()), &ctx);
+        assert!(app.search_hits.is_empty());
+    }
+
+    #[test]
+    fn matching_contacts_are_people_not_yet_talked_to() {
+        let mut app = app();
+        app.me = Some("490000000000@s.whatsapp.net".into());
+        let contact = |id: &str, name: &str| crate::model::Contact {
+            id: id.into(),
+            full_name: Some(name.into()),
+            push_name: None,
+        };
+        // Already a chat: shows under Chats, not Contacts.
+        app.contacts.insert(
+            "491700000001@s.whatsapp.net".into(),
+            contact("491700000001@s.whatsapp.net", "Ada Lovelace"),
+        );
+        app.chats.push(Chat::new(
+            "491700000001@s.whatsapp.net".into(),
+            "Ada Lovelace".into(),
+        ));
+        // No chat yet: the one to offer.
+        app.contacts.insert(
+            "491700000002@s.whatsapp.net".into(),
+            contact("491700000002@s.whatsapp.net", "Adele Goldberg"),
+        );
+        // A group id and ourselves never show as contacts.
+        app.contacts.insert(
+            "12345@g.us".into(),
+            contact("12345@g.us", "Adventurers"),
+        );
+        app.contacts.insert(
+            "490000000000@s.whatsapp.net".into(),
+            contact("490000000000@s.whatsapp.net", "Adah Me"),
+        );
+        app.search = "ad".into();
+        let names: Vec<&str> = app
+            .matching_contacts()
+            .iter()
+            .filter_map(|contact| contact.display_name())
+            .collect();
+        assert_eq!(names, vec!["Adele Goldberg"]);
+        // Digits find people by phone.
+        app.search = "491700000002".into();
+        assert_eq!(app.matching_contacts().len(), 1);
+        app.search = String::new();
+        assert!(app.matching_contacts().is_empty());
     }
 
     #[test]

@@ -434,6 +434,10 @@ pub struct Toast {
 pub enum Action {
     Open(Page),
     OpenChat(ChatId),
+    /// Open a chat with someone not yet talked to, creating it locally.
+    StartChat { id: ChatId, name: String },
+    /// Open a chat at one of its messages (a search hit).
+    OpenMessage { chat: ChatId, message: String },
     CloseChat,
     SendText {
         chat: ChatId,

@@ -1857,6 +1857,12 @@ impl Worker {
             Command::LoadChat { chat, before } => self.load_chat(chat, before),
             Command::FetchOlder(chat) => self.fetch_older(chat),
             Command::LoadUntil { chat, id, before } => self.load_until(chat, id, before),
+            Command::SearchMessages { query } => self.search_messages(query),
+            Command::EnsureChat { chat, name } => {
+                if let Err(error) = self.archive.ensure_chat(&chat, &name) {
+                    log::warn!("could not create the chat: {error}");
+                }
+            }
             Command::Download { chat, message } => self.download(chat, message),
             Command::FetchAvatar { id, full } => self.fetch_avatar(id, full),
             Command::EditText { chat, id, text } => self.edit_text(chat, id, text),
@@ -2697,6 +2703,18 @@ impl Worker {
 
     /// Everything between a quoted message and what is loaded, so the view
     /// can scroll to it.
+    fn search_messages(&mut self, query: String) {
+        match self.archive.search_messages(&query, 50) {
+            Ok(mut messages) => {
+                for message in &mut messages {
+                    self.polish(message);
+                }
+                self.emit(Event::SearchHits { query, messages });
+            }
+            Err(error) => self.emit(Event::Error(format!("Could not search: {error}"))),
+        }
+    }
+
     fn load_until(&mut self, chat: ChatId, id: String, before: super::PageKey) {
         let Ok(Some(target)) = self.archive.message(&chat, &id) else {
             self.emit(Event::Messages {
