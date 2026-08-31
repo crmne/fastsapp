@@ -104,7 +104,7 @@ const SAMPLES: &[Sample] = &[
     },
     Sample {
         id: "4915112345678@s.whatsapp.net",
-        name: "Linus",
+        name: "Katherine Johnson",
         minutes_ago: 60 * 26,
         unread: 0,
         pinned: false,
