@@ -12,6 +12,8 @@ same pattern without carrying WhatsApp's trademark.)
 
 ![FastsApp showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
 
+Documentation, downloads, and guides: **[fastsapp.rocks](https://fastsapp.rocks)**
+
 ![A group chat with sender names and pictures, a photo with reactions, a reply with a mention, and a poll](docs/screenshot-group.png)
 
 ![The linking screen with the QR code](docs/screenshot-link.png)
