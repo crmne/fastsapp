@@ -1204,6 +1204,63 @@ mod tests {
         assert!(!copied.trim().is_empty(), "{copied:?}");
     }
 
+    /// Holding a drag near the top of the list scrolls it upward, even
+    /// though the list starts stuck to its end.
+    #[test]
+    fn a_held_drag_at_the_top_edge_scrolls_the_list_up() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        let ids: Vec<String> = app.conversations[&chat]
+            .messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect();
+        let rect_of = |ctx: &egui::Context, id: &str| {
+            let key = crate::ui::conversation::bubble_id(&chat, id).with("rect");
+            ctx.data(|data| data.get_temp::<egui::Rect>(key))
+        };
+        let before: Vec<(String, f32)> = ids
+            .iter()
+            .filter_map(|id| rect_of(&ctx, id).map(|rect| (id.clone(), rect.top())))
+            .collect();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
+        let hold = egui::pos2(400.0, 80.0);
+        let press = egui::Event::PointerButton {
+            pos: hold,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut frames: Vec<Vec<egui::Event>> = vec![vec![egui::Event::PointerMoved(hold), press]];
+        frames.extend((0..12).map(|_| vec![egui::Event::PointerMoved(hold)]));
+        for events in frames {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            });
+            output.textures_delta.clear();
+        }
+        let moved = before
+            .iter()
+            .filter_map(|(id, top)| rect_of(&ctx, id).map(|rect| rect.top() - top))
+            .fold(f32::MIN, f32::max);
+        assert!(
+            moved > 20.0,
+            "the list should have scrolled up; best {moved}"
+        );
+        assert!(!app.scroll_to_bottom, "heading up releases the pin");
+    }
+
     /// A selection dragged to the edge scrolls; in the middle it does not.
     #[test]
     fn a_drag_at_the_edge_scrolls_and_in_the_middle_does_not() {

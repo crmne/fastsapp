@@ -157,6 +157,12 @@ Three egui pitfalls this code has already hit:
 
 ## Releasing
 
+Do not cut a release for every fix. Work accumulates on `main` until
+there is something substantial to announce: a feature, or a batch of
+fixes worth a changelog entry. Five patch releases in a day is what this
+rule exists to prevent. The exception is a regression in something just
+released, which goes out as soon as it is fixed.
+
 Bump `version` in `Cargo.toml`, commit, tag `vX.Y.Z`, and push the tag: the
 release workflow builds every platform and publishes the GitHub release
 with `checksums.txt`. Then update the AUR packages in the maintainer's

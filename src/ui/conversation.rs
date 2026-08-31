@@ -675,12 +675,38 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     // every later request only re-aims it, so a request to reach the end
     // could wait behind a stale one (the reader's own scrolling is smoothed
     // by the app anyway).
+    let mut edge_scrolled_up = false;
     let output = egui::ScrollArea::vertical()
         .id_salt(("messages", &chat.id))
         .auto_shrink([false, false])
         .stick_to_bottom(true)
         .animated(false)
         .show(ui, |ui| {
+            // A selection dragged to the viewport's edge keeps going: the list
+            // scrolls under the pointer, so messages beyond the screen can
+            // join it. It must be real scrolling (scroll_with_delta), which
+            // also releases stick-to-bottom; writing the offset directly
+            // left the stuck end pinning every upward step right back.
+            let viewport = ui.clip_rect();
+            let held_inside = ui.input(|input| {
+                input.pointer.primary_down()
+                    && input.pointer.press_origin().is_some_and(|origin| {
+                        viewport.contains(origin) && origin.x < viewport.right() - 16.0
+                    })
+            });
+            if held_inside && let Some(pointer) = ui.input(|input| input.pointer.latest_pos()) {
+                let delta = edge_scroll(pointer.y, viewport.top(), viewport.bottom());
+                if delta != 0.0 {
+                    if delta < 0.0 {
+                        edge_scrolled_up = true;
+                    }
+                    ui.scroll_with_delta_animation(
+                        vec2(0.0, -delta),
+                        egui::style::ScrollAnimation::none(),
+                    );
+                    ui.ctx().request_repaint();
+                }
+            }
             Frame::new()
                 .inner_margin(Margin::symmetric(18, 10))
                 .show(ui, |ui| {
@@ -792,31 +818,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         actions.push(Action::LoadOlder(chat.id.clone()));
     }
     app.actions.extend(actions);
-    // A selection dragged to the view's edge keeps going: the list scrolls
-    // under the pointer, so messages beyond the screen can join it.
-    let dragging_inside = ui.input(|input| {
-        input.pointer.primary_down()
-            && input
-                .pointer
-                .press_origin()
-                .is_some_and(|origin| output.inner_rect.contains(origin) && !bar.contains(origin))
-    });
-    if dragging_inside && let Some(pointer) = ui.input(|input| input.pointer.latest_pos()) {
-        let delta = edge_scroll(
-            pointer.y,
-            output.inner_rect.top(),
-            output.inner_rect.bottom(),
-        );
-        if delta != 0.0 {
-            if delta < 0.0 {
-                // Heading up releases the pin to the end.
-                app.scroll_to_bottom = false;
-            }
-            let mut state = output.state;
-            state.offset.y = (state.offset.y + delta).max(0.0);
-            state.store(ui.ctx(), output.id);
-            ui.ctx().request_repaint();
-        }
+    if edge_scrolled_up {
+        // Heading up releases the pin to the end.
+        app.scroll_to_bottom = false;
     }
     // A way back down while reading old messages.
     if !at_bottom {
@@ -997,11 +1001,11 @@ fn bubble(
 /// selection can keep growing beyond the screen at a pace the hand steers.
 pub fn edge_scroll(pointer: f32, top: f32, bottom: f32) -> f32 {
     const EDGE: f32 = 36.0;
-    const PACE: f32 = 0.35;
+    const PACE: f32 = 0.3;
     if pointer < top + EDGE {
-        -(top + EDGE - pointer).min(EDGE * 2.0) * PACE
+        -(top + EDGE - pointer).min(EDGE * 1.5) * PACE
     } else if pointer > bottom - EDGE {
-        (pointer - (bottom - EDGE)).min(EDGE * 2.0) * PACE
+        (pointer - (bottom - EDGE)).min(EDGE * 1.5) * PACE
     } else {
         0.0
     }
