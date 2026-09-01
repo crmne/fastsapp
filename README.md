@@ -28,7 +28,8 @@ See **[fastsapp.rocks](https://fastsapp.rocks)** for downloads and guides.
   scroll up, first from the local archive and then from your phone.
 - **WhatsApp formatting.** Bold, italic, strikethrough, code, lists, quotes,
   mentions, and link previews are supported. Links are clickable. Emoji use
-  the desktop's color emoji font and emoji-only messages are larger.
+  the desktop's color emoji font, with a bundled fallback, and emoji-only
+  messages are larger.
 - **Send attachments with captions.** Paste a picture, drop files, or use the
   file picker. They stay in the composer until you send them or press Escape.
 - **Mute chats** for eight hours, one week, or indefinitely. The setting also
@@ -80,8 +81,6 @@ See **[fastsapp.rocks](https://fastsapp.rocks)** for downloads and guides.
 - Play ordinary videos in the app (they open in your player), or reply to
   a message with an attachment.
 - Calls, status posts, communities, newsletters, and group administration.
-- Colour emoji on Windows: Segoe UI Emoji is not a bitmap font, so emoji
-  stay monochrome there for now.
 
 ## Installing
 
@@ -188,5 +187,5 @@ and could get an account suspended. Use it at your own risk.
 
 ## License
 
-MIT. Inter is under the SIL Open Font License; the icons are from
-[Lucide](https://lucide.dev) (ISC).
+MIT. Inter and Noto Color Emoji are under the SIL Open Font License; the icons
+are from [Lucide](https://lucide.dev) (ISC).

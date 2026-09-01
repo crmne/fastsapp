@@ -1,4 +1,4 @@
-//! Color emoji from the desktop's bitmap emoji font.
+//! Color emoji from the desktop's bitmap emoji font, with a bundled fallback.
 //!
 //! Layout replaces each emoji sequence with a transparent placeholder, then
 //! paints the bitmap over it. The font's ligature table resolves flags, skin
@@ -34,6 +34,11 @@ struct Font {
 
 static FONT: OnceLock<Option<Font>> = OnceLock::new();
 
+/// Noto Color Emoji supplies bitmap glyphs on systems such as Windows whose
+/// installed emoji font uses an outline colour format this renderer cannot
+/// rasterize.
+const BUNDLED: &[u8] = include_bytes!("../assets/fonts/NotoColorEmoji.ttf");
+
 /// Whether a color emoji font is available.
 pub fn available() -> bool {
     font().is_some()
@@ -49,22 +54,23 @@ fn font() -> Option<&'static Font> {
 }
 
 fn load() -> Option<Font> {
-    let (path, index) = find()?;
-    let bytes = std::fs::read(&path).ok()?;
+    if let Some((path, index)) = find()
+        && let Ok(bytes) = std::fs::read(&path)
+        && let Some(font) = load_bytes(bytes, index, &path.display().to_string())
+    {
+        return Some(font);
+    }
+    load_bytes(BUNDLED.to_vec(), 0, "bundled Noto Color Emoji")
+}
+
+fn load_bytes(bytes: Vec<u8>, index: u32, source: &str) -> Option<Font> {
     let font = FontRef::from_index(&bytes, index).ok()?;
     if font.bitmap_strikes().is_empty() {
-        log::info!(
-            "{} has no bitmap emoji; keeping monochrome glyphs",
-            path.display()
-        );
+        log::info!("{source} has no bitmap emoji");
         return None;
     }
     let ligatures = read_ligatures(&font);
-    log::info!(
-        "colour emoji from {} ({} sequences)",
-        path.display(),
-        ligatures.len()
-    );
+    log::info!("colour emoji from {source} ({} sequences)", ligatures.len());
     Some(Font {
         bytes,
         index,
@@ -493,6 +499,23 @@ pub fn paint(ui: &egui::Ui, galley: &egui::Galley, origin: Pos2, placements: &[S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bundled_font_renders_colour_emoji() {
+        let font = load_bytes(BUNDLED.to_vec(), 0, "test font").expect("bundled font");
+        let font_ref = font.font_ref().expect("font face");
+        let glyph = font
+            .glyph(&font_ref, &['\u{1F600}'])
+            .expect("grinning face glyph");
+        let image = font.image(&font_ref, glyph).expect("colour bitmap");
+        assert_eq!(image.size[0], TEXTURE_WIDTH as usize);
+        assert!(
+            image
+                .pixels
+                .iter()
+                .any(|pixel| { pixel.a() > 0 && pixel.r() != pixel.g() && pixel.g() != pixel.b() })
+        );
+    }
 
     #[test]
     fn an_editor_job_keeps_the_text_and_places_the_emoji() {
