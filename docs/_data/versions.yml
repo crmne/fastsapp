@@ -3,10 +3,6 @@ items:
   - id: v0.10.0
     title: v0.10.0
     url: /download/
-  - id: v0.9.0
-    title: v0.9.0
-    url: https://github.com/crmne/fastsapp/releases/tag/v0.9.0
-    external: true
   - title: Changelog
     url: https://github.com/crmne/fastsapp/releases
     external: true

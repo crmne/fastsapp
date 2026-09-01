@@ -182,8 +182,8 @@ A release is not finished when the tag is pushed. Do these in order:
    changed for the user, not the commit history.
 4. After the release files exist, update both `fastsapp_version` in
    `docs/_config.yml` and the version menu in `docs/_data/versions.yml`.
-   The new version becomes `current` and points to `/download/`; keep the
-   previous version as a direct link to its GitHub release. Never point the
+   The menu lists only the current version, which points to `/download/`,
+   and the Changelog link; do not add older versions to it. Never point the
    download page at files that do not exist yet.
 5. Update the AUR packages in the maintainer's `~/Code/aur/` clones:
    `fastsapp-bin` gets the new `pkgver`, `pkgrel=1`, and both Linux checksums
