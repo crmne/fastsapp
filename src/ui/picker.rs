@@ -309,7 +309,11 @@ fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             .show(ui, |ui| {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut app.settings.giphy_key)
-                        .hint_text(egui::RichText::new("GIPHY API key").color(palette.dim))
+                        .hint_text(
+                            egui::RichText::new("GIPHY API key")
+                                .color(palette.dim)
+                                .font(theme::regular(13.5)),
+                        )
                         .font(theme::regular(13.5))
                         .text_color(palette.text)
                         .frame(Frame::NONE)
@@ -508,7 +512,9 @@ fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                     egui::TextEdit::singleline(&mut app.sticker_link)
                         .id(egui::Id::new("sticker-link"))
                         .hint_text(
-                            egui::RichText::new("Paste a signal.art link").color(palette.dim),
+                            egui::RichText::new("Paste a signal.art link")
+                                .color(palette.dim)
+                                .font(theme::regular(13.0)),
                         )
                         .font(theme::regular(13.0))
                         .text_color(palette.text)

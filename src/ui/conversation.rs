@@ -470,7 +470,8 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                         } else {
                                             "Add a caption"
                                         })
-                                        .color(palette.dim),
+                                        .color(palette.dim)
+                                        .font(theme::regular(BODY_SIZE)),
                                     )
                                     .font(theme::regular(BODY_SIZE))
                                     .text_color(palette.text)

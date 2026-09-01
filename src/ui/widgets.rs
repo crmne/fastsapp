@@ -371,7 +371,11 @@ pub fn search_field(
     let response = child.add(
         egui::TextEdit::singleline(text)
             .id(id)
-            .hint_text(egui::RichText::new(hint).color(palette.dim))
+            .hint_text(
+                egui::RichText::new(hint)
+                    .color(palette.dim)
+                    .font(theme::regular(14.0)),
+            )
             .font(theme::regular(14.0))
             .text_color(palette.text)
             .frame(egui::Frame::NONE)

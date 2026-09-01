@@ -191,11 +191,22 @@ fn pair_with_phone(app: &mut App, ui: &mut egui::Ui) {
         .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
+                // The row would centre on the label's height and let the
+                // taller field grow past it; claim the field's height first.
+                ui.set_min_height(
+                    ui.ctx()
+                        .fonts_mut(|fonts| fonts.row_height(&theme::regular(16.0)))
+                        + 4.0,
+                );
                 theme::text(ui, "+", theme::semibold(16.0), palette.secondary);
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut app.pair_phone)
                         .id(id)
-                        .hint_text(egui::RichText::new("15551234567").color(palette.dim))
+                        .hint_text(
+                            egui::RichText::new("15551234567")
+                                .color(palette.dim)
+                                .font(theme::regular(16.0)),
+                        )
                         .font(theme::regular(16.0))
                         .text_color(palette.text)
                         .frame(egui::Frame::NONE)
@@ -240,6 +251,13 @@ fn new_contact(app: &mut App, ui: &mut egui::Ui) {
                 .inner_margin(Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        // The field is taller than the label; claim its
+                        // height first or the plus rides high.
+                        ui.set_min_height(
+                            ui.ctx()
+                                .fonts_mut(|fonts| fonts.row_height(&theme::regular(16.0)))
+                                + 4.0,
+                        );
                         if plus {
                             theme::text(ui, "+", theme::semibold(16.0), palette.secondary);
                         }
@@ -253,7 +271,11 @@ fn new_contact(app: &mut App, ui: &mut egui::Ui) {
         ($buffer:expr, $salt:literal, $hint:literal, $width:expr) => {
             egui::TextEdit::singleline($buffer)
                 .id(egui::Id::new($salt))
-                .hint_text(egui::RichText::new($hint).color(palette.dim))
+                .hint_text(
+                    egui::RichText::new($hint)
+                        .color(palette.dim)
+                        .font(theme::regular(16.0)),
+                )
                 .font(theme::regular(16.0))
                 .text_color(palette.text)
                 .frame(egui::Frame::NONE)
@@ -380,7 +402,11 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
                             ui.add(
                                 egui::TextEdit::singleline(buffer)
                                     .id(egui::Id::new(salt))
-                                    .hint_text(egui::RichText::new(hint).color(palette.dim))
+                                    .hint_text(
+                                        egui::RichText::new(hint)
+                                            .color(palette.dim)
+                                            .font(theme::semibold(15.0)),
+                                    )
                                     .font(theme::semibold(15.0))
                                     .text_color(palette.text)
                                     .frame(Frame::NONE)
