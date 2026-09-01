@@ -190,6 +190,17 @@ pub enum Command {
     StickerPackImported {
         result: Result<String, String>,
     },
+    /// Save a person under a name through WhatsApp's contact sync.
+    SaveContact {
+        id: String,
+        name: String,
+    },
+    /// Internal: the contact mutation went out, or did not.
+    ContactSaved {
+        id: String,
+        name: String,
+        error: Option<String>,
+    },
     /// Fetch a GIF from the web and send it as WhatsApp does, a short
     /// looping video.
     SendGif {

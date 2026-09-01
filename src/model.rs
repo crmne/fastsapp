@@ -543,6 +543,14 @@ pub enum Action {
     PickStickerArchive,
     /// Delete an imported pack, folder and all.
     DeleteStickerPack(PathBuf),
+    /// Open the info card's name editor, prefilled.
+    EditContact(String),
+    /// Save a person under a name, through WhatsApp's own contact sync,
+    /// so the phone and every linked device learn it too.
+    SaveContact {
+        id: String,
+        name: String,
+    },
     /// Look GIFs up; an empty query lists what is trending.
     SearchGifs(String),
     SendGif(Gif),

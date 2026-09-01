@@ -207,6 +207,8 @@ pub struct App {
 
     pub page: Page,
     pub dialog: Option<Dialog>,
+    /// The name being typed in the info card's contact editor.
+    pub contact_edit: Option<String>,
     /// The number typed in the pair-with-phone dialog.
     pub pair_phone: String,
     pub sidebar_visible: bool,
@@ -370,6 +372,7 @@ impl App {
             scroll_last_event: None,
             page: Page::Chats,
             dialog: None,
+            contact_edit: None,
             pair_phone: String::new(),
             sidebar_visible: true,
             show_archived: false,
@@ -1755,9 +1758,18 @@ impl App {
                 if dialog == Dialog::PairWithPhone {
                     self.pair_phone.clear();
                 }
+                self.contact_edit = None;
                 self.dialog = Some(dialog);
             }
-            Action::CloseDialog => self.dialog = None,
+            Action::CloseDialog => {
+                self.dialog = None;
+                self.contact_edit = None;
+            }
+            Action::EditContact(prefill) => self.contact_edit = Some(prefill),
+            Action::SaveContact { id, name } => {
+                self.contact_edit = None;
+                self.backend.send(Command::SaveContact { id, name });
+            }
             Action::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             Action::FocusSearch => {
                 self.sidebar_visible = true;

@@ -1963,6 +1963,43 @@ impl Worker {
                     let _ = commands.send(Command::StickerPackImported { result });
                 });
             }
+            Command::SaveContact { id, name } => {
+                let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&id)) else {
+                    self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+                    return;
+                };
+                let commands = self.commands.clone();
+                tokio::spawn(async move {
+                    let error = client
+                        .chat_actions()
+                        // Into the phone's address book as well, so the
+                        // name lives where every other contact does.
+                        .save_contact(&jid, Some(name.clone()), None, true)
+                        .await
+                        .err()
+                        .map(|error| error.to_string());
+                    let _ = commands.send(Command::ContactSaved { id, name, error });
+                });
+            }
+            Command::ContactSaved { id, name, error } => {
+                if let Some(error) = error {
+                    self.emit(Event::Error(format!("Contact not saved: {error}")));
+                    return;
+                }
+                let contact = Contact {
+                    id: id.clone(),
+                    full_name: Some(name.clone()),
+                    push_name: None,
+                };
+                if let Err(error) = self.archive.upsert_contact(&contact) {
+                    log::warn!("could not store the contact: {error}");
+                }
+                // The stored row keeps the push name the upsert left alone.
+                let stored = self.archive.contact(&id).ok().flatten().unwrap_or(contact);
+                self.emit(Event::Contacts(vec![stored]));
+                self.emit(Event::Info(format!("{name} is in your contacts")));
+                self.emit_chat(&id);
+            }
             Command::StickerPackImported { result } => match result {
                 Ok(name) => {
                     self.emit_stickers();

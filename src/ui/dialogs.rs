@@ -236,10 +236,58 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let window = ui.ctx().content_rect().height();
     let photo = (window * 0.34).clamp(120.0, 240.0);
     let picture = app.avatar_full(id).or_else(|| app.avatar(id));
+    let mine = app.me.as_deref() == Some(id);
+    let editable = chat.phone().is_some() && !mine;
+    // The name editor's buffer is checked out for the frame; not putting
+    // it back is how saving or cancelling closes the editor.
+    let mut editing = app.contact_edit.take().filter(|_| editable);
+    let mut saved = None;
     ui.vertical_centered(|ui| {
         super::widgets::avatar(ui, &palette, &name, id, photo, picture.as_deref());
         ui.add_space(6.0);
-        super::widgets::selectable_rich_text(ui, &name, theme::bold(19.0), palette.text);
+        if let Some(buffer) = editing.as_mut() {
+            let mut submit = false;
+            ui.horizontal(|ui| {
+                ui.add_space((ui.available_width() - 264.0).max(0.0) / 2.0);
+                let response = Frame::new()
+                    .fill(palette.surface)
+                    .corner_radius(CornerRadius::same(theme::RADIUS))
+                    .inner_margin(Margin::symmetric(10, 5))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(buffer)
+                                .id(egui::Id::new("contact-name"))
+                                .font(theme::semibold(16.0))
+                                .text_color(palette.text)
+                                .frame(Frame::NONE)
+                                .desired_width(210.0),
+                        )
+                    })
+                    .inner;
+                if ui.memory(|memory| memory.focused().is_none()) {
+                    response.request_focus();
+                }
+                submit =
+                    response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                if theme::icon_button(
+                    ui,
+                    Icon::Check,
+                    18.0,
+                    palette.secondary,
+                    palette.accent,
+                    "Save the name (Enter)",
+                )
+                .clicked()
+                {
+                    submit = true;
+                }
+            });
+            if submit && !buffer.trim().is_empty() {
+                saved = Some(buffer.trim().to_owned());
+            }
+        } else {
+            super::widgets::selectable_rich_text(ui, &name, theme::bold(19.0), palette.text);
+        }
         if let Some(phone) = chat.phone() {
             theme::selectable_text(
                 ui,
@@ -269,6 +317,14 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
             }
         }
     });
+    if let Some(saved) = saved {
+        editing = None;
+        app.actions.push(Action::SaveContact {
+            id: id.to_owned(),
+            name: saved,
+        });
+    }
+    app.contact_edit = editing;
     ui.add_space(8.0);
     if chat.is_group() && !chat.participants.is_empty() {
         let members = app.participant_list(&chat);
@@ -358,6 +414,31 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     ui.add_space(4.0);
     // The buttons that apply, in rows centred under the picture.
     let mut buttons: Vec<(Icon, &str, Vec<Action>)> = Vec::new();
+    if !chat.is_group() && !mine {
+        buttons.push((
+            Icon::MessageCircle,
+            "Message",
+            vec![
+                Action::StartChat {
+                    id: chat.id.clone(),
+                    name: name.clone(),
+                },
+                Action::CloseDialog,
+            ],
+        ));
+    }
+    if editable {
+        let known = app
+            .contacts
+            .get(id)
+            .and_then(|contact| contact.full_name.as_deref())
+            .is_some_and(|full| !full.is_empty());
+        buttons.push((
+            Icon::User,
+            if known { "Rename" } else { "Add to contacts" },
+            vec![Action::EditContact(name.trim_start_matches('~').to_owned())],
+        ));
+    }
     if let Some(phone) = chat.phone() {
         buttons.push((
             Icon::Copy,

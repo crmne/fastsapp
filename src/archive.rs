@@ -961,6 +961,23 @@ impl Archive {
         Ok(())
     }
 
+    /// One contact as stored, if the id is known.
+    pub fn contact(&self, id: &str) -> Result<Option<Contact>> {
+        self.connection
+            .query_row(
+                "SELECT id, full_name, push_name FROM contacts WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(Contact {
+                        id: row.get(0)?,
+                        full_name: row.get(1)?,
+                        push_name: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
     pub fn contacts(&self) -> Result<Vec<Contact>> {
         let mut statement = self
             .connection
@@ -1181,6 +1198,35 @@ mod tests {
         assert_eq!(
             chats[1].last.as_ref().map(|last| last.summary.as_str()),
             Some("message m3")
+        );
+    }
+
+    #[test]
+    fn a_saved_name_keeps_the_push_name_beside_it() {
+        let archive = Archive::in_memory().expect("opens");
+        let id = "491700000001@s.whatsapp.net";
+        archive
+            .upsert_contact(&Contact {
+                id: id.into(),
+                full_name: None,
+                push_name: Some("~slavic".into()),
+            })
+            .expect("stores");
+        archive
+            .upsert_contact(&Contact {
+                id: id.into(),
+                full_name: Some("Slavic".into()),
+                push_name: None,
+            })
+            .expect("renames");
+        let stored = archive.contact(id).expect("reads").expect("exists");
+        assert_eq!(stored.full_name.as_deref(), Some("Slavic"));
+        assert_eq!(stored.push_name.as_deref(), Some("~slavic"));
+        assert!(
+            archive
+                .contact("nobody@s.whatsapp.net")
+                .expect("reads")
+                .is_none()
         );
     }
 
