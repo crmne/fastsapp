@@ -168,15 +168,30 @@ fixes worth a changelog entry. Five patch releases in a day is what this
 rule exists to prevent. The exception is a regression in something just
 released, which goes out as soon as it is fixed.
 
-Bump `version` in `Cargo.toml`, commit, tag `vX.Y.Z`, and push the tag: the
-release workflow builds every platform and publishes the GitHub release
-with `checksums.txt`. Then update the AUR packages in the maintainer's
-`~/Code/aur/` clones: `fastsapp-bin` (new `pkgver`, `pkgrel=1`, the two
-Linux checksums from `checksums.txt`) and `fastsapp` (new `pkgver`,
-`pkgrel=1`, the source tarball's checksum from `makepkg -g`); for each,
-`makepkg --printsrcinfo > .SRCINFO`, `makepkg -f` to prove it builds,
-commit, push. `fastsapp-git` only needs touching when the build recipe or
-the dependencies change.
+A release is not finished when the tag is pushed. Do these in order:
+
+1. Bump `version` in `Cargo.toml` and update `Cargo.lock` with a build. Run
+   the full checks, commit, and push before tagging so the binaries report
+   the right version.
+2. Tag `vX.Y.Z` and push the tag. Wait for every platform build, artifact,
+   and `checksums.txt`.
+3. Replace the generated GitHub notes with written release notes. Start with
+   a short summary, group user-visible changes under headings such as `New`
+   and `Fixed`, credit contributors and reporters where it helps, and end
+   with a full-changelog link comparing the previous tag. Write about what
+   changed for the user, not the commit history.
+4. After the release files exist, update both `fastsapp_version` in
+   `docs/_config.yml` and the version menu in `docs/_data/versions.yml`.
+   The new version becomes `current` and points to `/download/`; keep the
+   previous version as a direct link to its GitHub release. Never point the
+   download page at files that do not exist yet.
+5. Update the AUR packages in the maintainer's `~/Code/aur/` clones:
+   `fastsapp-bin` gets the new `pkgver`, `pkgrel=1`, and both Linux checksums
+   from `checksums.txt`; `fastsapp` gets the new `pkgver`, `pkgrel=1`, and
+   the source tarball checksum from `makepkg -g`. For each package, run
+   `makepkg --printsrcinfo > .SRCINFO` and `makepkg -f`, then commit and
+   push. Only update `fastsapp-git` when the build recipe or dependencies
+   change.
 
 ## Definition of done
 
