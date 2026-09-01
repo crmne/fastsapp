@@ -548,16 +548,19 @@ pub enum Action {
     /// Open the info card's name editor, prefilled.
     EditContact(String),
     /// Save a person under a name, through WhatsApp's own contact sync,
-    /// so the phone and every linked device learn it too.
+    /// so the phone and every linked device learn it too. `first` is what
+    /// WhatsApp shows on its own; the surname completes the full name.
     SaveContact {
         id: String,
-        name: String,
+        first: String,
+        last: String,
     },
     /// A number typed by hand: check it is on WhatsApp, then message it,
-    /// saving it first when a name is given.
+    /// saving it first when a first name is given.
     NewContact {
         phone: String,
-        name: Option<String>,
+        first: String,
+        last: String,
     },
     /// Look GIFs up; an empty query lists what is trending.
     SearchGifs(String),

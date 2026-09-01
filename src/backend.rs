@@ -191,9 +191,13 @@ pub enum Command {
         result: Result<String, String>,
     },
     /// Save a person under a name through WhatsApp's contact sync.
+    /// `first_name` is the short name WhatsApp itself shows; `to_phone`
+    /// files the contact in the phone's own address book as well.
     SaveContact {
         id: String,
-        name: String,
+        full_name: String,
+        first_name: Option<String>,
+        to_phone: bool,
     },
     /// Internal: the contact mutation went out, or did not.
     ContactSaved {
@@ -205,12 +209,16 @@ pub enum Command {
     /// it (when named) and tell the app to open the chat.
     NewContact {
         phone: String,
-        name: Option<String>,
+        full_name: Option<String>,
+        first_name: Option<String>,
+        to_phone: bool,
     },
     /// Internal: WhatsApp answered whether the number is registered.
     ContactChecked {
         phone: String,
-        name: Option<String>,
+        full_name: Option<String>,
+        first_name: Option<String>,
+        to_phone: bool,
         registered: bool,
     },
     /// Fetch a GIF from the web and send it as WhatsApp does, a short

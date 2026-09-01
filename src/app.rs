@@ -207,12 +207,14 @@ pub struct App {
 
     pub page: Page,
     pub dialog: Option<Dialog>,
-    /// The name being typed in the info card's contact editor.
-    pub contact_edit: Option<String>,
+    /// The first name and surname being typed in the info card's
+    /// contact editor.
+    pub contact_edit: Option<(String, String)>,
     /// The number and name typed in the new-contact dialog, and whether
     /// WhatsApp is being asked about the number right now.
     pub new_contact_phone: String,
     pub new_contact_name: String,
+    pub new_contact_last: String,
     pub new_contact_pending: bool,
     /// The number typed in the pair-with-phone dialog.
     pub pair_phone: String,
@@ -380,6 +382,7 @@ impl App {
             contact_edit: None,
             new_contact_phone: String::new(),
             new_contact_name: String::new(),
+            new_contact_last: String::new(),
             new_contact_pending: false,
             pair_phone: String::new(),
             sidebar_visible: true,
@@ -1780,6 +1783,7 @@ impl App {
                 if dialog == Dialog::NewContact {
                     self.new_contact_phone.clear();
                     self.new_contact_name.clear();
+                    self.new_contact_last.clear();
                     self.new_contact_pending = false;
                 }
                 self.contact_edit = None;
@@ -1789,14 +1793,31 @@ impl App {
                 self.dialog = None;
                 self.contact_edit = None;
             }
-            Action::EditContact(prefill) => self.contact_edit = Some(prefill),
-            Action::SaveContact { id, name } => {
-                self.contact_edit = None;
-                self.backend.send(Command::SaveContact { id, name });
+            Action::EditContact(prefill) => {
+                self.contact_edit = Some(crate::util::split_name(&prefill));
             }
-            Action::NewContact { phone, name } => {
+            Action::SaveContact { id, first, last } => {
+                self.contact_edit = None;
+                let (full_name, first_name) = compose_name(&first, &last);
+                let Some(full_name) = full_name else {
+                    return;
+                };
+                self.backend.send(Command::SaveContact {
+                    id,
+                    full_name,
+                    first_name,
+                    to_phone: self.settings.save_contacts_to_phone,
+                });
+            }
+            Action::NewContact { phone, first, last } => {
                 self.new_contact_pending = true;
-                self.backend.send(Command::NewContact { phone, name });
+                let (full_name, first_name) = compose_name(&first, &last);
+                self.backend.send(Command::NewContact {
+                    phone,
+                    full_name,
+                    first_name,
+                    to_phone: self.settings.save_contacts_to_phone,
+                });
             }
             Action::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             Action::FocusSearch => {
@@ -2192,6 +2213,26 @@ impl App {
 /// `Paste` event only when the clipboard holds text, so a picture on the
 /// clipboard shows no press at all; the release still comes through,
 /// carrying the modifiers it was made with.
+/// The two fields WhatsApp's contact sync carries, out of the editor's
+/// two boxes: the full name joins them, the first name stands alone (it
+/// is the short name WhatsApp shows). No first name, no contact.
+fn compose_name(first: &str, last: &str) -> (Option<String>, Option<String>) {
+    let first = first.trim();
+    let last = last.trim();
+    if first.is_empty() && last.is_empty() {
+        return (None, None);
+    }
+    let full = if last.is_empty() {
+        first.to_owned()
+    } else if first.is_empty() {
+        last.to_owned()
+    } else {
+        format!("{first} {last}")
+    };
+    let short = (!first.is_empty()).then(|| first.to_owned());
+    (Some(full), short)
+}
+
 pub fn wants_paste(input: &egui::InputState) -> bool {
     input.events.iter().any(|event| {
         matches!(

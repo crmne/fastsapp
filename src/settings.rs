@@ -60,6 +60,9 @@ pub struct Settings {
     /// People are named as the address book has them (else as they call
     /// themselves); off, the other way round. One rule everywhere.
     pub names_from_contacts: bool,
+    /// A contact saved here also lands in the phone's own address book,
+    /// not only in WhatsApp.
+    pub save_contacts_to_phone: bool,
 }
 
 impl Default for Settings {
@@ -80,6 +83,7 @@ impl Default for Settings {
             keep_running_in_background: true,
             notifications: true,
             names_from_contacts: true,
+            save_contacts_to_phone: true,
         }
     }
 }

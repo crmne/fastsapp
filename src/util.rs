@@ -59,6 +59,17 @@ fn stamp_relative_to(date: Date, today: Date, when: &Zoned) -> String {
     }
 }
 
+/// A display name split for the contact editor: the first word, and the
+/// rest as the surname. A guess for prefilling; the person typing has
+/// the last word.
+pub fn split_name(name: &str) -> (String, String) {
+    let name = name.trim();
+    match name.split_once(' ') {
+        Some((first, rest)) => (first.to_owned(), rest.trim().to_owned()),
+        None => (name.to_owned(), String::new()),
+    }
+}
+
 /// The stamp on a message's info rows: the day as the chat list says it,
 /// with the minute it happened.
 pub fn moment_stamp(unix_seconds: i64) -> String {

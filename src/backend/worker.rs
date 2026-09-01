@@ -1963,7 +1963,12 @@ impl Worker {
                     let _ = commands.send(Command::StickerPackImported { result });
                 });
             }
-            Command::SaveContact { id, name } => {
+            Command::SaveContact {
+                id,
+                full_name,
+                first_name,
+                to_phone,
+            } => {
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&id)) else {
                     self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
                     return;
@@ -1972,13 +1977,15 @@ impl Worker {
                 tokio::spawn(async move {
                     let error = client
                         .chat_actions()
-                        // Into the phone's address book as well, so the
-                        // name lives where every other contact does.
-                        .save_contact(&jid, Some(name.clone()), None, true)
+                        .save_contact(&jid, Some(full_name.clone()), first_name, to_phone)
                         .await
                         .err()
                         .map(|error| error.to_string());
-                    let _ = commands.send(Command::ContactSaved { id, name, error });
+                    let _ = commands.send(Command::ContactSaved {
+                        id,
+                        name: full_name,
+                        error,
+                    });
                 });
             }
             Command::ContactSaved { id, name, error } => {
@@ -2000,7 +2007,12 @@ impl Worker {
                 self.emit(Event::Info(format!("{name} is in your contacts")));
                 self.emit_chat(&id);
             }
-            Command::NewContact { phone, name } => {
+            Command::NewContact {
+                phone,
+                full_name,
+                first_name,
+                to_phone,
+            } => {
                 let Some(client) = self.client.clone() else {
                     self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
                     return;
@@ -2019,14 +2031,18 @@ impl Worker {
                     };
                     let _ = commands.send(Command::ContactChecked {
                         phone,
-                        name,
+                        full_name,
+                        first_name,
+                        to_phone,
                         registered,
                     });
                 });
             }
             Command::ContactChecked {
                 phone,
-                name,
+                full_name,
+                first_name,
+                to_phone,
                 registered,
             } => {
                 if !registered {
@@ -2037,13 +2053,18 @@ impl Worker {
                     return;
                 }
                 let id = format!("{phone}@s.whatsapp.net");
-                if let Some(name) = name.clone() {
+                if let Some(full_name) = full_name.clone() {
                     let _ = self.commands.send(Command::SaveContact {
                         id: id.clone(),
-                        name,
+                        full_name,
+                        first_name,
+                        to_phone,
                     });
                 }
-                self.emit(Event::ContactReady { id, name });
+                self.emit(Event::ContactReady {
+                    id,
+                    name: full_name,
+                });
             }
             Command::StickerPackImported { result } => match result {
                 Ok(name) => {
