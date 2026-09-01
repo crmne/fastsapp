@@ -123,8 +123,6 @@ Documentation, downloads, and guides: **[fastsapp.rocks](https://fastsapp.rocks)
 - Calls, status posts, communities, newsletters, and group administration.
 - Colour emoji on Windows: Segoe UI Emoji is not a bitmap font, so emoji
   stay monochrome there for now.
-- Deleting or editing your own messages, and archiving or pinning a chat
-  from here in a way the phone sees (those two are kept locally for now).
 
 ## Installing
 
