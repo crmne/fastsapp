@@ -291,6 +291,8 @@ pub enum Command {
     ReceiptsPrivacy {
         disabled: bool,
     },
+    /// Ask GitHub whether a newer release exists.
+    CheckForUpdates,
 }
 
 #[derive(Debug)]
@@ -385,6 +387,11 @@ pub enum Event {
     },
     /// Informational toast message.
     Info(String),
+    /// A newer release than this build exists.
+    UpdateAvailable {
+        version: String,
+        url: String,
+    },
     Error(String),
 }
 

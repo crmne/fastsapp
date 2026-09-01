@@ -209,6 +209,9 @@ pub struct App {
     pub show_archived: bool,
     pub toasts: Vec<Toast>,
     pub actions: Vec<Action>,
+    /// A newer release than this build, once GitHub has said so.
+    pub update: Option<crate::updates::Release>,
+    last_update_check: Option<Instant>,
     /// Whether to scroll the conversation to its newest message.
     pub scroll_to_bottom: bool,
     /// Whether the conversation was at the bottom last frame.
@@ -372,6 +375,8 @@ impl App {
             show_archived: false,
             toasts: Vec::new(),
             actions: Vec::new(),
+            update: None,
+            last_update_check: None,
             scroll_to_bottom: true,
             at_bottom: true,
             scroll_anchor: None,
@@ -1052,6 +1057,13 @@ impl App {
                     self.actions.push(Action::StartChat { id, name });
                 }
                 Event::Info(message) => self.toast(message),
+                Event::UpdateAvailable { version, url } => {
+                    let notice = crate::updates::Release { version, url };
+                    if self.update.as_ref() != Some(&notice) {
+                        self.toast(format!("FastsApp {} is available", notice.version));
+                    }
+                    self.update = Some(notice);
+                }
                 Event::Error(message) => {
                     self.sticker_import_pending = false;
                     self.new_contact_pending = false;
@@ -1384,6 +1396,15 @@ impl App {
         self.typing.retain(|_, typers| !typers.is_empty());
         self.toasts
             .retain(|toast| toast.created.elapsed() < Duration::from_millis(3200));
+        if self.settings.check_for_updates
+            && !self.backend.is_offline()
+            && self
+                .last_update_check
+                .is_none_or(|at| at.elapsed() >= crate::updates::CHECK_INTERVAL)
+        {
+            self.last_update_check = Some(now);
+            self.backend.send(Command::CheckForUpdates);
+        }
         if self.settings_dirty && self.last_settings_save.elapsed() > Duration::from_secs(2) {
             self.save_settings();
         }

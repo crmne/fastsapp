@@ -47,6 +47,7 @@ Changes on the Settings page are saved to `settings.json` immediately:
 - **Keep running in the background**: keep FastsApp in the tray when the
   window closes.
 - **Notifications**: use desktop notifications with the chat picture.
+- **Check for updates**: ask GitHub once a day whether a newer release exists.
 - **GIPHY API key**: required for GIF search unless the build includes one.
   Set `FASTSAPP_GIPHY_KEY` at compile time to include a default key.
 

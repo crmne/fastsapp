@@ -81,7 +81,8 @@ fn drop_target(app: &mut App, ctx: &egui::Context) {
 /// Connection and history-sync banner.
 fn banner(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    let (icon, text, color, retry) = match &app.link {
+    let update = app.update.clone();
+    let (icon, text, color, retry, download) = match &app.link {
         LinkStatus::Connected if app.syncing => (
             Icon::Refresh,
             match app.sync_percent {
@@ -90,26 +91,46 @@ fn banner(app: &mut App, ui: &mut egui::Ui) {
             },
             palette.accent,
             false,
+            None,
         ),
+        LinkStatus::Connected if update.is_some() => {
+            let update = update.as_ref().expect("checked above");
+            (
+                Icon::Info,
+                format!("FastsApp {} is available", update.version),
+                palette.accent,
+                false,
+                Some(update.url.clone()),
+            )
+        }
         LinkStatus::Connected => return,
         LinkStatus::Starting | LinkStatus::Connecting => (
             Icon::Refresh,
             "Connecting to WhatsApp…".to_owned(),
             palette.secondary,
             false,
+            None,
         ),
         LinkStatus::Disconnected { reason } => (
             Icon::WifiOff,
             format!("Offline ({reason}). Reconnecting…"),
             palette.warning,
             true,
+            None,
         ),
-        LinkStatus::Failed(message) => (Icon::CircleAlert, message.clone(), palette.danger, true),
+        LinkStatus::Failed(message) => (
+            Icon::CircleAlert,
+            message.clone(),
+            palette.danger,
+            true,
+            None,
+        ),
         LinkStatus::Unlinked { .. } | LinkStatus::LoggedOut => (
             Icon::Smartphone,
             "Not linked to a phone".to_owned(),
             palette.warning,
             false,
+            None,
         ),
     };
     egui::Panel::top("banner")
@@ -121,19 +142,35 @@ fn banner(app: &mut App, ui: &mut egui::Ui) {
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                if matches!(
-                    app.link,
-                    LinkStatus::Starting | LinkStatus::Connecting | LinkStatus::Connected
-                ) {
+                if app.syncing || matches!(app.link, LinkStatus::Starting | LinkStatus::Connecting)
+                {
                     theme::spinner(ui, 14.0, color);
                 } else {
                     theme::icon(ui, icon, 15.0, color);
                 }
                 theme::text(ui, text, theme::medium(13.0), palette.text);
-                if retry {
+                if retry || download.is_some() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if theme::soft_button(ui, &palette, Some(Icon::Refresh), "Retry", false)
+                        if let Some(url) = download {
+                            if theme::soft_button(
+                                ui,
+                                &palette,
+                                Some(Icon::ExternalLink),
+                                "Download",
+                                false,
+                            )
                             .clicked()
+                            {
+                                app.actions.push(Action::OpenUrl(url));
+                            }
+                        } else if theme::soft_button(
+                            ui,
+                            &palette,
+                            Some(Icon::Refresh),
+                            "Retry",
+                            false,
+                        )
+                        .clicked()
                         {
                             app.actions.push(Action::Reconnect);
                         }

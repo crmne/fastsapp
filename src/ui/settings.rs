@@ -87,6 +87,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     section(ui, app, "Window");
                     toggle(ui, app, "Keep running when the window closes", "Keep FastsApp linked in the system tray. Quit from the tray menu or with Ctrl+Q.", |settings| &mut settings.keep_running_in_background);
                     toggle(ui, app, "Notify about new messages", "Show desktop notifications when the window is hidden, in the background, or showing another chat. Muted chats do not notify you.", |settings| &mut settings.notifications);
+                    toggle(ui, app, "Check for updates", "Ask GitHub once a day whether a newer FastsApp release exists. The request identifies only FastsApp and its version.", |settings| &mut settings.check_for_updates);
 
                     widgets::setting_row(
                         ui,

@@ -62,6 +62,8 @@ See **[fastsapp.rocks](https://fastsapp.rocks)** for downloads and guides.
 - **Desktop notifications.** Get notifications with the chat picture when you
   are away from the open chat. Muted chats do not notify you. On Linux,
   clicking a notification opens the chat.
+- **Update notices.** FastsApp checks GitHub once a day and shows a download
+  link when a newer release is available. You can turn this off in Settings.
 - **Light and dark**, or follow the system. Zoom with Ctrl+plus and
   Ctrl+minus.
 - **Copy text.** Select part of a message or copy across messages in

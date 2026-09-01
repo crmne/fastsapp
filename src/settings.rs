@@ -54,6 +54,8 @@ pub struct Settings {
     pub keep_running_in_background: bool,
     /// Desktop notifications while away from the chat.
     pub notifications: bool,
+    /// Ask GitHub once a day whether a newer release exists.
+    pub check_for_updates: bool,
     /// Prefer address-book names over public profile names.
     pub names_from_contacts: bool,
     /// Also add saved contacts to the phone's address book.
@@ -77,6 +79,7 @@ impl Default for Settings {
             giphy_key: String::new(),
             keep_running_in_background: true,
             notifications: true,
+            check_for_updates: true,
             names_from_contacts: true,
             save_contacts_to_phone: true,
         }
@@ -138,6 +141,7 @@ mod tests {
             serde_json::from_str(r#"{"theme":"light","future_field":1}"#).expect("parses");
         assert_eq!(parsed.theme, ThemeChoice::Light);
         assert!(parsed.enter_sends);
+        assert!(parsed.check_for_updates);
     }
 
     #[test]

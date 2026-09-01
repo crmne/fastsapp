@@ -2056,6 +2056,23 @@ impl Worker {
             Command::ReceiptsPrivacy { disabled } => {
                 self.emit(Event::ReceiptsPrivacy { disabled });
             }
+            Command::CheckForUpdates => {
+                let events = self.events.clone();
+                let waker = self.waker.clone();
+                tokio::task::spawn_blocking(move || match crate::updates::newer_release() {
+                    Ok(Some(release)) => {
+                        let _ = events.send(Event::UpdateAvailable {
+                            version: release.version,
+                            url: release.url,
+                        });
+                        waker.wake();
+                    }
+                    Ok(None) => log::debug!("this is the newest release"),
+                    Err(error) => {
+                        log::debug!("could not check for a newer release: {error:#}")
+                    }
+                });
+            }
             Command::GifResults { query, results } => {
                 self.emit(Event::Gifs { query, results });
             }

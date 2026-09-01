@@ -30,7 +30,8 @@ window instead of starting another instance.
 The message archive, media, and session keys stay on your computer.
 [Settings & Files](/settings-and-files/) lists their paths. FastsApp connects
 to WhatsApp's servers and, when you search for GIFs, GIPHY. It has no
-telemetry.
+telemetry. It also asks `api.github.com` once a day whether a newer release
+exists; you can turn this off in Settings.
 
 Unlinking from Settings tells the phone to forget the device and deletes
 the local archive and caches.

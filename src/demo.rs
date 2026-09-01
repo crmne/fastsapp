@@ -792,6 +792,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "chat" | "" => {}
             "empty" => app.open_chat = None,
             "settings" => app.page = Page::Settings,
+            "update" => {
+                app.update = Some(crate::updates::Release {
+                    version: "99.0.0".to_owned(),
+                    url: "https://github.com/crmne/fastsapp/releases/latest".to_owned(),
+                });
+            }
             "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
             "about" => app.dialog = Some(Dialog::About),
             "info" => {
@@ -1087,6 +1093,7 @@ mod tests {
         for page in [
             "empty",
             "settings",
+            "update",
             "shortcuts",
             "about",
             "info",
