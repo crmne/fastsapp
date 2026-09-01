@@ -436,6 +436,8 @@ pub enum Dialog {
     ConfirmUnlink,
     /// Link with a phone number instead of a QR code; holds the number typed.
     PairWithPhone,
+    /// A number typed by hand, to message or to save under a name.
+    NewContact,
     ChatInfo(ChatId),
 }
 
@@ -550,6 +552,12 @@ pub enum Action {
     SaveContact {
         id: String,
         name: String,
+    },
+    /// A number typed by hand: check it is on WhatsApp, then message it,
+    /// saving it first when a name is given.
+    NewContact {
+        phone: String,
+        name: Option<String>,
     },
     /// Look GIFs up; an empty query lists what is trending.
     SearchGifs(String),

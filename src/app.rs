@@ -209,6 +209,11 @@ pub struct App {
     pub dialog: Option<Dialog>,
     /// The name being typed in the info card's contact editor.
     pub contact_edit: Option<String>,
+    /// The number and name typed in the new-contact dialog, and whether
+    /// WhatsApp is being asked about the number right now.
+    pub new_contact_phone: String,
+    pub new_contact_name: String,
+    pub new_contact_pending: bool,
     /// The number typed in the pair-with-phone dialog.
     pub pair_phone: String,
     pub sidebar_visible: bool,
@@ -373,6 +378,9 @@ impl App {
             page: Page::Chats,
             dialog: None,
             contact_edit: None,
+            new_contact_phone: String::new(),
+            new_contact_name: String::new(),
+            new_contact_pending: false,
             pair_phone: String::new(),
             sidebar_visible: true,
             show_archived: false,
@@ -1078,9 +1086,20 @@ impl App {
                     conversation.complete = false;
                 }
                 Event::ReceiptsPrivacy { disabled } => self.account_receipts_off = disabled,
+                Event::ContactReady { id, name } => {
+                    self.new_contact_pending = false;
+                    if self.dialog == Some(Dialog::NewContact) {
+                        self.dialog = None;
+                    }
+                    let name = name
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| crate::util::phone(&id));
+                    self.actions.push(Action::StartChat { id, name });
+                }
                 Event::Info(message) => self.toast(message),
                 Event::Error(message) => {
                     self.sticker_import_pending = false;
+                    self.new_contact_pending = false;
                     self.toast_error(message);
                 }
             }
@@ -1758,6 +1777,11 @@ impl App {
                 if dialog == Dialog::PairWithPhone {
                     self.pair_phone.clear();
                 }
+                if dialog == Dialog::NewContact {
+                    self.new_contact_phone.clear();
+                    self.new_contact_name.clear();
+                    self.new_contact_pending = false;
+                }
                 self.contact_edit = None;
                 self.dialog = Some(dialog);
             }
@@ -1769,6 +1793,10 @@ impl App {
             Action::SaveContact { id, name } => {
                 self.contact_edit = None;
                 self.backend.send(Command::SaveContact { id, name });
+            }
+            Action::NewContact { phone, name } => {
+                self.new_contact_pending = true;
+                self.backend.send(Command::NewContact { phone, name });
             }
             Action::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             Action::FocusSearch => {

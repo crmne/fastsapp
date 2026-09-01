@@ -188,7 +188,11 @@ says when it is done. Everything after that arrives live, and the phone
 does not need to stay on the same network.
 
 Right-click a chat or a message for its menu. Settings are behind the gear
-in the chat list, or `Ctrl+,`.
+in the chat list, or `Ctrl+,`. The pencil beside the gear starts a chat
+with a new number and can save it as a contact; anyone met in a group can
+be messaged and saved from their card the same way, and a saved name
+reaches the phone and every linked device through WhatsApp's own contact
+sync.
 
 ## Where it keeps things
 

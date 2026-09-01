@@ -31,6 +31,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::About => 380.0,
                 Dialog::ConfirmUnlink => 380.0,
                 Dialog::PairWithPhone => 380.0,
+                Dialog::NewContact => 380.0,
                 Dialog::ChatInfo(_) => 360.0,
             });
             ui.spacing_mut().item_spacing.y = 8.0;
@@ -39,6 +40,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::About => about(app, ui),
                 Dialog::ConfirmUnlink => confirm_unlink(app, ui),
                 Dialog::PairWithPhone => pair_with_phone(app, ui),
+                Dialog::NewContact => new_contact(app, ui),
                 Dialog::ChatInfo(id) => chat_info(app, ui, &id),
             }
         });
@@ -215,6 +217,103 @@ fn pair_with_phone(app: &mut App, ui: &mut egui::Ui) {
             }
             if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
                 app.actions.push(Action::CloseDialog);
+            }
+        });
+    });
+}
+
+fn new_contact(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    title(ui, app, "New contact");
+    theme::paragraph(
+        ui,
+        "The number with its country code, no leading zeros or plus sign. A name saves them to your contacts, on the phone too; without one the chat just opens.",
+        theme::regular(13.0),
+        palette.secondary,
+    );
+    ui.add_space(4.0);
+    let field = |ui: &mut egui::Ui, app: &mut App, phone: bool| {
+        Frame::new()
+            .fill(palette.surface)
+            .corner_radius(CornerRadius::same(theme::RADIUS))
+            .inner_margin(Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if phone {
+                        theme::text(ui, "+", theme::semibold(16.0), palette.secondary);
+                    }
+                    let (id, buffer, hint) = if phone {
+                        (
+                            "new-contact-phone",
+                            &mut app.new_contact_phone,
+                            "15551234567",
+                        )
+                    } else {
+                        (
+                            "new-contact-name",
+                            &mut app.new_contact_name,
+                            "Name (to save them)",
+                        )
+                    };
+                    let response = ui.add(
+                        egui::TextEdit::singleline(buffer)
+                            .id(egui::Id::new(id))
+                            .hint_text(egui::RichText::new(hint).color(palette.dim))
+                            .font(theme::regular(16.0))
+                            .text_color(palette.text)
+                            .frame(egui::Frame::NONE)
+                            .desired_width(f32::INFINITY),
+                    );
+                    if phone && !response.has_focus() && app.new_contact_phone.is_empty() {
+                        response.request_focus();
+                    }
+                    response
+                })
+                .inner
+            })
+            .inner
+    };
+    let phone_field = field(ui, app, true);
+    ui.add_space(4.0);
+    let name_field = field(ui, app, false);
+    let digits: String = app
+        .new_contact_phone
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect();
+    let ready = digits.len() >= 7 && !app.new_contact_pending;
+    let named = !app.new_contact_name.trim().is_empty();
+    let submitted = (phone_field.lost_focus() || name_field.lost_focus())
+        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if app.new_contact_pending {
+            theme::spinner(ui, 16.0, palette.accent);
+            theme::text(
+                ui,
+                "Asking WhatsApp…",
+                theme::regular(12.5),
+                palette.secondary,
+            );
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let save = theme::pill_button(ui, &palette, "Save contact", ready && named).clicked();
+            let message = theme::pill_button(ui, &palette, "Message", ready && !named).clicked();
+            if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
+                app.actions.push(Action::CloseDialog);
+            }
+            // Enter goes where the name points: given, the person is
+            // saved; empty, the chat just opens.
+            if ready && (save || (submitted && named)) {
+                app.actions.push(Action::NewContact {
+                    phone: digits.clone(),
+                    name: Some(app.new_contact_name.trim().to_owned()),
+                });
+            } else if ready && (message || submitted) {
+                app.actions.push(Action::NewContact {
+                    phone: digits.clone(),
+                    name: None,
+                });
             }
         });
     });

@@ -2000,6 +2000,51 @@ impl Worker {
                 self.emit(Event::Info(format!("{name} is in your contacts")));
                 self.emit_chat(&id);
             }
+            Command::NewContact { phone, name } => {
+                let Some(client) = self.client.clone() else {
+                    self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+                    return;
+                };
+                let commands = self.commands.clone();
+                let jid = Jid::pn(&phone);
+                tokio::spawn(async move {
+                    // The same check the phone runs before starting a chat
+                    // with a typed number.
+                    let registered = match client.contacts().is_on_whatsapp(&[jid]).await {
+                        Ok(results) => results.iter().any(|result| result.is_registered),
+                        Err(error) => {
+                            log::debug!("number check failed, trusting the number: {error}");
+                            true
+                        }
+                    };
+                    let _ = commands.send(Command::ContactChecked {
+                        phone,
+                        name,
+                        registered,
+                    });
+                });
+            }
+            Command::ContactChecked {
+                phone,
+                name,
+                registered,
+            } => {
+                if !registered {
+                    self.emit(Event::Error(format!(
+                        "{} is not on WhatsApp",
+                        crate::util::phone(&phone)
+                    )));
+                    return;
+                }
+                let id = format!("{phone}@s.whatsapp.net");
+                if let Some(name) = name.clone() {
+                    let _ = self.commands.send(Command::SaveContact {
+                        id: id.clone(),
+                        name,
+                    });
+                }
+                self.emit(Event::ContactReady { id, name });
+            }
             Command::StickerPackImported { result } => match result {
                 Ok(name) => {
                     self.emit_stickers();

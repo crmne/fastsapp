@@ -201,6 +201,18 @@ pub enum Command {
         name: String,
         error: Option<String>,
     },
+    /// A number typed by hand: ask WhatsApp whether it exists, then save
+    /// it (when named) and tell the app to open the chat.
+    NewContact {
+        phone: String,
+        name: Option<String>,
+    },
+    /// Internal: WhatsApp answered whether the number is registered.
+    ContactChecked {
+        phone: String,
+        name: Option<String>,
+        registered: bool,
+    },
     /// Fetch a GIF from the web and send it as WhatsApp does, a short
     /// looping video.
     SendGif {
@@ -385,6 +397,12 @@ pub enum Event {
     /// says.
     ReceiptsPrivacy {
         disabled: bool,
+    },
+    /// A typed number exists on WhatsApp; the chat can open (the name,
+    /// when one was given, is on its way through contact sync).
+    ContactReady {
+        id: String,
+        name: Option<String>,
     },
     /// Something worth a quiet toast: a pack that landed, say.
     Info(String),

@@ -805,6 +805,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.dialog = app.open_chat.clone().map(Dialog::ChatInfo);
             }
             "unlink" => app.dialog = Some(Dialog::ConfirmUnlink),
+            "new-contact" => app.dialog = Some(Dialog::NewContact),
             "light" => {
                 app.settings.theme = ThemeChoice::Light;
             }
@@ -1099,6 +1100,7 @@ mod tests {
             "about",
             "info",
             "unlink",
+            "new-contact",
             "light",
             "archived",
             "offline",
