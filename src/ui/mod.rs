@@ -44,7 +44,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     toasts(app, ctx);
 }
 
-/// Says where dragged files will go.
+/// Shows where dragged files will be sent.
 fn drop_target(app: &mut App, ctx: &egui::Context) {
     if !app.dropping {
         return;
@@ -78,15 +78,15 @@ fn drop_target(app: &mut App, ctx: &egui::Context) {
         });
 }
 
-/// A strip across the top while the connection is not simply up.
+/// Connection and history-sync banner.
 fn banner(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let (icon, text, color, retry) = match &app.link {
         LinkStatus::Connected if app.syncing => (
             Icon::Refresh,
             match app.sync_percent {
-                Some(percent) => format!("Bringing in your chat history… {percent}%"),
-                None => "Bringing in your chat history…".to_owned(),
+                Some(percent) => format!("Loading chat history… {percent}%"),
+                None => "Loading chat history…".to_owned(),
             },
             palette.accent,
             false,
@@ -100,7 +100,7 @@ fn banner(app: &mut App, ui: &mut egui::Ui) {
         ),
         LinkStatus::Disconnected { reason } => (
             Icon::WifiOff,
-            format!("Offline ({reason}); reconnecting"),
+            format!("Offline ({reason}). Reconnecting…"),
             palette.warning,
             true,
         ),
@@ -176,8 +176,7 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                         color: palette.shadow,
                     })
                     .show(ui, |ui| {
-                        // As wide as its words up to a readable measure,
-                        // never squeezed into a column.
+                        // Size to the message up to a readable maximum.
                         let font = theme::medium(13.5);
                         let laid = ui.painter().layout(
                             toast.message.clone(),
@@ -206,8 +205,7 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
         });
 }
 
-/// On macOS the window has no title bar: this strip stands where it was,
-/// the traffic lights float over it, and dragging it moves the window.
+/// Draggable space for the macOS traffic-light title bar.
 fn titlebar_strip(app: &App, ui: &mut egui::Ui) {
     let inset = theme::titlebar_inset(ui.ctx());
     if inset == 0.0 {
@@ -228,17 +226,14 @@ fn titlebar_strip(app: &App, ui: &mut egui::Ui) {
         });
 }
 
-/// Makes `rect` behave like the title bar that is no longer there: dragging
-/// it moves the window.
+/// Makes `rect` drag the window.
 pub fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
     let response = ui.interact(
         rect,
         ui.id().with("titlebar-drag"),
         egui::Sense::click_and_drag(),
     );
-    // AppKit begins the move from the mouse-down event that is still live,
-    // so the command has to go out on the press itself; waiting for egui's
-    // drag threshold leaves the event stale and the window stays put.
+    // AppKit requires StartDrag during the original mouse-down event.
     if response.is_pointer_button_down_on() && ui.input(|input| input.pointer.primary_pressed()) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }

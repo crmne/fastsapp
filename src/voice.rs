@@ -1,18 +1,18 @@
-//! Voice messages the way WhatsApp sends them: Opus in an OGG container,
-//! one channel, 48 kHz. Both directions are handled here with libopus built
-//! into the app, so playing and recording need nothing installed.
+//! WhatsApp voice-message encoding and decoding: mono 48 kHz Opus in OGG.
+//!
+//! libopus is built into the app.
 
 use std::io::Cursor;
 
-/// Opus runs at 48 kHz; every clip is handled at that rate, in mono.
+/// Opus sample rate used for every mono clip.
 pub const RATE: u32 = 48_000;
 /// One Opus frame: 20 ms.
 const FRAME: usize = 960;
-/// The most one packet can decode to: 120 ms of stereo.
+/// Maximum decoded Opus packet size: 120 ms of stereo.
 const LONGEST_PACKET: usize = 5760 * 2;
-/// Bars in the waveform WhatsApp draws for a voice message.
+/// Number of bars in a WhatsApp voice-message waveform.
 pub const BARS: usize = 64;
-/// Enough for speech; the phone sends about this much.
+/// Target bitrate for speech, similar to the phone.
 const BITRATE: i32 = 32_000;
 
 /// Mono samples at `RATE` from an OGG/Opus file.
@@ -32,7 +32,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
             continue;
         };
         if !current.tagged {
-            // The comment header; nothing a player needs.
+            // Skip the optional Opus comment header.
             current.tagged = true;
             continue;
         }
@@ -51,7 +51,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
         } else {
             decoded.to_vec()
         };
-        // The encoder's lookahead comes out first and is not audio.
+        // Remove the encoder lookahead from the decoded output.
         let skip = current.skip.min(mono.len());
         current.skip -= skip;
         out.extend_from_slice(&mono[skip..]);
@@ -70,7 +70,7 @@ struct Stream {
 }
 
 impl Stream {
-    /// Reads the identification header that opens every Opus stream.
+    /// Reads the Opus identification header.
     fn open(head: &[u8]) -> Result<Self, String> {
         let head = head
             .strip_prefix(b"OpusHead")
@@ -116,8 +116,7 @@ pub fn encode(samples: &[f32]) -> Result<Vec<u8>, String> {
     writer
         .write_packet(opus_tags(), serial, EndPage, 0)
         .map_err(io)?;
-    // The lookahead comes out after the input, so the clip is followed by
-    // enough silence to flush it; the final granule position trims that.
+    // Append silence to flush encoder lookahead. The final granule trims it.
     let frames = (samples.len() + pre_skip).div_ceil(FRAME).max(1);
     let mut frame = vec![0f32; FRAME];
     let mut packet = vec![0u8; 4000];
@@ -173,9 +172,7 @@ fn opus_tags() -> Vec<u8> {
     tags
 }
 
-/// Brings a quiet recording up to speaking volume: the loudest moment
-/// lands just under full scale, with the gain capped so a silent room's
-/// noise is not blasted instead.
+/// Normalizes a quiet recording to just below full scale, with capped gain.
 pub fn normalize(samples: &mut [f32]) {
     let peak = samples
         .iter()
@@ -191,8 +188,7 @@ pub fn normalize(samples: &mut [f32]) {
     }
 }
 
-/// The bars WhatsApp draws: loudness per slice of the clip, 0 to 100 with
-/// the loudest slice at 100.
+/// Builds WhatsApp's 0–100 waveform bars from clip loudness.
 pub fn waveform(samples: &[f32]) -> Vec<u8> {
     if samples.is_empty() {
         return vec![0; BARS];
@@ -217,7 +213,7 @@ pub fn waveform(samples: &[f32]) -> Vec<u8> {
     bars
 }
 
-/// Mixes interleaved channels down to one and brings any rate to `RATE`.
+/// Mixes interleaved channels to mono and resamples to `RATE`.
 pub fn mono_at_rate(interleaved: &[f32], channels: u16, rate: u32) -> Vec<f32> {
     let channels = usize::from(channels.max(1));
     let mono: Vec<f32> = interleaved
@@ -304,11 +300,11 @@ mod tests {
         normalize(&mut quiet);
         let peak = quiet.iter().fold(0.0f32, |a, s| a.max(s.abs()));
         assert!((peak - 0.89).abs() < 0.01, "{peak}");
-        // A whisper of noise gains at most twenty decibels.
+        // Cap gain at 20 dB.
         let mut faint = vec![0.001f32, -0.002];
         normalize(&mut faint);
         assert!((faint[1] + 0.02).abs() < 1e-6, "{}", faint[1]);
-        // What is already loud is left alone.
+        // Do not reduce already loud recordings.
         let mut loud = vec![0.95f32];
         normalize(&mut loud);
         assert_eq!(loud, vec![0.95]);
@@ -321,7 +317,7 @@ mod tests {
         assert!(decode(&[]).is_err());
     }
 
-    /// Decodes a real voice message and reports on it:
+    /// Decodes the file in `FASTSAPP_OGG_PROBE`:
     /// `FASTSAPP_OGG_PROBE=note.ogg cargo test voice::tests::probe -- --ignored --nocapture`.
     #[test]
     #[ignore = "needs a file to look at"]

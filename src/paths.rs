@@ -1,9 +1,7 @@
 //! Where FastsApp keeps its files.
 //!
-//! Configuration, durable state (the linked device's keys and the message
-//! archive), and disposable caches (media, avatars) live in the platform's
-//! conventional directories, so clearing a cache never unlinks the device
-//! and a config backup never contains a key.
+//! Configuration, session state, and caches use separate standard platform
+//! directories. Clearing a cache does not remove device keys.
 
 use std::path::PathBuf;
 
@@ -33,7 +31,7 @@ impl AppDirs {
         dirs
     }
 
-    /// The platform's directories for an app of this name.
+    /// Standard platform directories for the app.
     fn of(name: &str) -> Option<Self> {
         let project = ProjectDirs::from("me", "paolino", name)?;
         Some(Self {
@@ -46,9 +44,7 @@ impl AppDirs {
         })
     }
 
-    /// The app was called fastwhatsapp until August 2026. What it kept
-    /// under that name, the linked device above all, is moved over once,
-    /// so the rename unlinks nobody; nothing is copied or deleted.
+    /// Moves data from the old `fastwhatsapp` paths once, preserving the link.
     fn adopt_previous_name(&self) {
         let Some(old) = Self::of("fastwhatsapp") else {
             return;
@@ -71,7 +67,7 @@ impl AppDirs {
         }
     }
 
-    /// Everything under one directory, for tests and throwaway runs.
+    /// Places all data under one directory for tests and temporary runs.
     pub fn under(root: &std::path::Path) -> Self {
         Self {
             config: root.join("config"),
@@ -84,51 +80,48 @@ impl AppDirs {
         self.config.join("settings.json")
     }
 
-    /// The linked device: identity, Signal sessions, and app state keys.
-    /// Owned by whatsapp-rust; deleting it unlinks this computer.
+    /// whatsapp-rust device identity, Signal sessions, and state keys.
+    /// Deleting this database unlinks the computer.
     pub fn session_db(&self) -> PathBuf {
         self.state.join("session.db")
     }
 
-    /// The message archive this app keeps, since WhatsApp only replays
-    /// history once, when the device is linked.
+    /// Local message archive.
     pub fn archive_db(&self) -> PathBuf {
         self.state.join("archive.db")
     }
 
-    /// The log of the current run, replaced at every start.
+    /// Current-run log, replaced at startup.
     pub fn log_file(&self) -> PathBuf {
         self.state.join("fastsapp.log")
     }
 
-    /// Where a panic is recorded before the process dies of it.
+    /// Panic log written before process exit.
     pub fn panic_log(&self) -> PathBuf {
         self.state.join("panic.log")
     }
 
-    /// Downloaded and decrypted attachments, by message id.
+    /// Downloaded attachments keyed by message id.
     pub fn media_cache_dir(&self) -> PathBuf {
         self.cache.join("media")
     }
 
-    /// Profile pictures, by chat.
+    /// Profile pictures keyed by chat.
     pub fn avatar_cache_dir(&self) -> PathBuf {
         self.cache.join("avatars")
     }
 
-    /// The phone's recent stickers, by file hash.
+    /// Recent phone stickers keyed by file hash.
     pub fn sticker_cache_dir(&self) -> PathBuf {
         self.cache.join("stickers")
     }
 
-    /// Stickers the user chose to keep, by content hash. User data, not a
-    /// cache: saving copies the file here so it outlives any cleanup.
+    /// Saved stickers keyed by content hash. These are user data, not cache.
     pub fn saved_sticker_dir(&self) -> PathBuf {
         self.state.join("stickers")
     }
 
-    /// Where a chat's or person's picture is kept, once fetched; `full`
-    /// for the large one an info dialog shows.
+    /// Cached profile-picture path. `full` selects the info-dialog size.
     pub fn avatar_file(&self, id: &str, full: bool) -> PathBuf {
         let stem: String = id
             .chars()

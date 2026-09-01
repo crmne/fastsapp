@@ -21,9 +21,9 @@ use crate::theme::{self, Icon, Palette};
 
 use super::widgets;
 
-/// Attachments up to this size are fetched as they come into view.
+/// Maximum automatic attachment download size.
 const AUTO_DOWNLOAD_LIMIT: u64 = 64 * 1024 * 1024;
-/// The small picture beside a group message.
+/// Group-message avatar size.
 const SENDER_AVATAR: f32 = 28.0;
 const BODY_SIZE: f32 = 14.5;
 
@@ -59,9 +59,9 @@ fn empty(app: &mut App, ui: &mut egui::Ui) {
         center + vec2(0.0, 30.0),
         Align2::CENTER_CENTER,
         if app.chats.is_empty() {
-            "Your chats will appear on the left as they arrive."
+            "Your chats appear on the left as they load."
         } else {
-            "Pick a chat on the left to start reading."
+            "Select a chat on the left."
         },
         theme::regular(14.0),
         palette.secondary,
@@ -70,7 +70,7 @@ fn empty(app: &mut App, ui: &mut egui::Ui) {
         ui.painter().text(
             center + vec2(0.0, 56.0),
             Align2::CENTER_CENTER,
-            "Ctrl+K searches chats · Ctrl+/ lists every shortcut",
+            "Ctrl+K to search · Ctrl+/ for shortcuts",
             theme::regular(12.5),
             palette.dim,
         );
@@ -89,9 +89,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                // Both rows are this tall from the start, so the button,
-                // the picture, and the name centre on the same line rather
-                // than on each row's initial height.
+                // Give both rows a fixed height so their contents align.
                 ui.set_min_height(HEADER_ROW);
                 if !app.sidebar_visible
                     && theme::icon_button(
@@ -109,14 +107,10 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 let picture = app.avatar(&chat.id);
                 let (subtitle, color) = subtitle(app, chat);
                 let right_controls = 52.0;
-                // The picture, name, and line under it are one click target
-                // that opens the info, as on the phone.
+                // Treat the avatar, name, and subtitle as one info button.
                 let block = ui
                     .scope(|ui| {
-                        // A child of the row's full height from the start:
-                        // a `horizontal` would be centred at its initial
-                        // height and then grow downwards, putting the
-                        // picture below the button's line.
+                        // Fix the child height before centering its contents.
                         ui.allocate_ui_with_layout(
                             vec2(
                                 (ui.available_width() - right_controls).max(80.0),
@@ -145,9 +139,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                             palette.text,
                                         );
                                     } else {
-                                        // The name along the picture's top
-                                        // edge, the line under it along its
-                                        // bottom edge.
+                                        // Align the name and subtitle with the avatar edges.
                                         ui.allocate_ui_with_layout(
                                             vec2(width, 40.0),
                                             Layout::top_down(Align::Min),
@@ -249,7 +241,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         });
 }
 
-/// What the header says under the name.
+/// Chat-header subtitle.
 fn subtitle(app: &App, chat: &Chat) -> (String, Color32) {
     let palette = app.palette;
     let typing = app.typing_in(&chat.id);
@@ -341,9 +333,8 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));
             let enter_sends = app.settings.enter_sends;
-            // `consume_key(NONE, Enter)` would also take Shift+Enter, since
-            // egui treats an unrequested modifier as fine; the newline
-            // needs an exact match.
+            // `consume_key(NONE, Enter)` also matches Shift+Enter. Check the
+            // event modifiers directly.
             let send_key = has_focus
                 && ui.input_mut(|input| {
                     let mut sent = false;
@@ -379,10 +370,8 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 .layout_no_wrap("x".to_owned(), theme::regular(BODY_SIZE), palette.text)
                 .size()
                 .y;
-            // The field is one line plus its padding; the send button is a
-            // circle of that height. A longer message grows the field up to
-            // six lines, and the row is laid out from its bottom so the
-            // buttons stay level with the last line, as on the phone.
+            // Match the button to a one-line field. The field grows to six
+            // lines while the row stays bottom-aligned.
             let field_padding = 14.0;
             let button_width = line_height + field_padding;
             let text_height = ui
@@ -434,18 +423,15 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                     .inner_margin(Margin::symmetric(12, 7))
                     .show(ui, |ui| {
                         ui.set_width(field_width - 24.0);
-                        // One line to start with; a long message grows the
-                        // field a few lines and scrolls beyond that.
+                        // Grow from one to six lines, then scroll.
                         egui::ScrollArea::vertical()
                             .id_salt("composer-scroll")
                             .max_height(line_height * 6.0)
                             .min_scrolled_height(0.0)
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
-                                // The field lays out through the emoji
-                                // pipeline: same text, emoji invisible, and
-                                // the colour pictures painted over them, so
-                                // typing shows what will be sent.
+                                // Replace emoji with placeholders in the galley, then
+                                // paint their color bitmaps over the field.
                                 let mut clusters: Vec<(usize, usize, String)> = Vec::new();
                                 let format = egui::TextFormat::simple(
                                     theme::regular(BODY_SIZE),
@@ -491,9 +477,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                     let right = output.galley.pos_from_cursor(
                                         egui::text::CCursor::new(start + length),
                                     );
-                                    // A cluster wrapped across rows has no
-                                    // one rectangle; leave it invisible
-                                    // rather than paint it somewhere odd.
+                                    // Skip emoji clusters split across rows.
                                     if (left.top() - right.top()).abs() > 1.0 {
                                         continue;
                                     }
@@ -524,7 +508,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                     (palette.surface, palette.surface_hover, palette.dim)
                 };
                 if !ready && app.editing.is_none() {
-                    // Nothing to send yet: the button records, as on the phone.
+                    // An empty composer changes the send button to record.
                     if theme::circle_button(
                         ui,
                         Icon::Mic,
@@ -579,7 +563,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     theme::text(ui, &hint, theme::regular(11.0), palette.dim);
-                    // A tiny way into the full list; "?" is taken by typing.
+                    // Open the shortcut list without consuming typed `?`.
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if theme::icon_button(
                             ui,
@@ -676,19 +660,18 @@ fn reply_strip(app: &mut App, ui: &mut egui::Ui, quoted: &Message) {
     ui.add_space(6.0);
 }
 
-/// What the message list needs from the app while the conversation is
-/// checked out of it.
+/// App data needed while drawing a checked-out conversation.
 struct View<'a> {
     palette: Palette,
     chat: &'a Chat,
     me: Option<&'a str>,
     auto_download: bool,
-    /// Pictures beside every incoming message, not only in groups.
+    /// Show avatars for all incoming messages, not only groups.
     pictures: bool,
     anchor: Option<&'a str>,
-    /// A name with the one a message carried as the fallback.
+    /// Resolves a name with the message's stored name as fallback.
     names_or: &'a dyn Fn(&str, Option<&str>) -> String,
-    /// Names in mentions: our own rather than "You".
+    /// Resolves mention names without replacing our name with "You".
     mention_names: &'a dyn Fn(&str) -> String,
     avatars: &'a HashMap<String, Option<PathBuf>>,
     now: i64,
@@ -698,8 +681,7 @@ struct View<'a> {
 
 fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let palette = app.palette;
-    // Checked out so the rows can be drawn while actions are collected
-    // against the rest of the app; put back before anything else runs.
+    // Check out the conversation while drawing rows and collecting actions.
     let mut conversation = app.conversations.remove(&chat.id).unwrap_or_default();
     let typing = app.typing_in(&chat.id);
     let mut avatars = HashMap::new();
@@ -710,7 +692,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             .filter(|message| !message.from_me)
             .map(|message| message.sender.clone())
             .collect();
-        // Someone typing may not have a message on screen yet.
+        // A typing participant may not have a visible message.
         senders.extend(typing.iter().map(|(id, _)| id.clone()));
         for sender in senders {
             let picture = app.avatar(&sender);
@@ -741,10 +723,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let mut anchored = false;
     let scroll_to_bottom = app.scroll_to_bottom;
     let app_pictures = app.settings.show_sender_pictures;
-    // Not animated: an animated target lingers as a pending animation, and
-    // every later request only re-aims it, so a request to reach the end
-    // could wait behind a stale one (the reader's own scrolling is smoothed
-    // by the app anyway).
+    // Do not animate programmatic scrolling. Pending animations can delay a
+    // later request to reach the end.
     let mut edge_scrolled_up = false;
     let output = egui::ScrollArea::vertical()
         .id_salt(("messages", &chat.id))
@@ -752,11 +732,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         .stick_to_bottom(true)
         .animated(false)
         .show(ui, |ui| {
-            // A selection dragged to the viewport's edge keeps going: the list
-            // scrolls under the pointer, so messages beyond the screen can
-            // join it. It must be real scrolling (scroll_with_delta), which
-            // also releases stick-to-bottom; writing the offset directly
-            // left the stuck end pinning every upward step right back.
+            // Scroll while selecting near an edge. `scroll_with_delta` also
+            // releases stick-to-bottom; setting the offset directly does not.
             let viewport = ui.clip_rect();
             *app.selection_view.lock().unwrap_or_else(|p| p.into_inner()) = Some(viewport);
             let held_inside = ui.input(|input| {
@@ -821,12 +798,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                     }
                     ui.add_space(4.0);
                     if scroll_to_bottom {
-                        // Aim past the end: the offset is clamped to the
-                        // content, which leaves the view stuck to the
-                        // bottom, so it stays there as pictures and
-                        // previews arrive and the content grows.
-                        // Instantly: opening a chat lands at its end, it
-                        // does not fly there.
+                        // Scroll past the end so clamping keeps the view pinned
+                        // while media expands the content. Do it immediately.
                         let end = ui.cursor().min + vec2(0.0, 64.0);
                         ui.scroll_to_rect_animation(
                             Rect::from_min_size(end, Vec2::ZERO),
@@ -838,9 +811,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         });
     let at_bottom =
         output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 24.0;
-    // The view stays pinned to the end (content keeps growing for a few
-    // frames after a chat opens, as pictures and older messages come in)
-    // until the reader scrolls: a wheel or trackpad, or a drag on the bar.
+    // Keep the view at the end while initial content expands, until the user
+    // scrolls with the wheel, trackpad, or scrollbar.
     let bar = Rect::from_min_max(
         pos2(output.inner_rect.right() - 16.0, output.inner_rect.top()),
         output.inner_rect.right_bottom(),
@@ -882,13 +854,12 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             .get(&chat.id)
             .is_none_or(|c| c.complete || !c.messages.is_empty())
     {
-        // Asked for a message that is not loaded; nothing to scroll to.
-        // A chat still waiting for its first page keeps the anchor: the
-        // page's arrival chases it into the archive (see Event::Messages).
+        // Keep the anchor when the first page is still loading. Event::Messages
+        // will request it again.
         app.scroll_anchor = None;
     }
-    // Reaching the top asks for more, from the archive and then the phone;
-    // a chat too short to scroll asks right away.
+    // At the top, load more from the archive and then the phone. Short chats
+    // request more immediately.
     let fits = output.content_size.y <= output.inner_rect.height() + 1.0;
     let near_top = output.state.offset.y < 80.0;
     if (near_top || fits) && ((!complete && !loading) || (complete && !fetching && !exhausted)) {
@@ -896,10 +867,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     }
     app.actions.extend(actions);
     if edge_scrolled_up {
-        // Heading up releases the pin to the end.
+        // Scrolling up releases stick-to-bottom.
         app.scroll_to_bottom = false;
     }
-    // A way back down while reading old messages.
+    // Show a return-to-bottom button while reading older messages.
     if !at_bottom {
         let rect = output.inner_rect;
         let center = pos2(rect.right() - 34.0, rect.bottom() - 34.0);
@@ -935,8 +906,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     }
 }
 
-/// What sits above the first loaded message: a spinner while more is on
-/// its way from the archive or the phone.
+/// Loading state above the oldest visible message.
 fn top_of_history(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -958,7 +928,7 @@ fn top_of_history(
                 theme::spinner(ui, 16.0, palette.accent);
                 theme::text(
                     ui,
-                    "Fetching older messages from your phone…",
+                    "Loading older messages from your phone…",
                     theme::regular(12.5),
                     palette.secondary,
                 );
@@ -966,7 +936,7 @@ fn top_of_history(
         } else if conversation.messages.is_empty() {
             ui.add_space(24.0);
             if conversation.fetching_phone {
-                widgets::chip(ui, palette, "Fetching messages from your phone…");
+                widgets::chip(ui, palette, "Loading messages from your phone…");
             } else {
                 widgets::chip(ui, palette, "No messages here yet");
             }
@@ -976,9 +946,7 @@ fn top_of_history(
     });
 }
 
-/// Who is typing, the way the phone shows it: their picture (pictures
-/// half-stacked when several type at once) and a bubble of three dots
-/// rising in turn.
+/// Typing indicator with stacked avatars and animated dots.
 fn typing_bubble(ui: &mut egui::Ui, view: &View<'_>, typers: &[(String, String)]) {
     let palette = view.palette;
     ui.horizontal(|ui| {
@@ -994,8 +962,7 @@ fn typing_bubble(ui: &mut egui::Ui, view: &View<'_>, typers: &[(String, String)]
                         Vec2::splat(SENDER_AVATAR),
                     );
                     if index > 0 {
-                        // A sliver of background so the stacked circles
-                        // read as separate.
+                        // Outline overlapping avatars with the chat background.
                         ui.painter().circle_filled(
                             avatar.center(),
                             SENDER_AVATAR / 2.0 + 1.5,
@@ -1051,8 +1018,7 @@ fn typing_dots(ui: &mut egui::Ui, palette: &Palette) {
     }
 }
 
-/// One message, aligned to its side, with the sender's picture in a
-/// group. Returns the bubble's response so the caller can scroll to it.
+/// Draws a message row and returns its bubble response for scrolling.
 fn bubble(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -1096,7 +1062,7 @@ fn bubble(
                                 .and_then(|picture| picture.as_deref()),
                         );
                     }
-                    // The row is horizontal; the bubble's insides are not.
+                    // Keep bubble content vertically laid out inside the row.
                     ui.vertical(|ui| {
                         response = Some(bubble_frame(
                             ui,
@@ -1133,16 +1099,10 @@ fn bubble(
     response
 }
 
-/// Keeps a selection drag inside the message view: once the button goes
-/// down in the view, pointer positions that stray out of it (below into
-/// the composer, or out of the window entirely, where the platform still
-/// reports the grabbed pointer) are clamped to just inside its edge. The
-/// selection then always has a row under it while the edge scroll brings
-/// more past, instead of freezing the moment the pointer crosses out.
-///
-/// An input hook, because the positions must be adjusted before egui
-/// processes them; the view rectangle is last frame's, stored by the
-/// conversation as it renders.
+/// Clamps message-selection drags to the view while the pointer is outside it.
+/// This keeps a row under the pointer during edge scrolling. The input hook
+/// adjusts positions before egui processes them, using the previous frame's
+/// view rectangle.
 pub struct SelectionLeash {
     pub view: std::sync::Arc<std::sync::Mutex<Option<Rect>>>,
     holding: bool,
@@ -1189,8 +1149,7 @@ impl egui::plugin::Plugin for SelectionLeash {
                 egui::Event::PointerMoved(pos) if self.holding && !view.contains(*pos) => {
                     *pos = clamp_into(*pos, view);
                 }
-                // The platform reports the pointer gone when it leaves the
-                // window; mid-drag that would break the selection.
+                // Ignore PointerGone during a drag so selection continues.
                 egui::Event::PointerGone if self.holding => gone.push(index),
                 _ => {}
             }
@@ -1208,9 +1167,7 @@ fn clamp_into(pos: egui::Pos2, view: Rect) -> egui::Pos2 {
     )
 }
 
-/// The transcript row for a message: the header, its kind when it is not
-/// plain text, its reactions, and what it replied to, so a copy swept
-/// across it says more than the bare words (see `transcript`).
+/// Builds the transcript row used when copying across messages.
 fn transcript_row(
     view: &View<'_>,
     message: &Message,
@@ -1282,9 +1239,7 @@ fn transcript_row(
     }
 }
 
-/// How far a drag near the view's edge scrolls this frame: nothing in the
-/// middle, harder the closer the pointer is to the edge (or past it), so a
-/// selection can keep growing beyond the screen at a pace the hand steers.
+/// Selection-scroll distance based on pointer proximity to the view edge.
 pub fn edge_scroll(pointer: f32, top: f32, bottom: f32) -> f32 {
     const EDGE: f32 = 36.0;
     const PACE: f32 = 0.3;
@@ -1297,13 +1252,12 @@ pub fn edge_scroll(pointer: f32, top: f32, bottom: f32) -> f32 {
     }
 }
 
-/// The id of a message's bubble, the same on every frame and knowable from
-/// outside, so tests can find the bubble and its menu.
+/// Stable message-bubble id used by interaction tests.
 pub fn bubble_id(chat: &str, message: &str) -> egui::Id {
     egui::Id::new(("bubble", chat, message))
 }
 
-/// The bubble itself: sender, quote, content, footer, and its menu.
+/// Draws a message bubble and its menu.
 fn bubble_frame(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -1314,8 +1268,7 @@ fn bubble_frame(
 ) -> egui::Response {
     let palette = view.palette;
     let own = message.from_me;
-    // A sticker stands on its own, as on the phone; everything else gets a
-    // bubble.
+    // Draw stickers without a bubble.
     let fill = if matches!(message.content, Content::Sticker { .. }) {
         Color32::TRANSPARENT
     } else if own {
@@ -1323,14 +1276,11 @@ fn bubble_frame(
     } else {
         palette.bubble_in
     };
-    // The bubble's own click target is registered before its contents,
-    // from where it was last frame, so links, quotes, and attachments
-    // inside it stay on top and get their clicks; the bubble keeps the
-    // right-click for its menu.
+    // Register the bubble from its previous rect before its contents so inner
+    // links, quotes, and attachments win clicks. The bubble handles right-click.
     let bubble_id = bubble_id(&view.chat.id, &message.id);
-    // Where the bubble was last frame is kept by us: reading back the early
-    // interact itself would only ever repeat the rect of the first frame,
-    // and right-clicks would land on wherever each message was first drawn.
+    // Store the final rect separately. Reusing the early response would keep
+    // the first frame's rect.
     let rect_id = bubble_id.with("rect");
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(rect_id));
     let early = previous.map(|rect| ui.interact(rect, bubble_id, Sense::click()));
@@ -1385,14 +1335,9 @@ fn bubble_frame(
                     },
                 );
             }
-            // Every card a bubble can hold — the quote strip, a link
-            // preview, a file row, the voice player — draws at the one
-            // width the whole bubble settles on: the text's natural
-            // width, never below CARD_WIDTH, never past the cap. The
-            // text's own row then spans that same width with its words at
-            // the left, so no alignment fight can arise (see rich_body).
-            // A bubble with no card keeps hugging its words. The footer
-            // stays outside, keeping its right edge.
+            // Cards share the bubble's settled width: at least CARD_WIDTH and
+            // no more than the cap. Text spans that width and stays left-aligned.
+            // Bubbles without cards use the natural text width.
             let cap = (max_width - 20.0).min(ui.available_width());
             let reserve = footer_width(ui, message);
             let slot = match settled_width(ui, view, message, cap) {
@@ -1410,12 +1355,8 @@ fn bubble_frame(
         .data_mut(|data| data.insert_temp(rect_id, inner.response.rect));
     let bubble =
         early.unwrap_or_else(|| ui.interact(inner.response.rect, bubble_id, Sense::click()));
-    // The right-click is read from the input rather than from the bubble's
-    // response: a quote, a link, or a preview card inside the bubble owns
-    // the pointer where it sits, and the menu must open there too.
-    // `layer_id_at` only knows floating areas (menus, dialogs, the
-    // picker): over the plain chat panel it answers `None`, which is the
-    // case that must open the menu; another area on top must not.
+    // Read right-click from input because inner widgets own their responses.
+    // Open only when no floating layer covers the chat panel.
     let right_clicked = ui.input(|input| {
         input.pointer.secondary_clicked()
             && input
@@ -1454,26 +1395,20 @@ fn bubble_frame(
         .show(|ui| {
             context_menu(ui, view, message, actions);
         });
-    // The frame's own response has this frame's rect, which is what a
-    // scroll to the message needs.
+    // Store this frame's final rect for later scrolling.
     inner.response
 }
 
-/// Every card a bubble can hold — the quote strip, a link preview, a
-/// file row, the voice player — draws at the one width the bubble
-/// settles on, and that width never drops below this, so a column of
-/// mixed messages lines up instead of each kind picking its own edge.
+/// Minimum shared width for cards inside message bubbles.
 const CARD_WIDTH: f32 = 320.0;
 
-/// The width a bubble with a card in it settles on: its text's natural
-/// width, at least [`CARD_WIDTH`], at most `cap`. A bubble with no card
-/// gets `None` and hugs its words.
+/// Returns the shared card width, bounded by [`CARD_WIDTH`] and `cap`.
 fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
     let card = message.quoted.is_some()
         || match &message.content {
             Content::Text { preview, .. } => preview.is_some(),
             Content::Document { .. } | Content::Audio { .. } | Content::Poll { .. } => true,
-            // A video with no poster draws as a file row.
+            // Videos without a poster use the file-row layout.
             Content::Video { .. } => message.thumbnail.is_none(),
             _ => false,
         };
@@ -1483,10 +1418,7 @@ fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) ->
     })
 }
 
-/// The widest row the message's text (or caption) wraps to within `cap`,
-/// counting the room the clock takes beside the last row when it fits
-/// there; the settled width would otherwise come up short by exactly the
-/// clock.
+/// Widest wrapped text row, including footer space on the last line.
 fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
     let palette = view.palette;
     let text = match &message.content {
@@ -1553,11 +1485,8 @@ fn quote_block(
             bottom: 5,
         })
         .show(ui, |ui| {
-            // The frame's margins count toward the settled width, so the
-            // strip's outer edge lands exactly on the text row's. The
-            // bounded left-anchored layout matters in own bubbles: their
-            // inherited right-to-left flow anchors a fixed-width column
-            // to the wrong side and pushes the bar outside the frame.
+            // Include frame margins in the settled width. Use a bounded,
+            // left-aligned layout because own bubbles inherit right-to-left flow.
             ui.allocate_ui_with_layout(
                 vec2(width - 18.0, 0.0),
                 Layout::top_down(Align::Min),
@@ -1568,7 +1497,7 @@ fn quote_block(
                         ui.painter().rect_filled(bar, 2.0, palette.accent);
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 1.0;
-                            // Exactly the room beside the bar and its gap.
+                            // Use the space beside the quote bar and gap.
                             ui.set_width(width - 29.0);
                             widgets::rich_text(ui, &who, theme::semibold(12.5), palette.accent);
                             widgets::rich_text(
@@ -1601,10 +1530,7 @@ fn quote_block(
     }
 }
 
-/// A row that reads `first` then `second` in both bubble kinds. An own
-/// bubble hugs the right edge, which egui achieves by laying its rows out
-/// right to left; the parts are added in reverse there so the eye still
-/// reads them left to right.
+/// Keeps row contents left-to-right inside right-aligned own bubbles.
 fn mirrored_row(
     ui: &mut egui::Ui,
     own: bool,
@@ -1622,7 +1548,7 @@ fn mirrored_row(
     });
 }
 
-/// How wide the time, ticks, and "edited" of a message are.
+/// Width of the message footer.
 fn footer_width(ui: &egui::Ui, message: &Message) -> f32 {
     let font = theme::regular(11.0);
     let time = ui
@@ -1646,10 +1572,7 @@ fn footer_width(ui: &egui::Ui, message: &Message) -> f32 {
     time + edited + if message.from_me { 19.0 } else { 0.0 }
 }
 
-/// The time and ticks, hugging the right edge of the bubble. Painted by
-/// hand so the row is exactly as wide as the bubble's content: a layout
-/// would claim the whole available width and stretch every bubble. When
-/// the text left a `slot` beside its last line, the footer sits there.
+/// Paints the time and ticks at the bubble's right edge without widening it.
 fn footer(ui: &mut egui::Ui, palette: &Palette, message: &Message, slot: Option<Rect>) {
     let font = theme::regular(11.0);
     let time = ui.painter().layout_no_wrap(
@@ -1740,8 +1663,7 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(names.join(", "));
         if response.clicked() {
-            // Clicking a reaction of ours takes it back; another's adds
-            // the same one.
+            // Clicking our reaction removes it; clicking another adds it.
             actions.push(Action::React {
                 chat: view.chat.id.clone(),
                 message: message.id.clone(),
@@ -1753,7 +1675,7 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
 
 const QUICK_REACTIONS: [&str; 6] = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
-/// The reaction we already gave a message, if any.
+/// Our existing reaction to a message.
 fn own_reaction(message: &Message) -> Option<&str> {
     message
         .reactions
@@ -1762,7 +1684,7 @@ fn own_reaction(message: &Message) -> Option<&str> {
         .map(|reaction| reaction.emoji.as_str())
 }
 
-/// The quick reactions row: the usual six, plus ours when it is another.
+/// Quick reactions plus our current reaction when needed.
 fn quick_reactions(message: &Message) -> Vec<&str> {
     let mut list = QUICK_REACTIONS.to_vec();
     if let Some(mine) = own_reaction(message)
@@ -1800,8 +1722,7 @@ fn context_menu(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: 
                 response
             };
             if response.clicked() {
-                // Picking our own reaction again takes it back, as on the
-                // phone.
+                // Selecting our current reaction removes it.
                 actions.push(Action::React {
                     chat: chat.clone(),
                     message: message.id.clone(),
@@ -1885,8 +1806,7 @@ fn context_menu(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: 
         }
     }
     widgets::menu_separator(ui, &palette);
-    // The info screen of the phone, without the screen: when the message
-    // was sent, and for our own, when it arrived and when it was read.
+    // Show sent, delivered, and read times as available.
     if widgets::menu_item(
         ui,
         &palette,
@@ -1948,8 +1868,7 @@ fn quote_mentions(view: &View<'_>, quoted: &crate::model::Quoted) -> Vec<markup:
         .collect()
 }
 
-/// Draws the message body. Returns the room beside the last line of text
-/// when the footer may sit there.
+/// Draws a message body and returns optional footer space on its last line.
 fn content(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -1960,8 +1879,7 @@ fn content(
 ) -> Option<Rect> {
     let palette = view.palette;
     let own = message.from_me;
-    // A message with no selectable text still gets a transcript row, so a
-    // copy swept across it says what it was (see `transcript`).
+    // Add non-text messages to cross-message transcript copies.
     let has_body = match &message.content {
         Content::Text { .. } => true,
         Content::Image { caption, .. }
@@ -1986,9 +1904,7 @@ fn content(
         Content::Image { caption, media } => {
             let drawn = picture(ui, view, message, media, width, None, actions);
             caption.as_ref().and_then(|caption| {
-                // The picture sets the bubble; the caption wraps to it and
-                // starts at its left edge (a quote may have settled the
-                // bubble wider still).
+                // Wrap the caption to the settled image or quote width.
                 let wrap = if message.quoted.is_some() {
                     width.max(drawn)
                 } else {
@@ -2139,9 +2055,7 @@ fn content(
             None
         }
         Content::Poll { question, options } => {
-            // A poll reads left to right on either side, as on the phone;
-            // the allocation is bounded to the settled width (a bare
-            // with_layout would claim the whole bubble cap).
+            // Keep poll content left-to-right within the settled width.
             ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Min), |ui| {
                 ui.set_width(width);
                 widgets::rich_text(ui, question, theme::semibold(14.0), palette.text);
@@ -2194,11 +2108,8 @@ fn content(
     }
 }
 
-/// A run of message text with WhatsApp's markup, links, mentions, and
-/// emoji. With `reserve`, the text leaves that much room beside its last
-/// line for the footer when the line is short enough, and returns where.
-/// With `span`, the row is allocated at least that wide, its words at the
-/// left, so text under a card or picture starts at the bubble's edge.
+/// Draws formatted message text. `reserve` leaves footer space on the last
+/// line. `span` sets a minimum left-aligned row width for text below cards.
 #[allow(clippy::too_many_arguments)]
 fn rich_body(
     ui: &mut egui::Ui,
@@ -2228,14 +2139,10 @@ fn rich_body(
         None => size,
     };
     if let Some(span) = span {
-        // A card or picture above settled the bubble wider than the text;
-        // the row spans that width too, its words anchored left (the
-        // galley paints from the allocation's start), so an own bubble's
-        // right-aligned layout cannot push the text about.
+        // Span the card width and keep the text left-aligned in own bubbles.
         allocation.x = allocation.x.max(span);
     }
-    // Remembered for the frame: a copy that runs across messages gets
-    // each one's clock, date, and writer put back (see `transcript`).
+    // Register the body for transcript formatting when copying across messages.
     view.copy_rows
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -2245,16 +2152,14 @@ fn rich_body(
             laid.galley.text().to_owned(),
             laid.placements().to_vec(),
         ));
-    // Clicks open links; the drag is the reader sweeping text to copy.
+    // Click links and drag to select text.
     let (rect, response) = ui.allocate_exact_size(allocation, Sense::click_and_drag());
-    // Where the body itself sits, for tests that sweep it.
+    // Store the body rect for selection tests.
     ui.ctx().data_mut(|data| {
         data.insert_temp(bubble_id(&view.chat.id, &message.id).with("body"), rect);
     });
-    // A body off the screen still registers with the selection while one is
-    // being made or held: egui walks the labels it saw this frame, so a
-    // selection whose anchor scrolls away would otherwise lose its footing,
-    // paint nothing, and copy only what happened to be visible.
+    // Keep off-screen selected bodies registered so scrolling does not lose
+    // the selection anchor or omit copied text.
     let visible = ui.is_rect_visible(rect);
     let selection_alive = ui.input(|input| input.pointer.primary_down())
         || ui
@@ -2283,7 +2188,7 @@ fn rich_body(
     })
 }
 
-/// The card WhatsApp builds for a link: picture, title, description.
+/// Link preview with image, title, and description.
 fn preview_card(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -2311,11 +2216,10 @@ fn preview_card(
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
-            // Margins included, the card is exactly the settled width.
+            // Include margins in the settled card width.
             ui.set_width(width - 16.0);
-            // Exactly the room left beside the thumbnail and its gap; the
-            // bounded left-anchored layout keeps the card's row honest in
-            // own bubbles too (see quote_block).
+            // Limit text to the space beside the thumbnail and keep it
+            // left-aligned in own bubbles.
             let column = width - 16.0 - if thumbnail.is_some() { 72.0 } else { 0.0 };
             ui.allocate_ui_with_layout(
                 vec2(width - 16.0, 0.0),
@@ -2373,8 +2277,7 @@ fn preview_card(
     }
 }
 
-/// Every thumbnail handed to egui so far, per context, so the bytes are
-/// registered once rather than copied every frame.
+/// Thumbnails registered in each egui context.
 #[derive(Clone, Default)]
 struct Thumbnails(Arc<Mutex<HashSet<String>>>);
 
@@ -2401,16 +2304,14 @@ fn thumbnail_uri(ctx: &egui::Context, chat: &str, id: &str, bytes: &[u8]) -> Str
     uri
 }
 
-/// Pictures share the cards' width (see [`CARD_WIDTH`]), so photo
-/// bubbles line up with the rest; tall ones run taller than wide.
+/// Default image bounds based on [`CARD_WIDTH`].
 const PICTURE_WIDTH: f32 = CARD_WIDTH;
 const PICTURE_HEIGHT: f32 = 440.0;
 const STICKER_SIDE: f32 = 180.0;
-/// The header's content row: the picture plus a little air.
+/// Width of an image plus bubble padding.
 const HEADER_ROW: f32 = 44.0;
 
-/// A size for a `width`×`height` picture within the given bounds, never
-/// blown up past its own size and never below a readable minimum.
+/// Fits an image within bounds without upscaling and with a readable minimum.
 fn fit_picture(width: f32, height: f32, max_width: f32, max_height: f32) -> Vec2 {
     let (width, height) = if width > 0.0 && height > 0.0 {
         (width, height)
@@ -2426,8 +2327,7 @@ fn fit_picture(width: f32, height: f32, max_width: f32, max_height: f32) -> Vec2
     vec2(width * scale, (height * scale).max(90.0))
 }
 
-/// A sticker fills its square, whatever the file's own size: stickers are
-/// drawn at one size on the phone too.
+/// Fits a sticker to the standard square size.
 fn fit_sticker(width: f32, height: f32) -> Vec2 {
     let (width, height) = if width > 0.0 && height > 0.0 {
         (width, height)
@@ -2438,7 +2338,7 @@ fn fit_sticker(width: f32, height: f32) -> Vec2 {
     vec2(width * scale, height * scale)
 }
 
-/// The box a picture or video occupies before and after download.
+/// Reserved size for an image or video before and after download.
 fn frame_size(media: &Media, thumbnail_hint: Option<(u32, u32)>, limit: f32) -> Vec2 {
     let (w, h) = match (media.width, media.height) {
         (Some(w), Some(h)) if w > 0 && h > 0 => (w as f32, h as f32),
@@ -2450,9 +2350,7 @@ fn frame_size(media: &Media, thumbnail_hint: Option<(u32, u32)>, limit: f32) -> 
     fit_picture(w, h, limit, PICTURE_HEIGHT.min(limit * 1.3))
 }
 
-/// A picture or sticker: the file once fetched, playing if it moves; the
-/// blurred preview with a download mark until then. `sticker` carries
-/// whether the sticker is animated. Returns the width it drew.
+/// Draws an image or sticker, using its preview until downloaded. Returns its width.
 fn picture(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -2538,7 +2436,7 @@ fn picture(
                     ui.painter().text(
                         rect.center() + vec2(0.0, 24.0),
                         Align2::CENTER_CENTER,
-                        "Cannot show this picture; click to open it",
+                        "Could not display this picture. Click to open it.",
                         theme::regular(11.5),
                         palette.secondary,
                     );
@@ -2585,7 +2483,7 @@ fn picture(
                 ui.painter().text(
                     rect.center() + vec2(0.0, 34.0),
                     Align2::CENTER_CENTER,
-                    "Could not download; click to retry",
+                    "Download failed. Click to retry.",
                     theme::regular(11.5),
                     Color32::WHITE,
                 );
@@ -2632,8 +2530,7 @@ fn picture(
     size.x
 }
 
-/// A video: its poster with a play mark and length, fetched on a click and
-/// opened with the desktop's player. Returns the width it drew.
+/// Draws a video poster and opens the downloaded video in the default player.
 #[allow(clippy::too_many_arguments)]
 fn video(
     ui: &mut egui::Ui,
@@ -2668,7 +2565,7 @@ fn video(
     };
     let uri = thumbnail_uri(ui.ctx(), &message.chat, &message.id, thumbnail);
     let size = frame_size(media, Some((16, 9)), width.min(PICTURE_WIDTH));
-    // A GIF plays in place once it is here; other videos keep their poster.
+    // Play downloaded GIFs in place; keep a poster for other videos.
     let playing = match (&media.path, gif) {
         (Some(path), true) => Some(animation::frame(ui.ctx(), path)),
         _ => None,
@@ -2785,7 +2682,7 @@ fn attachment(
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            // Margins included, the row is exactly the settled width.
+            // Include margins in the settled row width.
             let card = width - 20.0;
             ui.set_width(card);
 
@@ -2812,20 +2709,17 @@ fn attachment(
             let column = |ui: &mut egui::Ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    // The disc, the action icon, and two gaps take 70; the
-                    // words get exactly the rest of the card.
+                    // Reserve 70 points for the icon, action, and gaps.
                     ui.set_width(card - 70.0);
                     widgets::rich_text(ui, title, theme::medium(14.0), palette.text);
                     let detail = match &media.state {
-                        MediaState::Failed(error) => format!("{error} · click to retry"),
+                        MediaState::Failed(error) => format!("{error}. Click to retry."),
                         _ => detail.to_owned(),
                     };
                     theme::text(ui, detail, theme::regular(12.0), palette.secondary);
                 });
             };
-            // A fixed left-to-right row at exactly the card's width: the
-            // flipped row own bubbles get otherwise lets the column ignore
-            // its width and swallow the leftover space.
+            // Fix the row left-to-right at the card width in own bubbles.
             ui.allocate_ui_with_layout(
                 vec2(card, 52.0),
                 Layout::left_to_right(egui::Align::Center),
@@ -2875,8 +2769,7 @@ fn attachment(
     }
 }
 
-/// A voice message, or an audio file, played where it is: the button, the
-/// waveform with the played part coloured in, and the time.
+/// In-chat voice and audio player.
 #[allow(clippy::too_many_arguments)]
 fn voice_player(
     ui: &mut egui::Ui,
@@ -2913,9 +2806,7 @@ fn voice_player(
             });
         });
     };
-    // Own bubbles right-align their content and egui then prefers laying
-    // rows right to left, which would mirror this one and stretch it to the
-    // bubble's limit; the row is built left to right at its own width.
+    // Force left-to-right layout at the player's width inside own bubbles.
     ui.allocate_ui_with_layout(
         vec2(width, button),
         Layout::left_to_right(Align::Center),
@@ -2931,7 +2822,7 @@ fn voice_player(
                         fill,
                         hover,
                         palette.accent,
-                        "Fetch",
+                        "Download",
                     )
                     .clicked()
                     {
@@ -3017,7 +2908,7 @@ fn voice_player(
                         });
                     }
                 }
-                // The time: where playback stands, else how long the clip runs.
+                // Show playback position while active, otherwise total duration.
                 let shown = match status.state {
                     State::Playing | State::Paused => {
                         crate::util::duration(status.position.as_secs() as u32)
@@ -3030,7 +2921,7 @@ fn voice_player(
                         .unwrap_or_else(|| crate::util::bytes(media.size)),
                 };
                 let text = match &media.state {
-                    MediaState::Failed(error) => format!("{error} · click to retry"),
+                    MediaState::Failed(error) => format!("{error}. Click to retry."),
                     _ => shown,
                 };
                 theme::text(ui, text, theme::regular(11.5), palette.secondary);
@@ -3049,8 +2940,7 @@ fn voice_player(
     }
 }
 
-/// The composer while a voice message is being recorded: the way out, the
-/// clock, the sound as it comes in, and the way to send it.
+/// Voice-recording controls and live waveform.
 fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let (elapsed, levels) = match app.recording.as_ref() {
@@ -3076,7 +2966,7 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
             {
                 app.actions.push(Action::CancelRecording);
             }
-            // A red light that breathes, then the clock.
+            // Pulsing recording light and elapsed time.
             let (dot, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
             let pulse = 0.55 + 0.45 * (elapsed.as_secs_f32() * 3.0).sin().abs();
             ui.painter()
@@ -3087,7 +2977,7 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
                 theme::medium(14.0),
                 palette.text,
             );
-            // The last stretch of sound, newest at the right.
+            // Recent audio levels, newest on the right.
             let wave_width = (ui.available_width() - button - 10.0).max(40.0);
             let (rect, _) = ui.allocate_exact_size(vec2(wave_width, 28.0), Sense::hover());
             let pitch = 3.0;
@@ -3123,7 +3013,7 @@ fn file_uri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
-/// Whether a chat's conversation has anything to show; for tests.
+/// Whether a conversation has visible content. Used by tests.
 #[allow(dead_code)]
 pub fn has_messages(conversation: &Conversation) -> bool {
     !conversation.messages.is_empty()
@@ -3233,8 +3123,7 @@ mod reaction_tests {
     }
 }
 
-/// What is staged to go out with the next message: a tile per attachment,
-/// each with a way to take it out again.
+/// Pending attachment tiles above the composer.
 fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let tile = 72.0;
@@ -3253,9 +3142,7 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                         texture,
                     } => {
                         let handle = texture.get_or_insert_with(|| {
-                            // A huge paste (a full screenshot, say) exceeds
-                            // the GPU's texture side; the thumbnail only
-                            // needs so many pixels anyway.
+                            // Limit thumbnails to the GPU's maximum texture size.
                             let image = if *width > 1024 || *height > 1024 {
                                 let scale = 1024.0 / (*width).max(*height) as f32;
                                 let (w, h) = (
@@ -3290,8 +3177,7 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                                 egui::TextureOptions::LINEAR,
                             )
                         });
-                        // A thumbnail, not a bubble: keep the aspect, fill
-                        // the tile as far as it goes.
+                        // Preserve aspect ratio while filling the tile.
                         let side = tile - 8.0;
                         let scale =
                             (side / (*width).max(1) as f32).min(side / (*height).max(1) as f32);
@@ -3336,7 +3222,7 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                         }
                     }
                 }
-                // The way out, in the corner.
+                // Remove button in the corner.
                 let close =
                     Rect::from_center_size(rect.right_top() + vec2(-10.0, 10.0), Vec2::splat(18.0));
                 let close_response =

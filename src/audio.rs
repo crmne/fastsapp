@@ -1,6 +1,6 @@
-//! Sound in and out: voice messages and audio files play in their bubble,
-//! and the microphone records a voice message. Devices are opened when
-//! needed and let go afterwards, so nothing is held while the app sits.
+//! Audio playback and voice-message recording.
+//!
+//! Input and output devices are opened on demand and released when idle.
 
 use std::collections::HashMap;
 use std::num::NonZero;
@@ -15,7 +15,7 @@ use rodio::buffer::SamplesBuffer;
 use crate::backend::Waker;
 use crate::voice;
 
-/// The longest voice message the app records; the phone stops sooner.
+/// Maximum recording length. The phone uses a shorter limit.
 const LONGEST_RECORDING: Duration = Duration::from_secs(15 * 60);
 
 fn mono() -> NonZero<u16> {
@@ -34,7 +34,7 @@ pub enum State {
     Paused,
 }
 
-/// Where one message's playback stands.
+/// Playback state for one message.
 #[derive(Clone, Copy, Debug)]
 pub struct Status {
     pub state: State,
@@ -52,20 +52,20 @@ impl Status {
 
 type Decoded = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
 
-/// Plays one clip at a time through the default output.
+/// Plays one clip at a time through the default output device.
 pub struct Player {
     waker: Waker,
     output: Option<(rodio::MixerDeviceSink, rodio::Player)>,
     loaded: Option<Loaded>,
     decoding: Option<Decoding>,
-    /// Bars worked out from clips that came without a waveform.
+    /// Generated waveforms for clips that did not include one.
     bars: HashMap<String, Vec<u8>>,
 }
 
 struct Loaded {
     message: String,
     samples: Arc<Vec<f32>>,
-    /// Where the queued audio starts, after a seek.
+    /// Start position of the queued audio after seeking.
     base: Duration,
     paused: bool,
     done: bool,
@@ -73,7 +73,7 @@ struct Loaded {
 
 struct Decoding {
     message: String,
-    /// Where to start once decoded, 0 to 1.
+    /// Requested start position after decoding, from 0 to 1.
     start: f32,
     slot: Decoded,
 }
@@ -89,8 +89,7 @@ impl Player {
         }
     }
 
-    /// Plays or pauses a message; one that finished starts over. A message
-    /// not decoded yet is decoded first and starts when `poll` sees it.
+    /// Plays or pauses a message. Finished clips restart; new clips decode first.
     pub fn toggle(&mut self, message: &str, path: &Path) -> Result<(), String> {
         match self.loaded.as_mut() {
             Some(loaded) if loaded.message == message => {
@@ -111,7 +110,7 @@ impl Player {
         }
     }
 
-    /// Jumps to a point in a message, 0 to 1, and plays from there.
+    /// Seeks to a fraction from 0 to 1 and starts playback.
     pub fn seek(&mut self, message: &str, path: &Path, fraction: f32) -> Result<(), String> {
         match &self.loaded {
             Some(loaded) if loaded.message == message => self.restart(fraction),
@@ -119,15 +118,14 @@ impl Player {
         }
     }
 
-    /// Drops whatever is loaded and lets the device go.
+    /// Clears the loaded clip and releases the output device.
     pub fn stop(&mut self) {
         self.output = None;
         self.loaded = None;
         self.decoding = None;
     }
 
-    /// Whether something is sounding right now; the interface keeps
-    /// repainting while it is.
+    /// Whether audio is currently playing.
     pub fn is_playing(&self) -> bool {
         self.decoding.is_some()
             || self
@@ -175,13 +173,12 @@ impl Player {
         }
     }
 
-    /// The waveform of a clip that has been decoded, for messages that came
-    /// without one.
+    /// Generated waveform for a decoded clip.
     pub fn bars(&self, message: &str) -> Option<&[u8]> {
         self.bars.get(message).map(Vec::as_slice)
     }
 
-    /// Picks up finished decodes and notices clips that ended. Once a frame.
+    /// Handles completed decodes and finished playback once per frame.
     pub fn poll(&mut self) -> Result<(), String> {
         let decoded = self.decoding.as_ref().and_then(|decoding| {
             decoding
@@ -216,7 +213,7 @@ impl Player {
             _ => false,
         };
         if ended {
-            // Nothing sounding: give the device back.
+            // Release the device after playback ends.
             self.output = None;
         }
         Ok(())
@@ -236,7 +233,7 @@ impl Player {
                 waker.wake();
             });
         if let Err(error) = spawned {
-            return Err(format!("Cannot decode: {error}"));
+            return Err(format!("Could not decode audio: {error}"));
         }
         self.decoding = Some(Decoding {
             message: message.to_owned(),
@@ -246,7 +243,7 @@ impl Player {
         Ok(())
     }
 
-    /// Plays the loaded clip from a point in it, 0 to 1.
+    /// Plays the loaded clip from a fraction from 0 to 1.
     fn restart(&mut self, fraction: f32) -> Result<(), String> {
         let Some(loaded) = self.loaded.as_mut() else {
             return Ok(());
@@ -279,19 +276,20 @@ fn clip_length(samples: usize) -> Duration {
     Duration::from_secs_f64(samples as f64 / f64::from(voice::RATE))
 }
 
-/// Mono samples at 48 kHz from a file: OGG/Opus through our own decoder,
-/// anything else (an MP3, an M4A, a WAV) through rodio's.
+/// Decodes a file to mono 48 kHz samples. OGG/Opus uses `voice`; other
+/// supported formats use rodio.
 fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
-    let bytes = std::fs::read(path).map_err(|error| format!("Cannot read the clip: {error}"))?;
+    let bytes =
+        std::fs::read(path).map_err(|error| format!("Could not read the audio: {error}"))?;
     if bytes.starts_with(b"OggS")
         && let Ok(samples) = voice::decode(&bytes)
     {
         return Ok(samples);
     }
     let file =
-        std::fs::File::open(path).map_err(|error| format!("Cannot read the clip: {error}"))?;
+        std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
     let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
-        .map_err(|error| format!("Cannot decode the clip: {error}"))?;
+        .map_err(|error| format!("Could not decode the audio: {error}"))?;
     let channels = decoder.channels().get();
     let rate = decoder.sample_rate().get();
     let interleaved: Vec<f32> = decoder.collect();
@@ -304,7 +302,7 @@ type Outcome = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
 pub struct Recorder {
     started: Instant,
     stop: Arc<AtomicBool>,
-    /// The loudness of each 50 ms heard so far, for the live bars.
+    /// Loudness for each recorded 50 ms segment.
     levels: Arc<Mutex<Vec<f32>>>,
     outcome: Outcome,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -343,8 +341,7 @@ impl Recorder {
         }
     }
 
-    /// One that only pretends, for pictures of the interface and tests: no
-    /// microphone, a made-up sound.
+    /// Simulated recorder for demos and tests.
     #[cfg(any(test, feature = "demo"))]
     pub fn rehearsal() -> Self {
         let levels: Vec<f32> = (0..90)
@@ -370,7 +367,7 @@ impl Recorder {
             .clone()
     }
 
-    /// Why recording stopped early, if it did (no microphone, say).
+    /// Error that stopped recording early.
     pub fn failure(&self) -> Option<String> {
         match self
             .outcome
@@ -383,7 +380,7 @@ impl Recorder {
         }
     }
 
-    /// Stops and hands over what was heard: mono at 48 kHz.
+    /// Stops and returns mono 48 kHz samples.
     pub fn finish(mut self) -> Result<Vec<f32>, String> {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
@@ -393,7 +390,7 @@ impl Recorder {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .take()
-            .unwrap_or_else(|| Err("nothing was recorded".to_owned()))
+            .unwrap_or_else(|| Err("No audio was recorded".to_owned()))
     }
 }
 
@@ -406,11 +403,11 @@ impl Drop for Recorder {
 fn record(stop: &AtomicBool, levels: &Mutex<Vec<f32>>, waker: &Waker) -> Result<Vec<f32>, String> {
     let mut microphone = rodio::microphone::MicrophoneBuilder::new()
         .default_device()
-        .map_err(|error| format!("no microphone: {error}"))?
+        .map_err(|error| format!("No microphone available: {error}"))?
         .default_config()
-        .map_err(|error| format!("the microphone has no usable format: {error}"))?
+        .map_err(|error| format!("The microphone has no supported format: {error}"))?
         .open_stream()
-        .map_err(|error| format!("the microphone would not open: {error}"))?;
+        .map_err(|error| format!("Could not open the microphone: {error}"))?;
     let channels = microphone.channels().get();
     let rate = microphone.sample_rate().get();
     let chunk = (rate as usize * usize::from(channels) / 20).max(1);
@@ -430,17 +427,17 @@ fn record(stop: &AtomicBool, levels: &Mutex<Vec<f32>>, waker: &Waker) -> Result<
             .push(loudness);
         waker.wake();
         if taken.len() < chunk {
-            // The stream ended on its own: the device went away.
+            // The device disappeared before recording stopped.
             break;
         }
     }
     if heard.is_empty() {
-        return Err("the microphone stayed silent".to_owned());
+        return Err("The microphone did not record any audio".to_owned());
     }
     Ok(voice::mono_at_rate(&heard, channels, rate))
 }
 
-/// The file a recording is written to before it goes out, for the archive.
+/// Temporary recording path used before sending and archiving.
 #[allow(dead_code)]
 pub fn recording_path(dir: &Path) -> PathBuf {
     dir.join(format!("voice-{}.ogg", crate::util::now()))
@@ -450,8 +447,8 @@ pub fn recording_path(dir: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    /// Plays a second of tone through this machine's output and watches
-    /// the position move: `cargo test audio::tests::plays -- --ignored --nocapture`.
+    /// Plays a one-second test tone:
+    /// `cargo test audio::tests::plays -- --ignored --nocapture`.
     #[test]
     #[ignore = "makes a sound on this machine"]
     fn plays_a_clip_on_this_machine() {
@@ -484,7 +481,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// Records a second from this machine's microphone:
+    /// Records one second from the default microphone:
     /// `cargo test audio::tests::records -- --ignored --nocapture`.
     #[test]
     #[ignore = "needs a microphone"]

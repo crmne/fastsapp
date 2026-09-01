@@ -2,7 +2,7 @@
 Type=Application
 Name=FastsApp
 GenericName=WhatsApp Client
-Comment=A fast, native WhatsApp client
+Comment=A native WhatsApp client
 Exec=fastsapp
 Icon=fastsapp
 Terminal=false

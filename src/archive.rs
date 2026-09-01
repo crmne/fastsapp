@@ -1,11 +1,7 @@
-//! The message archive: every chat and message this device has seen.
+//! SQLite archive of chats, messages, contacts, and stickers.
 //!
-//! WhatsApp replays a chat's history once, when the device is linked, and
-//! streams messages live after that; a client that keeps nothing shows an
-//! empty window on its second start. One SQLite file holds it all. The raw
-//! protobuf of each message is kept beside the decoded row, because the
-//! keys to fetch an attachment live in it and a picture may be asked for
-//! weeks later.
+//! Each message keeps its raw protobuf because attachment download keys may be
+//! needed long after history sync.
 
 use std::path::Path;
 
@@ -13,9 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::model::{Chat, ChatKind, Contact, Content, Delivery, LastMessage, Message};
 
-/// A sticker the phone lists among its recently used ones: its file hash,
-/// the `StickerMetadata` protobuf holding the keys to fetch it, when it was
-/// last sent, and the file once fetched.
+/// Recent phone sticker metadata, last-used time, and optional local file.
 #[derive(Clone, Debug)]
 pub struct PhoneSticker {
     pub hash: String,
@@ -24,8 +18,7 @@ pub struct PhoneSticker {
     pub path: Option<std::path::PathBuf>,
 }
 
-/// A sticker that passed through a chat and is on disk: when it last did,
-/// its file, and the raw message it came in.
+/// Downloaded chat sticker with its last-seen time and source message.
 #[derive(Clone, Debug)]
 pub struct ArchivedSticker {
     pub last_used: i64,
@@ -92,8 +85,7 @@ const CHAT_COLUMNS: &str =
     "c.id, c.name, c.kind, c.last_activity, c.unread, c.archived, c.pinned, c.muted_until,
                     m.from_me, m.sender_name, m.content, m.status, m.sender, c.participants, c.read_only";
 
-/// Columns added after the first release; each is created when missing so
-/// an archive from an earlier version keeps working.
+/// Adds columns introduced after the initial schema when missing.
 const MIGRATIONS: &[(&str, &str, &str)] = &[
     ("messages", "thumbnail", "BLOB"),
     ("messages", "mentions", "TEXT NOT NULL DEFAULT '[]'"),
@@ -154,8 +146,7 @@ fn status_rank(status: Delivery) -> i64 {
     }
 }
 
-/// The column that keeps when a stage was reached, for the stages worth
-/// remembering.
+/// Timestamp column for a remembered delivery stage.
 fn stamp_column(status: Delivery) -> Option<&'static str> {
     match status {
         Delivery::Delivered => Some("delivered_at"),
@@ -222,8 +213,7 @@ impl Archive {
         Ok(Self { connection })
     }
 
-    /// Creates the chat if it is new, and renames it if `name` is better
-    /// than what is stored (a phone number is never better than a name).
+    /// Creates a chat or replaces a phone-number title with a better name.
     pub fn upsert_chat(&self, chat: &Chat) -> Result<()> {
         self.connection.execute(
             "INSERT INTO chats (id, name, kind, last_activity, unread, archived, pinned, muted_until)
@@ -248,7 +238,7 @@ impl Archive {
         Ok(())
     }
 
-    /// Makes sure a chat row exists without touching an existing one.
+    /// Inserts a chat row only when missing.
     pub fn ensure_chat(&self, id: &str, name: &str) -> Result<()> {
         self.connection.execute(
             "INSERT OR IGNORE INTO chats (id, name, kind) VALUES (?1, ?2, ?3)",
@@ -257,8 +247,7 @@ impl Archive {
         Ok(())
     }
 
-    /// What WhatsApp said about a group: its subject, members, and whether
-    /// we may post.
+    /// Updates group subject, members, and posting permission.
     pub fn set_group_info(
         &self,
         id: &str,
@@ -324,7 +313,7 @@ impl Archive {
         Ok(())
     }
 
-    /// Every chat, newest activity first, each with its last message.
+    /// Returns all chats with their latest message, newest first.
     pub fn chats(&self) -> Result<Vec<Chat>> {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN} ORDER BY c.last_activity DESC"
@@ -348,8 +337,7 @@ impl Archive {
         Ok(())
     }
 
-    /// The newest `limit` messages from the other side, as (id, sender),
-    /// for read receipts.
+    /// Returns recent incoming message ids and senders for read receipts.
     pub fn unread_incoming(&self, chat: &str, limit: u32) -> Result<Vec<(String, String)>> {
         let mut statement = self.connection.prepare(
             "SELECT id, sender FROM messages WHERE chat = ?1 AND from_me = 0
@@ -361,13 +349,12 @@ impl Archive {
         rows.collect()
     }
 
-    /// Records where a message's attachment was saved.
+    /// Records an attachment's local path.
     pub fn set_media_path(&self, chat: &str, id: &str, path: &Path) -> Result<Option<Message>> {
         self.put_media_path(chat, id, Some(path))
     }
 
-    /// Forgets where an attachment was, so it is fetched again when
-    /// wanted.
+    /// Clears an attachment path so it can be downloaded again.
     pub fn clear_media_path(&self, chat: &str, id: &str) -> Result<Option<Message>> {
         self.put_media_path(chat, id, None)
     }
@@ -384,7 +371,7 @@ impl Archive {
         Ok(Some(message))
     }
 
-    /// Every attachment on record with where its file was put.
+    /// Returns all recorded attachment paths.
     pub fn media_paths(&self) -> Result<Vec<(String, String, std::path::PathBuf)>> {
         let mut statement = self.connection.prepare(
             "SELECT chat, id, json_extract(content, '$.media.path') AS path
@@ -400,8 +387,7 @@ impl Archive {
         rows.collect()
     }
 
-    /// A privacy id and the phone number behind it, both as the bare user
-    /// part.
+    /// Stores a privacy id to phone-number mapping without JID domains.
     pub fn put_lid(&self, lid: &str, pn: &str) -> Result<()> {
         self.connection.execute(
             "INSERT INTO lids (lid, pn) VALUES (?1, ?2) ON CONFLICT(lid) DO UPDATE SET pn = excluded.pn",
@@ -416,9 +402,8 @@ impl Archive {
         rows.collect()
     }
 
-    /// Stores a message, replacing an earlier copy while keeping whichever
-    /// delivery status has travelled further, and bumps the chat's
-    /// activity. `raw` is the protobuf, kept for attachments.
+    /// Upserts a message, preserves the furthest delivery state, and updates
+    /// chat activity. `raw` contains attachment metadata.
     pub fn insert_message(&self, message: &Message, raw: Option<&[u8]>) -> Result<()> {
         let existing: Option<i64> = self
             .connection
@@ -482,10 +467,8 @@ impl Archive {
         Ok(())
     }
 
-    /// The newest `limit` messages of a chat older than `before`, the time
-    /// and id of a message (all of them when `None`), oldest first. Several
-    /// messages can share a second (an album), so the boundary is the
-    /// message itself, not its time.
+    /// Returns up to `limit` messages before an optional timestamp/id boundary,
+    /// in ascending order.
     pub fn messages(
         &self,
         chat: &str,
@@ -533,9 +516,8 @@ impl Archive {
         Ok(messages)
     }
 
-    /// Messages whose visible text — body, caption, file name, poll
-    /// question, contact or place name — contains `needle`, newest first.
-    /// Case-insensitive over ASCII, exact beyond it, like SQLite itself.
+    /// Searches visible message text, filenames, polls, contacts, and places.
+    /// ASCII matching is case-insensitive; other text follows SQLite behavior.
     pub fn search_messages(&self, needle: &str, limit: usize) -> Result<Vec<Message>> {
         let pattern = format!(
             "%{}%",
@@ -590,8 +572,7 @@ impl Archive {
         Ok(messages)
     }
 
-    /// Every message from `from` (inclusive) up to `before` (exclusive),
-    /// oldest first, capped at `limit`.
+    /// Returns messages from `from` through `before`, ascending and limited.
     pub fn messages_range(
         &self,
         chat: &str,
@@ -639,9 +620,7 @@ impl Archive {
         rows.collect()
     }
 
-    /// Stickers that went through any chat and are on disk, newest first,
-    /// for the picker: when they last passed, their file, and the raw
-    /// message they came in, to tell the same sticker in two messages.
+    /// Returns downloaded chat stickers for the picker, newest first.
     pub fn recent_stickers(&self, limit: usize) -> Result<Vec<ArchivedSticker>> {
         let mut statement = self.connection.prepare(
             "SELECT json_extract(content, '$.media.path') AS path, MAX(timestamp), raw
@@ -664,8 +643,7 @@ impl Archive {
             .collect())
     }
 
-    /// Sticker messages whose file was never fetched, ours first and
-    /// newest first, so the picker can fill itself in.
+    /// Returns undownloaded sticker messages, outgoing first and newest first.
     pub fn stickers_without_file(&self, limit: usize) -> Result<Vec<(String, String)>> {
         let mut statement = self.connection.prepare(
             "SELECT chat, id FROM messages
@@ -681,8 +659,7 @@ impl Archive {
         rows.collect()
     }
 
-    /// Remembers a sticker the phone lists among its recent ones; a
-    /// repeat keeps the later of the two "last used" times.
+    /// Upserts a recent phone sticker, preserving the latest use time.
     pub fn upsert_phone_sticker(
         &self,
         hash: &str,
@@ -701,7 +678,7 @@ impl Archive {
         Ok(())
     }
 
-    /// The phone's recent stickers, most recently used first.
+    /// Returns recent phone stickers by latest use.
     pub fn phone_stickers(&self) -> Result<Vec<PhoneSticker>> {
         let mut statement = self.connection.prepare(
             "SELECT hash, raw, last_used, path FROM stickers
@@ -729,8 +706,7 @@ impl Archive {
         Ok(())
     }
 
-    /// Every message that still has its protobuf, for re-deriving what a
-    /// newer version reads out of it.
+    /// Returns raw messages for re-deriving fields in newer versions.
     pub fn rows_with_raw(&self) -> Result<Vec<(String, String, Vec<u8>)>> {
         let mut statement = self
             .connection
@@ -739,8 +715,7 @@ impl Archive {
         rows.collect()
     }
 
-    /// Replaces what was derived from a message's protobuf, keeping what
-    /// only this computer knows (the downloaded file).
+    /// Replaces protobuf-derived fields while preserving local file state.
     pub fn set_derived(
         &self,
         chat: &str,
@@ -808,8 +783,7 @@ impl Archive {
             .optional()
     }
 
-    /// The earliest message of a chat, for asking the phone what came
-    /// before it.
+    /// Returns the earliest message for phone-history requests.
     pub fn oldest(&self, chat: &str) -> Result<Option<Message>> {
         let id: Option<String> = self
             .connection
@@ -825,7 +799,7 @@ impl Archive {
         }
     }
 
-    /// The protobuf a message arrived as, for fetching its attachment.
+    /// Returns a message's raw protobuf for attachment downloads.
     pub fn raw(&self, chat: &str, id: &str) -> Result<Option<Vec<u8>>> {
         self.connection
             .query_row(
@@ -837,10 +811,8 @@ impl Archive {
             .map(Option::flatten)
     }
 
-    /// Moves a message's status forward; a receipt never moves it back,
-    /// except to `Failed`. `at` is the receipt's time, kept as the moment
-    /// the message was delivered or read; the first receipt of a stage
-    /// wins.
+    /// Advances delivery state, except that `Failed` may replace it. Stores the
+    /// first timestamp for each delivery stage.
     pub fn set_status(&self, chat: &str, id: &str, status: Delivery, at: i64) -> Result<bool> {
         let rank = status_rank(status);
         let changed = if status == Delivery::Failed {
@@ -865,8 +837,7 @@ impl Archive {
         Ok(changed > 0)
     }
 
-    /// Every message of ours in a chat at or before `timestamp` that has not
-    /// reached `status` yet, moved there. Returns the ids that changed.
+    /// Advances outgoing messages through `timestamp` to `status` and returns changed ids.
     pub fn advance_statuses(
         &self,
         chat: &str,
@@ -917,7 +888,7 @@ impl Archive {
         Ok(changed > 0)
     }
 
-    /// Adds, replaces, or (with an empty emoji) removes a sender's reaction.
+    /// Upserts a reaction, or removes it when the emoji is empty.
     pub fn set_reaction(
         &self,
         chat: &str,
@@ -961,7 +932,7 @@ impl Archive {
         Ok(())
     }
 
-    /// One contact as stored, if the id is known.
+    /// Returns a contact by id.
     pub fn contact(&self, id: &str) -> Result<Option<Contact>> {
         self.connection
             .query_row(
@@ -1010,7 +981,7 @@ impl Archive {
         Ok(())
     }
 
-    /// Forgets everything, for unlinking the device.
+    /// Clears all archived data during unlinking.
     pub fn clear(&self) -> Result<()> {
         self.connection.execute_batch(
             "DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta; DELETE FROM lids;",
@@ -1076,11 +1047,11 @@ mod tests {
         for row in [&plain, &caption, &other] {
             archive.insert_message(row, None).expect("insert");
         }
-        // Body and file name both match, newest first, whatever the case.
+        // Match body and filename case-insensitively, newest first.
         let hits = archive.search_messages("ENGINE", 10).expect("search");
         let ids: Vec<&str> = hits.iter().map(|hit| hit.id.as_str()).collect();
         assert_eq!(ids, vec!["m2", "m1"]);
-        // A LIKE wildcard in the query is a character, not a wildcard.
+        // Escape LIKE wildcards from the search query.
         let hits = archive.search_messages("100%", 10).expect("search");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "m2");
@@ -1097,7 +1068,7 @@ mod tests {
                 .expect("search")
                 .is_empty()
         );
-        // The limit caps the answer.
+        // Apply the result limit.
         let hits = archive.search_messages("e", 1).expect("search");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "m3", "newest first");
@@ -1252,7 +1223,7 @@ mod tests {
         assert_eq!(stored.status, Delivery::Read);
         assert_eq!(stored.read_at, Some(500));
         assert_eq!(stored.delivered_at, None);
-        // Reinserting the same message (a history sync replay) keeps Read.
+        // History replay must not lower an existing Read state.
         archive
             .insert_message(&message(chat, "m1", 100, true), None)
             .expect("insert");
@@ -1331,7 +1302,7 @@ mod tests {
 
     #[test]
     fn paging_keeps_every_message_of_a_second() {
-        // An album: five pictures in one second, paged three at a time.
+        // Cover messages sharing one timestamp across page boundaries.
         let archive = Archive::in_memory().expect("opens");
         let chat = "1@s.whatsapp.net";
         archive.ensure_chat(chat, "A").expect("chat");
@@ -1533,7 +1504,7 @@ mod sticker_tests {
         archive
             .upsert_phone_sticker("bb", b"two", 300, 0.1)
             .expect("stored");
-        // A repeat with an older "last used" does not move it back.
+        // Older repeated use does not lower the last-used time.
         archive
             .upsert_phone_sticker("aa", b"one", 50, 0.9)
             .expect("stored");
@@ -1569,7 +1540,7 @@ mod sticker_tests {
             missing,
             vec![("a@s.whatsapp.net".to_owned(), "s1".to_owned())]
         );
-        // A file that is gone from disk is not offered.
+        // Exclude missing local files.
         assert!(archive.recent_stickers(10).expect("lists").is_empty());
     }
 }

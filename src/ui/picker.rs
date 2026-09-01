@@ -14,11 +14,10 @@ use super::widgets;
 
 const WIDTH: f32 = 420.0;
 const HEIGHT: f32 = 400.0;
-/// An emoji cell is at least this wide; the grid takes as many columns as
-/// fit and stretches them to fill the width.
+/// Minimum emoji cell width. Columns expand to fill the grid.
 const CELL: f32 = 40.0;
 
-/// One row of the emoji list: a heading or one row's worth of emoji.
+/// An emoji-grid heading or row.
 enum Row {
     Header(&'static str),
     Emoji(Vec<&'static str>),
@@ -66,16 +65,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             PickerTab::Stickers => sticker_tab(app, ui, &palette),
                         },
                     );
-                    // Anchored to the panel's bottom edge even when a tab's
-                    // body comes up short (the ask-for-a-key screen).
+                    // Keep the tabs at the bottom when content is short.
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                         tabs(app, ui, &palette, tab);
                     });
                 });
         });
-    // A click anywhere else closes it, unless it is the button that opens
-    // it, which toggles on its own, or a sticker tile's menu hanging past
-    // the panel's edge.
+    // Close on outside clicks, except on the toggle button or a sticker menu.
     let rect = area.response.rect;
     let clicked_outside = !egui::Popup::is_any_open(ctx)
         && ctx.input(|input| {
@@ -196,16 +192,14 @@ fn emoji_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         app.picker_focus = false;
         response.request_focus();
     }
-    // Leave the scroll bar its edge, then fill the rest with whole
-    // columns.
+    // Reserve scrollbar space and fill the remaining width with whole columns.
     let width = ui.available_width() - 6.0;
     let columns = ((width / CELL).floor() as usize).max(1);
     let cell = width / columns as f32;
     let rows = rows_for(app, columns);
     let row_height = CELL;
     let mut picked = None;
-    // The rows are laid out without spacing, and `show_rows` must agree,
-    // or the grid drifts as it scrolls.
+    // `show_rows` must use the same zero spacing as the grid.
     ui.spacing_mut().item_spacing = Vec2::ZERO;
     egui::ScrollArea::vertical()
         .id_salt("emoji-grid")
@@ -270,8 +264,7 @@ fn emoji_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 // --- GIFs ---------------------------------------------------------------
 
 fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
-    // No key, or a key GIPHY refuses: either way the fix is a key of
-    // one's own, pasted right here.
+    // Ask for a key when none is set or GIPHY rejects it.
     let bad_key = app.gif_error.as_ref().is_some_and(|error| error.bad_key);
     if app.settings.effective_giphy_key().is_none() || bad_key {
         ui.add_space(8.0);
@@ -282,9 +275,9 @@ fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         theme::paragraph(
             ui,
             if bad_key {
-                "Create a free GIPHY API key of your own at developers.giphy.com and paste it here; it is kept in your settings file."
+                "This GIPHY API key was rejected. Create a free key at developers.giphy.com and paste it here. It is saved in your settings."
             } else {
-                "GIF search needs a free GIPHY API key. Create one at developers.giphy.com and paste it here; it is kept in your settings file."
+                "GIF search needs a GIPHY API key. Create a free key at developers.giphy.com and paste it here. It is saved in your settings."
             },
             theme::regular(13.0),
             palette.text,
@@ -347,7 +340,7 @@ fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     if app.gif_pending {
         ui.horizontal(|ui| {
             theme::spinner(ui, 16.0, palette.accent);
-            theme::text(ui, "Looking…", theme::regular(12.5), palette.secondary);
+            theme::text(ui, "Searching…", theme::regular(12.5), palette.secondary);
         });
     } else if let Some(error) = &app.gif_error {
         theme::paragraph(ui, &error.message, theme::regular(13.0), palette.danger);
@@ -400,7 +393,7 @@ fn gif_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 ui.vertical_centered(|ui| {
                     theme::text(
                         ui,
-                        "Type to search, or wait for what is trending.",
+                        "Search for a GIF or browse trending results.",
                         theme::regular(13.0),
                         palette.secondary,
                     );
@@ -431,9 +424,9 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             theme::paragraph(
                 ui,
                 if app.stickers_pending {
-                    "Fetching your stickers…"
+                    "Loading your stickers…"
                 } else {
-                    "The stickers you have sent lately, and those you receive, show up here; right-click one to keep it. Whole packs come in through Find packs above: copy a pack's signal.art link there and paste it here, or open a .wastickers file."
+                    "Recent stickers appear here. Right-click one to save it. To import a pack, paste a signal.art link or open a .wastickers file."
                 },
                 theme::regular(13.0),
                 palette.secondary,
@@ -495,8 +488,7 @@ fn sticker_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     }
 }
 
-/// The way in for whole packs: a pasted signal.art link imports on the
-/// paste itself, and the button takes a .wastickers or zip file.
+/// Imports packs from pasted signal.art links or .wastickers files.
 fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     ui.horizontal(|ui| {
         let spacing = ui.spacing().item_spacing.x;
@@ -532,8 +524,7 @@ fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             app.actions
                 .push(Action::ImportStickerUrl(app.sticker_link.trim().to_owned()));
         }
-        // The gallery the links come from: browse there, copy a pack's
-        // signal.art address, paste it beside.
+        // Open the gallery where users can copy signal.art pack links.
         if theme::soft_button(ui, palette, Some(Icon::ExternalLink), "Find packs", false)
             .on_hover_text("Browse signalstickers.org")
             .clicked()
@@ -551,7 +542,7 @@ fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             theme::spinner(ui, 14.0, palette.accent);
             theme::text(
                 ui,
-                "Fetching the pack…",
+                "Importing the pack…",
                 theme::regular(12.5),
                 palette.secondary,
             );
@@ -559,7 +550,7 @@ fn import_row(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     }
 }
 
-/// One section's tiles: click sends, right-click keeps or lets go.
+/// Sticker tiles. Click sends; right-click saves or removes.
 fn sticker_grid(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -581,8 +572,7 @@ fn sticker_grid(
                         ui.painter().rect_filled(rect, 8.0, palette.surface_hover);
                     }
                     let shown = rect.shrink(4.0);
-                    // A moving sticker plays while the pointer rests on it;
-                    // one at a time keeps the decoders unbothered.
+                    // Animate only the hovered sticker to limit decoder work.
                     let played = response.hovered()
                         && moves(path)
                         && match crate::animation::frame(ui.ctx(), path) {
@@ -632,7 +622,7 @@ fn sticker_grid(
     }
 }
 
-/// Whether the sticker file is an animated WebP, read off its header.
+/// Checks the WebP header for animation.
 fn moves(path: &Path) -> bool {
     let mut head = [0u8; 64];
     let Ok(mut file) = std::fs::File::open(path) else {

@@ -1,60 +1,48 @@
-//! One running instance at a time.
+//! Single-instance coordination over a loopback socket.
 //!
-//! Two copies of FastsApp would fight over the one thing WhatsApp allows a
-//! linked device: its connection. Each takes the stream from the other,
-//! forever. So a second launch does not start a second app; it asks the one
-//! already running to show its window and exits.
-//!
-//! Detection is a listening socket bound to loopback: binding is exclusive,
-//! so whoever binds is the running instance, and a later launch connects to
-//! say "show yourself" before exiting. It is bound to 127.0.0.1 so no
-//! firewall has an opinion about it, it speaks only to itself, and the
-//! operating system releases the port when the process ends, crash included,
-//! so there is no stale lock file to clean up. The same on every platform.
+//! A second launch asks the existing process to show its window and exits.
+//! The operating system releases the loopback port when the process ends.
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Loopback port that marks a running instance. Registered to nothing;
-/// chosen high and out of the ephemeral range.
+/// Fixed high loopback port outside the ephemeral range.
 const INSTANCE_PORT: u16 = 47_119;
 
-/// Every request and reply starts with this, so a foreign program that
-/// happens to hold the port is never mistaken for FastsApp.
+/// Request and reply prefix used to identify FastsApp.
 const PREFIX: &str = "fastsapp:";
 const OK_REPLY: &str = "fastsapp:ok";
 
 pub enum Outcome {
-    /// This process is the only instance. Hold the guard until it exits.
+    /// This process owns the instance guard.
     Only(Guard),
-    /// Another instance is running and has been asked to show its window.
+    /// The existing instance was asked to show its window.
     Surfaced,
 }
 
-/// What another launch asked the running instance to do.
+/// Request from another launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlCommand {
-    /// Bring the window forward, creating it if the app lives in the tray.
+    /// Shows or creates the window.
     Show,
 }
 
-/// Holds whatever marks this process as the running instance. Dropping it
-/// gives that up.
+/// Owns the listener that marks this process as the running instance.
 pub struct Guard {
-    /// Filled by other launches, drained by the app every frame.
+    /// Requests queued by later launches.
     commands: Arc<Mutex<Vec<ControlCommand>>>,
 }
 
 impl Guard {
-    /// The queue another launch's requests land in. The app drains it.
+    /// Shared request queue drained by the app.
     pub fn commands(&self) -> Arc<Mutex<Vec<ControlCommand>>> {
         Arc::clone(&self.commands)
     }
 }
 
-/// Sends one verb to the running instance and checks it answered as itself.
+/// Sends one request and verifies the FastsApp reply prefix.
 pub fn send(verb: &str) -> std::io::Result<()> {
     send_to(INSTANCE_PORT, verb)
 }
@@ -63,8 +51,7 @@ fn send_to(port: u16, verb: &str) -> std::io::Result<()> {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.write_all(format!("{PREFIX}{verb}\n").as_bytes())?;
-    // The listener writes one line and closes, so read to the end and keep
-    // the line.
+    // Read the one-line reply until the connection closes.
     let mut reply = String::new();
     stream.read_to_string(&mut reply)?;
     if reply.lines().next() == Some(OK_REPLY) {
@@ -81,8 +68,7 @@ pub fn acquire(waker: &crate::backend::Waker) -> Outcome {
     let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, INSTANCE_PORT)) {
         Ok(listener) => listener,
         Err(_) => {
-            // Someone holds the port. Ask them to show themselves, and only
-            // stand down if they answer as FastsApp.
+            // If the port is held, continue only when it is not FastsApp.
             if send("show").is_ok() {
                 return Outcome::Surfaced;
             }
@@ -106,8 +92,7 @@ pub fn acquire(waker: &crate::backend::Waker) -> Outcome {
     Outcome::Only(guard)
 }
 
-/// Answers other launches until the listener closes. One request line and
-/// one reply line per connection.
+/// Handles one request and reply per connection until the listener closes.
 fn serve(
     listener: TcpListener,
     commands: &Mutex<Vec<ControlCommand>>,
@@ -118,7 +103,7 @@ fn serve(
         let Some(line) = read_line(&mut stream) else {
             continue;
         };
-        // Not our client: say nothing and hang up.
+        // Ignore clients without the FastsApp prefix.
         if let Some(command) = parse(&line) {
             let _ = stream.write_all(format!("{OK_REPLY}\n").as_bytes());
             commands
@@ -137,8 +122,7 @@ fn parse(line: &str) -> Option<ControlCommand> {
     }
 }
 
-/// Reads up to the first newline. A line too long to be one of ours, or any
-/// read error, disqualifies the client.
+/// Reads a bounded line and rejects read errors or oversized input.
 fn read_line(stream: &mut TcpStream) -> Option<String> {
     let mut buffer = [0u8; 256];
     let mut filled = 0;
@@ -174,8 +158,7 @@ mod tests {
         assert_eq!(parse(""), None);
     }
 
-    /// The whole channel over a real socket: what a second launch sends is
-    /// what the app finds in its queue.
+    /// Verifies a request crosses the socket into the app queue.
     #[test]
     fn a_second_launch_reaches_the_queue() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback port");
@@ -188,8 +171,7 @@ mod tests {
         };
 
         send_to(port, "show").expect("answered as FastsApp");
-        // An unknown verb gets no reply at all, so the client sees a closed
-        // connection rather than a command it never sent being obeyed.
+        // Unknown verbs close the connection without a reply.
         assert!(send_to(port, "frobnicate").is_err());
 
         assert_eq!(

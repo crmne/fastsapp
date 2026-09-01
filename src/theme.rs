@@ -1,9 +1,7 @@
-//! FastsApp's visual language: palette, typography, icons, base widgets.
+//! Colors, typography, icons, and base widgets.
 //!
-//! Inter carries the interface with real weights (egui's `strong()` only
-//! brightens), and one Lucide icon vocabulary replaces Unicode lookalikes.
-//! Everything colour-related goes through a [`Palette`] so light and dark
-//! stay coherent without hunting for hard-coded colours.
+//! The UI uses Inter's font weights and Lucide icons. [`Palette`] holds all
+//! light and dark theme colors.
 
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
 
@@ -26,14 +24,14 @@ pub struct Palette {
     pub warning: Color32,
     pub overlay: Color32,
     pub shadow: Color32,
-    /// The conversation's backdrop, behind the bubbles.
+    /// Conversation background behind message bubbles.
     pub chat: Color32,
-    /// A bubble from the other side.
+    /// Incoming message bubble.
     pub bubble_in: Color32,
-    /// A bubble of our own.
+    /// Outgoing message bubble.
     pub bubble_out: Color32,
     pub link: Color32,
-    /// The blue of a read receipt.
+    /// Read-receipt blue.
     pub read: Color32,
 }
 
@@ -92,7 +90,7 @@ impl Palette {
         }
     }
 
-    /// A sender's name colour in a group, from the same hue as their avatar.
+    /// Group-sender color derived from the avatar hue.
     pub fn sender(&self, hue: f32) -> Color32 {
         if self.dark {
             hsl(hue, 0.6, 0.68)
@@ -101,7 +99,7 @@ impl Palette {
         }
     }
 
-    /// An avatar background for a chat without a picture, from its hue.
+    /// Avatar background derived from the chat hue.
     pub fn avatar(&self, hue: f32) -> Color32 {
         let (saturation, lightness) = if self.dark {
             (0.38, 0.42)
@@ -112,7 +110,7 @@ impl Palette {
     }
 }
 
-/// An HSL colour as bytes, for drawing outside egui.
+/// Converts HSL to color bytes for non-egui drawing.
 pub fn hsl_rgb(hue: f32, saturation: f32, lightness: f32) -> [u8; 3] {
     let color = hsl(hue, saturation, lightness);
     [color.r(), color.g(), color.b()]
@@ -160,15 +158,14 @@ pub fn bold(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name(INTER_BOLD.into()))
 }
 
-/// Install fonts, icons, and the base style once.
+/// Installs fonts, icons, and base style.
 pub fn install(ctx: &egui::Context) {
     install_fonts(ctx);
     register_icons(ctx);
     egui_extras::install_image_loaders(ctx);
 }
 
-/// Applies the palette to egui's own widgets so dialogs, menus, and text
-/// fields agree with the custom views.
+/// Applies the palette to egui widgets.
 pub fn apply(ctx: &egui::Context, palette: &Palette) {
     let mut style = (*ctx.global_style()).clone();
     let visuals = &mut style.visuals;
@@ -308,11 +305,7 @@ fn install_fonts(ctx: &egui::Context) {
         fonts.families.insert(FontFamily::Name(name.into()), family);
     }
 
-    // Inter draws Latin, Greek, and Cyrillic and nothing else, and the faces
-    // egui bundles add no more; a chat client meets every script there is.
-    // Borrow the desktop's own faces and append them to each family, after
-    // Inter so Latin text keeps its shape and after the emoji faces so emoji
-    // keep their colour.
+    // Append system fallbacks after Inter and emoji fonts.
     for font in crate::system_fonts::fallbacks() {
         let mut data = FontData::from_static(&font.bytes);
         data.index = font.index;
@@ -500,13 +493,13 @@ pub fn icon(ui: &mut egui::Ui, icon: Icon, size: f32, color: Color32) -> Respons
     ui.add(icon.image(color, size))
 }
 
-/// Paints an icon centred in `rect` without allocating space.
+/// Paints a centered icon in `rect` without allocating space.
 pub fn paint_icon(ui: &egui::Ui, icon: Icon, rect: egui::Rect, size: f32, color: Color32) {
     let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(size));
     icon.image(color, size).paint_at(ui, icon_rect);
 }
 
-/// A frameless icon control whose colour lifts on hover.
+/// Frameless icon button with hover color.
 pub fn icon_button(
     ui: &mut egui::Ui,
     icon: Icon,
@@ -538,7 +531,7 @@ pub fn icon_button(
     }
 }
 
-/// A round, filled control such as the send button.
+/// Round filled icon button.
 pub fn circle_button(
     ui: &mut egui::Ui,
     icon: Icon,
@@ -567,11 +560,10 @@ pub fn circle_button(
     }
 }
 
-/// The app's mark: the accent disc with a speech bubble, drawn the same
-/// wherever it appears.
+/// Draws the app logo.
 pub fn logo(ui: &egui::Ui, center: egui::Pos2, diameter: f32, disc: Color32, glyph: Color32) {
     ui.painter().circle_filled(center, diameter / 2.0, disc);
-    // The same proportions as `packaging/icons/fastsapp.svg`.
+    // Match `packaging/icons/fastsapp.svg`.
     let icon_size = diameter * 0.56;
     let icon_rect = egui::Rect::from_center_size(
         center - Vec2::new(0.0, diameter * 0.02),
@@ -619,7 +611,7 @@ pub fn pill_button(ui: &mut egui::Ui, palette: &Palette, label: &str, primary: b
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A muted button with an icon and label, for row and header actions.
+/// Subtle button with an optional icon and label.
 pub fn soft_button(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -660,8 +652,7 @@ pub fn soft_button(
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// The width [`soft_button`] will take, with its metrics, so a row of
-/// them can be centred before any is laid out.
+/// Calculates [`soft_button`] width before layout.
 pub fn soft_button_width(ui: &egui::Ui, label: &str, icon: bool) -> f32 {
     let galley = ui
         .painter()
@@ -670,7 +661,7 @@ pub fn soft_button_width(ui: &egui::Ui, label: &str, icon: bool) -> f32 {
     galley.size().x + icon_width + 24.0
 }
 
-/// An animated busy indicator paced independently of the graphics driver.
+/// Animated busy indicator with timer-based repainting.
 pub fn spinner(ui: &mut egui::Ui, size: f32, color: Color32) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     if ui.is_rect_visible(rect) {
@@ -679,7 +670,7 @@ pub fn spinner(ui: &mut egui::Ui, size: f32, color: Color32) -> Response {
     response
 }
 
-/// The spinner drawn at the centre of `rect` without allocating space.
+/// Paints a centered spinner without allocating space.
 pub fn paint_spinner(ui: &egui::Ui, rect: egui::Rect, size: f32, color: Color32) {
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(33));
@@ -697,7 +688,7 @@ pub fn paint_spinner(ui: &egui::Ui, rect: egui::Rect, size: f32, color: Color32)
         .add(egui::Shape::line(points, Stroke::new(2.0, color)));
 }
 
-/// Truncated single-line text in a given font and colour.
+/// Truncated single-line text.
 pub fn text(
     ui: &mut egui::Ui,
     text: impl Into<String>,
@@ -711,7 +702,7 @@ pub fn text(
     )
 }
 
-/// A label whose text can be swept and copied.
+/// Selectable text label.
 pub fn selectable_text(
     ui: &mut egui::Ui,
     text: impl Into<String>,
@@ -721,7 +712,7 @@ pub fn selectable_text(
     ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(color)).selectable(true))
 }
 
-/// Wrapping text in a given font and colour.
+/// Wrapping text label.
 pub fn paragraph(
     ui: &mut egui::Ui,
     text: impl Into<String>,
@@ -735,7 +726,7 @@ pub fn paragraph(
     )
 }
 
-/// Single-line text that acts like a link: underlines on hover, clickable.
+/// Clickable single-line text with a hover underline.
 pub fn link(
     ui: &mut egui::Ui,
     text: impl Into<String>,
@@ -764,7 +755,7 @@ pub fn subtle(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
     text(ui, label, regular(13.0), palette.secondary)
 }
 
-/// Mixes two colours; `t` = 1 is all `b`.
+/// Mixes two colors; `t = 1` returns `b`.
 pub fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
     Color32::from_rgba_unmultiplied(
@@ -775,8 +766,7 @@ pub fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
-/// Room for the traffic lights on macOS, where the window has no title bar
-/// and the content runs to the top edge; nothing elsewhere.
+/// macOS traffic-light inset; zero on other platforms.
 pub fn titlebar_inset(ctx: &egui::Context) -> f32 {
     if cfg!(target_os = "macos") && !ctx.input(|input| input.viewport().fullscreen.unwrap_or(false))
     {

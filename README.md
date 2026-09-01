@@ -1,18 +1,17 @@
 # FastsApp
 
-**WhatsApp, native and fast.** A lightweight WhatsApp client written in Rust
-with [egui](https://github.com/emilk/egui), speaking the WhatsApp Web protocol
-through [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust). It links
-to your phone like WhatsApp Web does, starts in well under a second, and stays
-small while it runs. There is no browser engine anywhere in the process.
+**WhatsApp, native and fast.** FastsApp is a WhatsApp client written in Rust
+with [egui](https://github.com/emilk/egui). It uses
+[whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) for the WhatsApp Web
+protocol. It links to your phone as a companion device, starts in well under a
+second, and has no browser engine.
 
-FastsApp is a sibling of [Fastpotify](https://github.com/crmne/fastpotify):
-the same idea, the same look, a different service. (The name follows the
-same pattern without carrying WhatsApp's trademark.)
+FastsApp is a sibling of [Fastpotify](https://github.com/crmne/fastpotify),
+with the same native UI for a different service.
 
 ![FastsApp showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
 
-Documentation, downloads, and guides: **[fastsapp.rocks](https://fastsapp.rocks)**
+See **[fastsapp.rocks](https://fastsapp.rocks)** for downloads and guides.
 
 ![A group chat with sender names and pictures, a photo with reactions, a reply with a mention, and a poll](docs/screenshot-group.png)
 
@@ -20,101 +19,59 @@ Documentation, downloads, and guides: **[fastsapp.rocks](https://fastsapp.rocks)
 
 ## What it does
 
-- **Links to your phone** by scanning a QR code, or by typing a code on the
-  phone if you prefer to link with your phone number. Your chat history
-  comes over once, right after linking, and is kept on this computer from
-  then on.
-- **Chats.** The list you know: pinned first, unread counts, muted and
-  archived chats, who is typing, the last message with its ticks. One
-  search finds chats, the words inside any archived message, and
-  contacts you have not talked to yet, so a new conversation can start
-  right from the search.
-- **Conversations.** Messages in bubbles, grouped by day, with sender
-  names, colours, and pictures in groups, quoted replies you can click to
-  jump to, reactions, edits, deleted messages, and read receipts. Older
-  messages load as you scroll up; when the archive runs out, the phone is
-  asked for more.
-- **Looks like WhatsApp.** `*bold*`, `_italic_`, `~struck~`, `` `code` ``,
-  lists, and quotes render as they do on the phone; `@mentions` show names;
-  links (bare domains and e-mail addresses too) are clickable, and the
-  preview card WhatsApp attached to a link is shown. Emoji are drawn in
-  colour from the desktop's emoji font (Noto Color Emoji on Linux, Apple
-  Color Emoji on macOS), flags, skin tones, and families included; a
-  message of nothing but emoji is shown large.
-- **Attachments wait for a caption.** A pasted picture, dropped files, or
-  files from the picker sit in the composer until you send, with whatever
-  you typed as the caption; Escape drops them.
-- **Mute.** Any chat, for eight hours, a week, or for good, from its menu
-  or its info; the phone follows, and so do notifications.
-- **Voice messages.** They play where they are, with WhatsApp's own
-  waveform to scrub through, and the sender sees the blue microphone.
-  With nothing typed, the send button records one: a red light, the
-  clock, the sound as it comes in; Enter or the button sends it, Escape
-  drops it. Replying first quotes the message under the recording, and a
-  quiet take is brought up to speaking volume before it goes out. Opus
-  in OGG both ways, decoded and encoded in the app.
-- **Sends.** Text with Enter (Shift+Enter breaks a line; swap them in
-  Settings), pictures pasted from the clipboard, and files picked with the
-  paperclip or dropped on the window: pictures, videos, audio, and
-  documents. Reply to a message from its menu, react with one of the quick
-  emoji, edit or delete your own messages, and see when the other side is
-  typing. The same menu tells a message's journey: sent, delivered, and
-  read, each with its moment; hovering a reaction names who gave it.
-- **Attachments.** Everything up to 64 MB is fetched as it scrolls into
-  view (or on a click, in Settings), with WhatsApp's blurred preview until
-  then. A file the servers have let go of is asked for again (WhatsApp
-  tells the phone to re-upload it); only if that fails does the bubble
-  say it is no longer on the servers. Pictures show at WhatsApp's size, stickers on their own, GIFs and
-  animated stickers play in place (GIFs are decoded in the app; `ffmpeg`
-  is only tried for anything that is not H.264, when
-  the desktop has one); voice messages and audio files play in place;
-  other videos show their poster and length and, like documents, open
-  with whatever your desktop uses for them. Locations open in a map;
-  contacts and polls are shown; forwarded messages say so.
-- **Picker.** The smiley next to the composer opens emoji (searchable, by
-  category, with your recent ones), stickers, and GIF search through GIPHY
-  (the tab itself asks for a free developers.giphy.com key unless your
-  build carries one).
-- **Stickers, including whole packs.** The sticker tab gathers the ones
-  your phone used lately (synced when you link), those sent or received
-  here, and any sticker you keep with a right-click. Whole packs come in
-  through one paste: the Find packs button opens the
-  [signalstickers.org](https://signalstickers.org) gallery, and a copied
-  signal.art link imports the pack the moment it lands in the field (the
-  files come from Signal's sticker CDN); a `.wastickers` file from any
-  sticker site works too. Animated packs keep their motion (APNG is
-  converted to animated WebP, the form WhatsApp plays) and a moving
-  sticker plays while the pointer rests on it.
-- **One name per person.** From your address book, or as people call
-  themselves on WhatsApp (a setting), and the same in the chat list,
-  senders, replies, mentions, and notifications.
-- **Groups.** Members under the group's name, the sender's picture beside
-  each message (optionally in every chat), a click on either for their
-  details, and the composer steps aside in announcement groups where only
-  admins may post.
-- **Presence.** Online and last-seen for the open chat, and typing
-  indicators both ways.
-- **Stays in the background.** Closing the window keeps FastsApp linked
-  and receiving in the system tray (a status notifier on Linux, the menu
-  bar on macOS, the notification area on Windows); clicking the tray brings
-  the window back. Quit from the tray menu or with `Ctrl+Q`; turn it off
-  in Settings. A second launch shows the running window instead of
-  starting a rival that would take over the link.
-- **Notifies.** New messages come through the desktop's own notifications,
-  with the person's or the group's picture, when the window is hidden, in
-  the background, or on another chat; muted chats stay quiet; a click
-  opens the chat (Linux). Off in Settings.
+- **Links to your phone.** Scan a QR code or link with your phone number.
+  Recent history is copied to this computer after linking and stored here.
+- **Chats.** See pinned, unread, muted, and archived chats, typing indicators,
+  and message status. Search chats, saved messages, and contacts.
+- **Conversations.** See replies, reactions, edits, deleted messages, read
+  receipts, sender names, and group pictures. Older messages load as you
+  scroll up, first from the local archive and then from your phone.
+- **WhatsApp formatting.** Bold, italic, strikethrough, code, lists, quotes,
+  mentions, and link previews are supported. Links are clickable. Emoji use
+  the desktop's color emoji font and emoji-only messages are larger.
+- **Send attachments with captions.** Paste a picture, drop files, or use the
+  file picker. They stay in the composer until you send them or press Escape.
+- **Mute chats** for eight hours, one week, or indefinitely. The setting also
+  applies on your phone and to desktop notifications.
+- **Voice messages.** Play, seek, record, reply with, and send voice messages
+  in the chat. The app normalizes quiet recordings and handles OGG/Opus
+  without external tools.
+- **Send messages.** Press Enter to send text and Shift+Enter for a new line.
+  You can swap these keys in Settings. You can also reply, react, edit, delete,
+  and check when a message was sent, delivered, or read.
+- **View attachments.** FastsApp downloads files up to 64 MB automatically or
+  on click. Photos, stickers, GIFs, voice messages, audio, locations, contacts,
+  polls, and link previews appear in the chat. Videos and documents open in
+  their default desktop apps. If an attachment has expired, FastsApp asks your
+  phone to upload it again.
+- **Emoji, GIF, and sticker picker.** Search emoji and GIFs, use recent emoji
+  and stickers, and save stickers with a right-click. GIF search needs a free
+  GIPHY API key unless the build includes one.
+- **Sticker packs.** Import a pack from a `signal.art` link or `.wastickers`
+  file. Animated packs remain animated. Packs are stored as WebP files on your
+  computer.
+- **Consistent names.** Use names from your address book or public WhatsApp
+  profile names across chats, replies, mentions, and notifications.
+- **Groups.** See members, sender names, and sender pictures. Announcement
+  groups are read-only for non-admins.
+- **Presence.** See online, last-seen, and typing status, and send your typing
+  status.
+- **Runs in the background.** Closing the window keeps FastsApp linked in the
+  system tray. Reopen it from the tray or by launching it again. Quit from the
+  tray or with `Ctrl+Q`, or disable this behavior in Settings.
+- **Desktop notifications.** Get notifications with the chat picture when you
+  are away from the open chat. Muted chats do not notify you. On Linux,
+  clicking a notification opens the chat.
 - **Light and dark**, or follow the system. Zoom with Ctrl+plus and
   Ctrl+minus.
-- **Text you can take.** Sweep any part of a message and copy it; a
-  selection that runs across messages copies the way the phone shares
-  one, each line stamped `[time, date] Name:`. The name and number on a
-  contact's page select like any text.
-- **Keyboard-first.** `Ctrl+K` searches, `Alt+↑/↓` walks the chats, `Esc`
-  backs out of anything, `Ctrl+/` lists the rest.
-- **Yours to keep.** Messages live in one SQLite file in your state
-  directory; attachments in your cache directory. Unlinking from Settings
-  forgets this device on the phone and deletes both.
+- **Copy text.** Select part of a message or copy across messages in
+  WhatsApp's `[time, date] Name:` format. Contact names and numbers are also
+  selectable.
+- **Keyboard shortcuts.** `Ctrl+K` searches, `Alt+↑/↓` switches chats, `Esc`
+  cancels the current action, and `Ctrl+/` lists all shortcuts.
+- **Local storage.** Messages are stored in one SQLite file and attachments
+  in the cache directory. Unlinking deletes both and removes this device from
+  your phone.
 
 ## What it does not do yet
 
@@ -143,14 +100,13 @@ Builds for every release are on the
 | Windows x64 and arm64 | `fastsapp-vX.Y.Z-<target>-setup.exe` (no administrator rights needed), or the `.zip` |
 | macOS, universal | `fastsapp-vX.Y.Z-macos-universal.dmg` |
 
-The macOS app is not notarized unless the release was signed: if macOS
-refuses to open it, right-click the app and choose Open once, or allow it
-under System Settings, Privacy & Security.
+Unsigned macOS releases are not notarized. If macOS blocks the app, allow it
+under **System Settings**, **Privacy & Security**.
 
 ### From source
 
-FastsApp needs a Rust toolchain (`rust-toolchain.toml` pins the exact
-version) and, on Linux, the usual GUI development packages:
+FastsApp needs Rust. `rust-toolchain.toml` pins the exact version. On Linux,
+it also needs GUI development packages:
 
 ```sh
 # Debian and Ubuntu
@@ -166,47 +122,42 @@ cargo install --path .
 fastsapp
 ```
 
-A `.desktop` file and an icon are in `packaging/` for a launcher entry.
+The desktop file and icon are in `packaging/`.
 
-`whatsapp-rust` is pinned to a git commit rather than the crates.io
-release: 0.7.0 on crates.io enables a `simd` feature by default that needs a
-nightly compiler, while the pinned commit builds on stable.
+`whatsapp-rust` is pinned to a Git commit because version 0.7.0 on crates.io
+enables a `simd` feature that needs nightly Rust. The pinned commit builds on
+stable Rust.
 
 ## Using it
 
-The first start shows a QR code. On the phone, open WhatsApp, go to
-**Linked devices**, tap **Link a device**, and point the camera at the
-screen. If the camera is not an option, click *Link with phone number
-instead*, type your number with its country code, and enter the code
-FastsApp shows on the phone.
+On first start, scan the QR code from WhatsApp under **Linked devices**,
+**Link a device**. To link without the camera, click **Link with phone number
+instead**, enter your number with its country code, then enter the shown code
+on your phone.
 
-WhatsApp then replays your recent history, which takes from a few seconds
-to a couple of minutes depending on how much there is; a banner at the top
-says when it is done. Everything after that arrives live, and the phone
-does not need to stay on the same network.
+WhatsApp then sends your recent history. This can take a few minutes. A banner
+shows the progress. New messages arrive live, and your phone does not need to
+stay on the same network.
 
-Right-click a chat or a message for its menu. Settings are behind the gear
-in the chat list, or `Ctrl+,`. The pencil beside the gear starts a chat
-with a new number and can save it as a contact; anyone met in a group can
-be messaged and saved from their card the same way, and a saved name
-reaches the phone and every linked device through WhatsApp's own contact
-sync.
+Right-click a chat or message to open its menu. Open Settings from the gear or
+with `Ctrl+,`. Use the pencil to message a new number or save a contact. You
+can also open a group member's contact card. Saved names sync through WhatsApp
+to your phone and linked devices.
 
-## Where it keeps things
+## Files
 
 | What | Linux | Notes |
 | --- | --- | --- |
-| Settings | `~/.config/fastsapp/settings.json` | Plain JSON, safe to edit |
+| Settings | `~/.config/fastsapp/settings.json` | JSON, safe to edit |
 | Device keys | `~/.local/state/fastsapp/session.db` | Owned by whatsapp-rust; deleting it unlinks |
-| Messages | `~/.local/state/fastsapp/archive.db` | SQLite; the raw message keeps the keys to fetch its attachment later |
+| Messages | `~/.local/state/fastsapp/archive.db` | SQLite; raw messages contain the keys needed to download attachments |
 | Attachments, avatars | `~/.cache/fastsapp/` | Safe to delete |
 | Saved stickers and packs | `~/.local/state/fastsapp/stickers/` | Plain WebP files; each pack is a folder |
 | Log of the last run | `~/.local/state/fastsapp/fastsapp.log` | `--verbose` for more |
 
-macOS and Windows use their platform's equivalents through the
-`directories` crate. A setup from when the app was called fastwhatsapp is
-moved to these paths the first time the renamed app starts, so the device
-stays linked.
+macOS and Windows use the standard platform directories selected by the
+`directories` crate. On first start, FastsApp moves data from its old
+`fastwhatsapp` paths so the device remains linked.
 
 ## Developing
 
@@ -218,9 +169,8 @@ cargo test --all-features                      # includes a headless layout of e
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-To ship a build whose GIF search works without asking for a key, bake one
-in at build time; it is never committed, and a key typed in Settings
-still wins:
+To include a default GIPHY key for GIF search, set it at build time. A key in
+Settings overrides it:
 
 ```sh
 FASTSAPP_GIPHY_KEY=your-key cargo build --release

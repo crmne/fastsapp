@@ -1,8 +1,8 @@
-//! WhatsApp's message markup, laid out for egui.
+//! WhatsApp message markup for egui.
 //!
 //! `*bold*`, `_italic_`, `~struck~`, `` `mono` ``, fenced blocks, `> `
-//! quotes, `* ` lists, web addresses (bare domains and e-mail included),
-//! and `@mentions` rendered as names. Emoji go through [`crate::emoji`].
+//! quotes, `* ` lists, links, email addresses, and named `@mentions`. Emoji
+//! go through [`crate::emoji`].
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -13,8 +13,7 @@ use egui::{Color32, FontId, Galley, Pos2, Stroke, TextFormat};
 use crate::emoji;
 use crate::theme;
 
-/// Someone named in a message: the digits WhatsApp wrote after the `@`,
-/// and what to show instead.
+/// WhatsApp mention id and display name.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mention {
     pub user: String,
@@ -30,23 +29,23 @@ pub struct Style {
     pub mention: Color32,
 }
 
-/// Laid-out text, ready to paint.
+/// Message text prepared for painting.
 pub struct Text {
     pub galley: Arc<Galley>,
     placements: Vec<String>,
-    /// Character ranges of the galley's text that open a web address.
+    /// Character ranges linked to web addresses.
     pub links: Vec<(Range<usize>, String)>,
-    /// A message of a few emoji and nothing else, shown large.
+    /// Whether the message is emoji-only and should use a larger size.
     pub big: bool,
 }
 
 impl Text {
-    /// The emoji behind the galley's placeholder glyphs, in order.
+    /// Emoji sequences represented by placeholder glyphs.
     pub fn placements(&self) -> &[String] {
         &self.placements
     }
 
-    /// The address under a character index, if any.
+    /// Returns the link at a character index.
     pub fn link_at(&self, character: usize) -> Option<&str> {
         self.links
             .iter()
@@ -64,7 +63,7 @@ struct Span {
     mono: bool,
     link: Option<String>,
     mention: bool,
-    /// The bar and indent of a quoted line.
+    /// Paints a quoted line's bar and indent.
     quote: bool,
 }
 
@@ -145,10 +144,8 @@ pub fn paint(ui: &egui::Ui, text: &Text, pos: Pos2, fallback: Color32) {
     emoji::paint(ui, &text.galley, pos, &text.placements);
 }
 
-/// Paints like [`paint`], with the galley handed to egui's text selection,
-/// so the reader can sweep part of a message and copy it. The response must
-/// sense clicks and drags. `visible` skips the emoji overlay for galleys
-/// registered off screen (a selection needs every galley, seen or not).
+/// Paints selectable text. The response must sense clicks and drags. Set
+/// `visible` false for off-screen galleys kept only for selection state.
 pub fn paint_selectable(
     ui: &egui::Ui,
     text: &Text,
@@ -170,7 +167,7 @@ pub fn paint_selectable(
     }
 }
 
-/// The text with markup removed and mentions named, for previews.
+/// Plain text with resolved mentions, used in previews.
 pub fn plain(text: &str, mentions: &[Mention]) -> String {
     parse(text, mentions)
         .into_iter()
@@ -178,8 +175,7 @@ pub fn plain(text: &str, mentions: &[Mention]) -> String {
         .collect()
 }
 
-/// A mention's digits replaced by a name, in a text without other markup
-/// handling; for quote summaries.
+/// Replaces mention ids with names without parsing other markup.
 pub fn name_mentions(text: &str, mentions: &[Mention]) -> String {
     if mentions.is_empty() {
         return text.to_owned();
@@ -200,8 +196,7 @@ fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
         }
         first = false;
         let trimmed = line.trim_end();
-        // A line of nothing but ``` opens or closes a block; ``` with text
-        // on the same line is WhatsApp's inline monospace, handled below.
+        // A standalone ``` toggles a block. Inline ``` is handled below.
         if trimmed.trim() == "```" {
             in_block = !in_block;
             continue;
@@ -277,7 +272,7 @@ fn inline(line: &str) -> Vec<Span> {
     };
     while i < chars.len() {
         let c = chars[i];
-        // ```mono```: WhatsApp's monospace marks, on one line.
+        // WhatsApp inline monospace: ```text```.
         if triple(i)
             && let Some(close) = (i + 3..chars.len()).find(|&at| triple(at))
             && close > i + 3
@@ -383,8 +378,7 @@ fn link_and_mention(span: Span, mentions: &[Mention]) -> Vec<Span> {
                 i = end;
                 continue;
             }
-            // A link starts with a letter or digit; a run of dashes or
-            // dots is not scanned again at every one of them.
+            // Links start with a letter or digit. Skip punctuation runs.
             if bytes[i].is_ascii_alphanumeric()
                 && let Some((end, url)) = link_at(text, i)
             {
@@ -430,8 +424,7 @@ fn mention_at<'m>(text: &str, at: usize, mentions: &'m [Mention]) -> Option<(usi
     Some((at + 1 + digits.len(), mention))
 }
 
-/// A web address or e-mail starting at `at`: where it ends and where it
-/// leads.
+/// Parses a web or email address at `at` and returns its end and target.
 fn link_at(text: &str, at: usize) -> Option<(usize, String)> {
     let rest = &text[at..];
     let token_end = rest
@@ -475,8 +468,7 @@ fn link_at(text: &str, at: usize) -> Option<(usize, String)> {
     None
 }
 
-/// Whether a token reads as a host name people would type without a
-/// scheme.
+/// Whether a token is a hostname without a scheme.
 fn is_domain(host: &str) -> bool {
     let host = host.split_once(':').map_or(host, |(name, _)| name);
     let labels: Vec<&str> = host.split('.').collect();
@@ -751,7 +743,7 @@ mod monospace_tests {
             ]
         );
         assert_eq!(mono("```hello```"), vec![("hello".into(), true)]);
-        // Nothing after it is swallowed.
+        // Preserve all text after an unmatched marker.
         assert_eq!(
             mono("```a```\nb"),
             vec![

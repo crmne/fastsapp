@@ -1,13 +1,13 @@
 #!/bin/bash
-# Build FastsApp.app from a GUI binary, on a macOS machine.
+# Build FastsApp.app from a GUI binary on macOS.
 #
 #   packaging/macos/bundle.sh <binary> <output.app> <version>
 #
-# Set CODESIGN_IDENTITY to sign with a Developer ID; the default is an ad-hoc
-# signature, which arm64 requires before the app will launch at all.
+# Set CODESIGN_IDENTITY to use a Developer ID. Otherwise, use the ad-hoc
+# signature required on arm64.
 #
-# The .icns is generated here from the committed 1024px PNG, because iconutil
-# only exists on macOS. The Info.plist template lives next to this script.
+# Generate the .icns from the committed 1024px PNG with macOS iconutil.
+# Info.plist is next to this script.
 set -euo pipefail
 
 binary="$1"
@@ -24,8 +24,7 @@ sed "s/__VERSION__/$version/g" "$here/Info.plist" > "$app/Contents/Info.plist"
 
 iconset="$(mktemp -d)/fastsapp.iconset"
 mkdir -p "$iconset"
-# iconutil reads only these base sizes, each with an optional @2x. It ignores
-# an icon_64x64 without saying so, so generating one is two wasted sips calls.
+# iconutil reads these base sizes and optional @2x versions. It ignores 64x64.
 for size in 16 32 128 256 512; do
     sips -z $size $size "$here/icon-1024.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
     double=$((size * 2))
@@ -33,7 +32,7 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/fastsapp.icns"
 
-# arm64 refuses to launch an unsigned bundle, so sign one way or another.
+# Sign with the configured identity or an ad-hoc signature.
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
     codesign --force --timestamp --options runtime \
         --sign "$CODESIGN_IDENTITY" "$app"

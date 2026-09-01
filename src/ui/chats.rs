@@ -25,7 +25,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.settings.sidebar_width = width;
         app.actions.push(Action::SettingsChanged);
     }
-    // The panel's right edge, so the list reads as its own surface.
+    // Separate the panel from the conversation.
     let rect = response.response.rect;
     ui.painter().vline(
         rect.right(),
@@ -144,16 +144,13 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
     let show_archive_row = !app.show_archived && archived > 0;
     if chats.is_empty() && !show_archive_row {
         let (title, body) = if app.show_archived {
-            ("Nothing archived", "Archived chats will show up here.")
+            ("Nothing archived", "Archived chats appear here.")
         } else if app.syncing {
-            (
-                "Bringing in your chats",
-                "History is on its way from your phone.",
-            )
+            ("Loading your chats", "Receiving history from your phone.")
         } else {
             (
                 "No chats yet",
-                "Messages arrive here as they come in. Start a chat from your phone.",
+                "New chats appear here. You can start one from your phone.",
             )
         };
         widgets::empty_state(ui, &palette, Icon::MessageCircle, title, body);
@@ -171,16 +168,13 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
                     continue;
                 }
                 let chat = &chats[index - usize::from(show_archive_row)];
-                // Keyed by the chat, not the row: an open menu follows its
-                // chat when the list reorders under it.
+                // Key by chat so an open menu survives list reordering.
                 ui.push_id(("chat", &chat.id), |ui| row(app, ui, chat));
             }
         });
 }
 
-/// What the one search bar finds, in sections: chats whose name or last
-/// words match, archived messages with the words in them, and contacts
-/// not yet talked to — so a chat can start from here too.
+/// Search results grouped into chats, messages, and contacts.
 fn results(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let chats: Vec<Chat> = app.visible_chats().into_iter().cloned().collect();
@@ -192,7 +186,7 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
             &palette,
             Icon::Search,
             "No results",
-            "Try another name, number, or words from a message.",
+            "Try another name, number, or message text.",
         );
         return;
     }
@@ -236,8 +230,7 @@ fn section(ui: &mut egui::Ui, palette: &Palette, label: &str) {
         });
 }
 
-/// A message the search found: the chat it lives in, what it says, and
-/// when. Clicking opens the chat at that message.
+/// A message search result. Clicking it opens the chat at that message.
 fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
     let palette = app.palette;
     let title = match app.chat(&hit.chat) {
@@ -279,7 +272,7 @@ fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
         let name_width = (right - stamp_galley.size().x - 8.0 - left).max(0.0);
         let name = widgets::line(ui, &title, theme::medium(14.5), palette.text, name_width, 1);
         name.paint(ui, pos2(left, name_top), palette.text);
-        // The words that matched, with their writer in a group.
+        // Show the sender for group messages.
         let line_y = rect.top() + 38.0;
         let mut x = left;
         if hit.from_me {
@@ -331,8 +324,7 @@ fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
     }
 }
 
-/// Someone from the phone's contacts with no chat yet; clicking starts
-/// one.
+/// A contact without a chat. Clicking starts one.
 fn contact_row(app: &mut App, ui: &mut egui::Ui, contact: &Contact) {
     let palette = app.palette;
     let name = contact
@@ -496,8 +488,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         let name = widgets::line(ui, &title, name_font, palette.text, name_width, 1);
         name.paint(ui, pos2(left, name_top), palette.text);
 
-        // The second line: what the newest message says, and who it is
-        // from in a group, with room for the badges on the right.
+        // Leave room for badges beside the latest-message preview.
         let mut badge_right = right;
         let line_y = rect.top() + 38.0;
         if unread {
@@ -632,7 +623,7 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
         for (label, until) in [
             ("Mute for 8 hours", Some(now + 8 * 3600)),
             ("Mute for a week", Some(now + 7 * 86_400)),
-            ("Mute always", Some(0)),
+            ("Mute indefinitely", Some(0)),
         ] {
             if widgets::menu_item(ui, palette, Some(Icon::BellOff), label) {
                 app.actions.push(Action::SetMuted(chat.id.clone(), until));

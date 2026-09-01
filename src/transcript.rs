@@ -1,18 +1,12 @@
-//! The form WhatsApp gives copied conversation: when a selection runs
-//! across several messages, each line carries the clock, the date, and who
-//! wrote it, like `[22:41, 8/18/2026] Ada: the analyzer is crazy good`.
+//! WhatsApp-style text for selections across messages:
+//! `[22:41, 8/18/2026] Ada: message`.
 //!
-//! egui's selection copies the raw galley text. Every message body drawn in
-//! a frame is remembered with its header, and when the copied text turns
-//! out to walk across more than one of those bodies, it is rebuilt with the
-//! headers in.
+//! Each frame registers its message bodies and headers. The output hook adds
+//! those headers when a selection spans multiple messages.
 
-/// The plugin that does the rebuilding. egui's selection queues the copied
-/// text from its own end-of-pass hook, after the app's frame code has run,
-/// so the rewrite happens in `output_hook`, the last look at the output
-/// before the backend takes it.
+/// Rewrites copied message text in `output_hook`, after egui's selection hook.
 pub struct CopyAnnotator {
-    /// Filled by the frame with every message body drawn, in order.
+    /// Message bodies drawn during the frame, in order.
     pub rows: std::sync::Arc<std::sync::Mutex<Vec<Row>>>,
 }
 
@@ -36,28 +30,24 @@ impl egui::plugin::Plugin for CopyAnnotator {
     }
 }
 
-/// One message body as drawn: the header to write before it, the text
-/// selection sees, and the emoji behind the body's placeholder glyphs (the
-/// galley holds `emoji::PLACEHOLDER` where a colour emoji is painted, and a
-/// copy must put the emoji themselves back).
+/// One drawn message body with its copy header and emoji placeholders.
 #[derive(Clone, Debug, Default)]
 pub struct Row {
     pub header: String,
     pub body: String,
     pub placements: Vec<String>,
-    /// What kind of message this is, when it is not plain text:
+    /// Non-text message description:
     /// "\[photo\]", "\[video\]", "\[document: notes.pdf\]", and so on.
     pub marker: Option<String>,
-    /// The reactions on the message, preformatted: " (❤️ Roberta)".
+    /// Preformatted reactions, such as " (❤️ Roberta)".
     pub reactions: String,
-    /// What the message replied to, preformatted:
+    /// Preformatted reply context:
     /// `(replying to Roberta: "…")`.
     pub quote: Option<String>,
 }
 
 impl Row {
-    /// One transcript line: the header, the reply context, the kind, the
-    /// selected text, and the reactions.
+    /// Formats one transcript line from its available parts.
     fn line(&self, body: &str) -> String {
         let mut line = self.header.clone();
         if let Some(quote) = &self.quote {
@@ -75,8 +65,7 @@ impl Row {
         line
     }
 
-    /// The stretch of this row's body from `start`, with every placeholder
-    /// replaced by the emoji it stood for.
+    /// Returns the body from `start` with emoji placeholders restored.
     fn restored(&self, start: usize, segment: &str) -> String {
         if self.placements.is_empty() {
             return segment.to_owned();
@@ -101,14 +90,13 @@ impl Row {
     }
 }
 
-/// What a copy needs done: headers put on when it spans messages, and the
-/// emoji restored either way. `None` when the text is not from the
-/// conversation (a field's copy, say) or needs nothing.
+/// Restores emoji and adds headers for multi-message selections. Returns
+/// `None` for unrelated or unchanged copied text.
 pub fn refine(copied: &str, rows: &[Row]) -> Option<String> {
     if let Some(annotated) = annotate(copied, rows) {
         return Some(annotated);
     }
-    // Within one message: no header, but the emoji come back.
+    // Single-message selections only need emoji restored.
     if !copied.contains(crate::emoji::PLACEHOLDER) {
         return None;
     }
@@ -120,12 +108,9 @@ pub fn refine(copied: &str, rows: &[Row]) -> Option<String> {
     None
 }
 
-/// Rebuilds copied text with a header per message, when it spans more than
-/// one of `rows`; anything else is left as it is (`None`).
+/// Adds a header per message when copied text spans multiple rows.
 ///
-/// A selection across messages takes a tail of the first body, whole bodies
-/// in between (messages without text contribute nothing), and a head of the
-/// last; egui joins bodies with one blank line or none.
+/// Matches egui's copied tail, complete middle bodies, and final head.
 pub fn annotate(copied: &str, rows: &[Row]) -> Option<String> {
     for start in 0..rows.len() {
         if let Some(lines) = walk(copied, &rows[start..])
@@ -137,12 +122,10 @@ pub fn annotate(copied: &str, rows: &[Row]) -> Option<String> {
     None
 }
 
-/// Tries to read `copied` as a tail of the first row's body followed by
-/// later rows; answers with one annotated line per row touched.
+/// Parses a copied tail followed by later rows into annotated lines.
 fn walk(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
     let row = rows.first()?;
-    // The longest tail first: a selection that starts mid-word still ends
-    // at this body's end, since it carried on into the next message.
+    // Try the longest tail first because the selection continues into the next row.
     for cut in 0..row.body.len() {
         if !row.body.is_char_boundary(cut) {
             continue;
@@ -163,9 +146,8 @@ fn walk(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
     None
 }
 
-/// After a separator, the next contribution is a whole body, or a head of
-/// one that uses the rest up. A message with no text between two that
-/// contribute was swept over too: its kind is said on a line of its own.
+/// Parses complete middle bodies and the final partial body after a separator.
+/// Non-text rows crossed by the selection contribute their message kind.
 fn follow(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
     let remaining = copied
         .strip_prefix("\n\n")
@@ -181,12 +163,12 @@ fn follow(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
             }
             continue;
         }
-        // The rest of the copy is the head of this body: the last message.
+        // The remaining text is the final body's prefix.
         if row.body.starts_with(remaining) {
             passed.push(row.line(&row.restored(0, remaining)));
             return Some(passed);
         }
-        // The whole body, with more after it.
+        // This complete body is followed by more copied text.
         if let Some(rest) = remaining.strip_prefix(row.body.as_str())
             && let Some(tail) = follow(rest, &rows[skipped + 1..])
         {
@@ -237,7 +219,7 @@ mod tests {
                  [18:27, 8/30/2026] Carmine: Sure"
             )
         );
-        // A blank line between bubbles reads the same.
+        // egui may insert a blank line between bubbles.
         let gapped = "good\n\nHello from France!\nSee you soon";
         assert_eq!(
             annotate(gapped, &rows()).as_deref(),
@@ -266,7 +248,7 @@ mod tests {
             placements: vec!["🎂".to_owned(), "🎈".to_owned()],
             ..Default::default()
         }];
-        // Within the one message: emoji restored, no header.
+        // Single-message copy: restore emoji without a header.
         assert_eq!(
             refine(&format!("{placeholder} done {placeholder}"), &rows).as_deref(),
             Some("🎂 done 🎈")
@@ -277,7 +259,7 @@ mod tests {
             "the offset counts placeholders before the selection"
         );
         assert_eq!(refine("well", &rows), None, "nothing to do");
-        // Across messages the headers carry restored bodies too.
+        // Multi-message copy: restore emoji and add headers.
         let mut both = rows.clone();
         both.push(Row {
             header: "[9:01, 1/2/2026] Ada: ".to_owned(),

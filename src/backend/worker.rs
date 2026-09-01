@@ -1,11 +1,7 @@
-//! The runtime side of the backend: the WhatsApp connection, the archive,
-//! attachments, and profile pictures, all on the tokio runtime.
+//! Tokio worker for WhatsApp, the archive, attachments, and profile pictures.
 //!
-//! The library hands over decrypted messages and a typed event stream; it
-//! keeps no chats, so every message goes into the archive here before the
-//! interface hears about it. Ids are canonical: a chat behind a privacy id
-//! (`@lid`) is filed under its phone number as soon as the two are known to
-//! belong together, so receipts, typing, and history all land on one row.
+//! Messages are archived before reaching the UI. Privacy ids (`@lid`) are
+//! canonicalized to phone-number ids as soon as their mapping is known.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -44,22 +40,22 @@ use crate::model::{
 };
 use crate::paths::AppDirs;
 
-/// How long after the last history chunk the sync is considered over.
+/// Delay after the last history chunk before sync is complete.
 const SYNC_QUIET: Duration = Duration::from_secs(20);
-/// A cached profile picture is trusted for this long.
+/// Profile-picture cache lifetime.
 const AVATAR_FRESH: Duration = Duration::from_secs(24 * 60 * 60);
-/// How long the phone gets to answer a request for older messages.
+/// Phone history-request timeout.
 const PHONE_PATIENCE: Duration = Duration::from_secs(30);
-/// How many older messages to ask the phone for at a time.
+/// Phone history-request batch size.
 const PHONE_BATCH: i32 = 50;
-/// `HistorySync.sync_type` for an answer to our own request.
+/// `HistorySync.sync_type` for on-demand history responses.
 const ON_DEMAND: i32 = 6;
-/// The longest side of the little picture sent ahead of an attachment.
+/// Maximum attachment-preview dimension.
 const THUMBNAIL_SIDE: u32 = 96;
-/// How many unfetched sticker messages the picker fills in at a time.
+/// Sticker download batch size for the picker.
 const STICKER_FETCH_LIMIT: usize = 40;
 
-/// One of the phone's recent stickers, as something the client can fetch.
+/// Downloadable recent sticker from the phone.
 struct PhoneSticker(wa::StickerMetadata);
 
 impl Downloadable for PhoneSticker {
@@ -88,7 +84,7 @@ impl Downloadable for PhoneSticker {
     }
 }
 
-/// This build's version, as WhatsApp's device properties spell it.
+/// App version in WhatsApp device-property format.
 fn app_version() -> wa::device_props::AppVersion {
     let mut parts = env!("CARGO_PKG_VERSION")
         .split('.')
@@ -101,8 +97,7 @@ fn app_version() -> wa::device_props::AppVersion {
     }
 }
 
-/// A sticker's identity across messages and the phone's list: its plain
-/// file hash, else the encrypted one, as hex.
+/// Stable sticker hash across messages and the phone's recent list.
 fn sticker_hash(sha256: Option<&[u8]>, enc_sha256: Option<&[u8]>) -> Option<String> {
     let bytes = sha256
         .filter(|bytes| !bytes.is_empty())
@@ -122,13 +117,13 @@ pub async fn run(
         Err(error) => {
             log::error!("could not open the message archive, keeping it in memory: {error}");
             let _ = events.send(Event::Error(format!(
-                "The message archive could not be opened; nothing will be kept: {error}"
+                "Could not open the message archive. Messages will not be saved: {error}"
             )));
             match Archive::in_memory() {
                 Ok(archive) => archive,
                 Err(error) => {
                     let _ = events.send(Event::Link(LinkStatus::Failed(format!(
-                        "SQLite is unusable: {error}"
+                        "Could not start SQLite: {error}"
                     ))));
                     return;
                 }
@@ -217,7 +212,7 @@ struct Worker {
     me_lid: Option<String>,
     me_name: Option<String>,
     me_about: Option<String>,
-    /// Privacy id user part to phone number user part.
+    /// Privacy-id user part to phone-number user part.
     lid_to_pn: HashMap<String, String>,
     contacts: HashMap<String, Contact>,
     status: LinkStatus,
@@ -226,37 +221,33 @@ struct Worker {
     qr: Option<String>,
     syncing: bool,
     sync_deadline: Option<Instant>,
-    /// Groups queued or asked about already; one query goes out per turn,
-    /// since a burst at sync time runs into the server's rate limit.
+    /// Groups queued or already requested. Queries are rate-limited.
     group_info_requested: HashSet<String>,
-    /// Groups waiting for their turn, front first.
+    /// Pending group metadata queue.
     group_info_queue: std::collections::VecDeque<String>,
-    /// Failed queries: how often each was tried, for the backoff.
+    /// Group metadata attempt counts.
     group_info_tries: HashMap<String, u32>,
-    /// When to ask again about groups whose query failed.
+    /// Next retry time for failed group metadata requests.
     group_info_retry: Vec<(Instant, String)>,
     presence_subscribed: HashSet<String>,
-    /// Requests for older messages the phone has not answered yet, by the
-    /// chat asked about: when it was asked and what its oldest message was.
+    /// Pending phone-history request time and boundary by chat.
     pending_older: HashMap<ChatId, (Instant, super::PageKey)>,
-    /// Chats already told once that the phone is not answering.
+    /// Chats already notified about a phone-history timeout.
     older_warned: HashSet<ChatId>,
-    /// Pictures asked for while the link was down or that failed, with how
-    /// often they were tried; retried once connected.
+    /// Deferred profile-picture requests and retry counts.
     pending_avatars: HashMap<(String, bool), u32>,
-    /// The phone's recent stickers being fetched for the picker, by hash.
+    /// Active recent-sticker downloads by hash.
     sticker_fetches: HashSet<String>,
-    /// Sticker messages being fetched for the picker, by chat and id.
+    /// Active chat-sticker downloads by chat and message id.
     sticker_downloads: HashSet<(ChatId, String)>,
 }
 
-/// A history chunk, decoded off the worker but not yet filed: ids are as
-/// WhatsApp wrote them, canonicalised once the chunk's own mappings are in.
+/// Decoded history chunk waiting to be canonicalized and archived.
 struct ParsedHistory {
     chats: Vec<ParsedChat>,
     push_names: Vec<(String, String)>,
     lids: Vec<(String, String)>,
-    /// The phone's recently used stickers, sent along with the history.
+    /// Recent phone stickers included with history sync.
     stickers: Vec<wa::StickerMetadata>,
 }
 
@@ -270,7 +261,7 @@ struct ParsedChat {
     last_activity: i64,
     pn_jid: Option<String>,
     lid_jid: Option<String>,
-    /// Whether the phone says it holds more than it sent.
+    /// Whether the phone reports more available history.
     more_on_phone: Option<bool>,
     messages: Vec<ParsedMessage>,
     revoked: Vec<String>,
@@ -298,8 +289,7 @@ impl Worker {
         self.waker.wake();
     }
 
-    /// Runs a chat setting's sync to the phone off the worker, when there
-    /// is a link; the archive is already updated, so a failure only logs.
+    /// Syncs a chat setting to the phone without blocking the worker.
     fn tell_phone<F, Fut>(&self, chat: &str, call: F)
     where
         F: FnOnce(Arc<Client>, Jid) -> Fut + Send + 'static,
@@ -335,8 +325,7 @@ impl Worker {
         }
     }
 
-    /// The preview under a chat's name names people by phone number, so
-    /// the interface can put names to them.
+    /// Resolves phone numbers in chat-row previews.
     fn polish_chat(&self, chat: &mut Chat) {
         if let Some(last) = chat.last.as_mut() {
             last.summary = self.pn_tokens(&last.summary);
@@ -372,7 +361,7 @@ impl Worker {
         }
     }
 
-    /// Our own id as chats and messages use it.
+    /// Canonical id used for our account.
     fn me(&self) -> String {
         self.me_pn
             .clone()
@@ -409,13 +398,8 @@ impl Worker {
         self.emit_chats();
     }
 
-    /// Re-reads every archived protobuf once after an update that learned
-    /// to read more out of it (previews, mentions, thumbnails, the
-    /// forwarded mark), so older chats look the same as new ones.
-    /// Attachments are filed by absolute path. When the cache moved (the
-    /// app's rename did that) or a file was cleared out, a path that no
-    /// longer exists is pointed at the file in the current cache, or
-    /// forgotten so the attachment is fetched again when wanted.
+    /// Re-derives archived rows from raw protobufs after parser changes. Also
+    /// repairs moved attachment paths or clears missing files for redownload.
     fn relocate_media(&mut self) {
         let dir = self.dirs.media_cache_dir();
         let rows = match self.archive.media_paths() {
@@ -519,7 +503,7 @@ impl Worker {
             Ok(store) => store,
             Err(error) => {
                 self.set_status(LinkStatus::Failed(format!(
-                    "The device store could not be opened: {error}"
+                    "Could not open the device store: {error}"
                 )));
                 return;
             }
@@ -527,9 +511,7 @@ impl Worker {
         let sender = self.wa_sender.clone();
         let bot = Bot::builder()
             .with_backend(store)
-            // What the phone lists under Linked devices: the app's name and
-            // version, with the desktop icon. Read at pairing only, so a
-            // device linked earlier keeps what it was linked as.
+            // WhatsApp reads the linked-device name, version, and icon at pairing.
             .with_device_props(
                 DevicePropsOverride::new()
                     .with_os("FastsApp")
@@ -552,7 +534,7 @@ impl Worker {
                 self.set_status(LinkStatus::Connecting);
             }
             Err(error) => self.set_status(LinkStatus::Failed(format!(
-                "WhatsApp could not start: {error}"
+                "Could not start WhatsApp: {error}"
             ))),
         }
     }
@@ -605,8 +587,7 @@ impl Worker {
         }
     }
 
-    /// The archive's id for a JID: the phone-number form when the JID is a
-    /// privacy id we can resolve.
+    /// Returns the archive id for a JID, resolving known privacy ids.
     fn canonical(&self, jid: &Jid) -> String {
         if jid.is_lid()
             && let Some(pn) = self.lid_to_pn.get(jid.user_base())
@@ -638,8 +619,7 @@ impl Worker {
         self.contacts.get(id).and_then(Contact::label)
     }
 
-    /// What to call someone in a quote or a mention: "You", the address
-    /// book, the name they chose, or the number.
+    /// Resolves a name for a quote or mention.
     fn name_for(&self, id: &str) -> Option<String> {
         if self.is_me(id) || id == self.me() {
             return Some("You".to_owned());
@@ -650,7 +630,7 @@ impl Worker {
         crate::model::phone_of(id).map(crate::util::phone)
     }
 
-    /// The best name for a chat right now.
+    /// Returns the best current chat name.
     fn chat_name(&self, id: &str, push_name: Option<&str>) -> String {
         if id == self.me() {
             return "You".to_owned();
@@ -699,8 +679,7 @@ impl Worker {
         self.refresh_chat_name(id);
     }
 
-    /// Renames a chat whose stored name was a fallback, now that better is
-    /// known.
+    /// Replaces a fallback chat name when a better one is known.
     fn refresh_chat_name(&mut self, id: &str) {
         let Ok(Some(chat)) = self.archive.chat(id) else {
             return;
@@ -738,11 +717,7 @@ impl Worker {
         }
     }
 
-    /// Puts a group in line to be asked about, or at the head when `force`.
-    /// One query goes out per turn (`pump_group_info`): dozens of unnamed
-    /// groups arrive together with the history, and a burst of metadata
-    /// queries runs into the server's rate limit, which is how groups were
-    /// left saying "Group".
+    /// Queues a group metadata request, at the front when `force` is true.
     fn request_group_info(&mut self, id: &str, force: bool) {
         if force {
             self.group_info_requested.remove(id);
@@ -764,14 +739,13 @@ impl Worker {
         }
     }
 
-    /// How long a group whose query failed waits before its next turn.
+    /// Group metadata retry delay.
     fn group_retry_delay(tries: u32) -> Duration {
         Duration::from_secs(30 * 2u64.pow(tries.saturating_sub(1).min(5)))
             .min(Duration::from_secs(600))
     }
 
-    /// Sends the next group metadata queries, a couple per tick, and puts
-    /// failed ones back in line when their wait is over.
+    /// Sends a limited number of group metadata requests per tick.
     fn pump_group_info(&mut self) {
         let now = Instant::now();
         let due: Vec<String> = {
@@ -794,8 +768,7 @@ impl Worker {
         }
     }
 
-    /// A metadata query failed: wait longer each time, or stop when the
-    /// server's refusal was final.
+    /// Schedules metadata retry with backoff, or stops on permanent failure.
     fn handle_failed_group(&mut self, chat: String, permanent: bool) {
         self.group_info_requested.remove(&chat);
         if permanent {
@@ -810,10 +783,10 @@ impl Worker {
         }
     }
 
-    /// Asks WhatsApp about one group, now.
+    /// Requests metadata for one group.
     fn query_group_info(&mut self, id: &str) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(id)) else {
-            // Not linked yet: back in line for when the link is up.
+            // Requeue until the link is available.
             self.group_info_requested.remove(id);
             let tries = self.group_info_tries.entry(id.to_owned()).or_insert(0);
             *tries += 1;
@@ -869,7 +842,7 @@ impl Worker {
                 }
                 Err(error) => {
                     let text = error.to_string();
-                    // Not a member any more, or the group is gone: final.
+                    // Missing, forbidden, and unauthorized groups do not retry.
                     let permanent = ["item-not-found", "forbidden", "not-authorized"]
                         .iter()
                         .any(|word| text.contains(word));
@@ -899,7 +872,7 @@ impl Worker {
                 self.pair_code = None;
                 self.pairing_phone = None;
                 self.emit(Event::Error(format!(
-                    "Pairing by phone failed: {}",
+                    "Could not link by phone number: {}",
                     error.error
                 )));
                 let status = self.unlinked();
@@ -937,9 +910,7 @@ impl Worker {
                         if let Err(error) = client.presence().set_available().await {
                             log::debug!("presence not announced: {error}");
                         }
-                        // The account's read receipts privacy, to tell the
-                        // settings page; whatsapp-rust enforces it on its
-                        // own when receipts are sent.
+                        // whatsapp-rust also enforces the account privacy setting.
                         match client.fetch_privacy_settings().await {
                             Ok(settings) => {
                                 use whatsapp_rust::wacore::iq::privacy::{
@@ -988,7 +959,7 @@ impl Worker {
                         .map(|message| format!(": {message}"))
                         .unwrap_or_default();
                     self.emit(Event::Error(format!(
-                        "Connection failed ({:?}){detail}",
+                        "WhatsApp connection failed ({:?}){detail}",
                         failure.reason
                     )));
                 }
@@ -1006,7 +977,7 @@ impl Worker {
             }
             E::ClientOutdated(_) => {
                 self.set_status(LinkStatus::Failed(
-                    "WhatsApp rejected this client as outdated; update FastsApp".to_owned(),
+                    "WhatsApp rejected this version of FastsApp. Update the app".to_owned(),
                 ));
             }
             E::Messages(batch) => {
@@ -1165,7 +1136,7 @@ impl Worker {
         let _ = std::fs::remove_dir_all(self.dirs.media_cache_dir());
         self.emit(Event::Chats(Vec::new()));
         self.set_status(LinkStatus::LoggedOut);
-        // A fresh store, so the next connection asks the phone to link again.
+        // Recreate the store so the next connection starts linking.
         self.start_bot().await;
     }
 
@@ -1212,8 +1183,7 @@ impl Worker {
         );
         let status = match receipt.r#type {
             ReceiptType::Delivered => Delivery::Delivered,
-            // Delivered to a device that is inactive: the message reached
-            // it, which is what the second tick says.
+            // An inactive-device receipt still means delivered.
             ReceiptType::Inactive => Delivery::Delivered,
             ReceiptType::Read => Delivery::Read,
             ReceiptType::Played => Delivery::Played,
@@ -1222,10 +1192,7 @@ impl Worker {
                 self.emit_chat(&chat);
                 return;
             }
-            // "Delivered to one of our own devices". In the chat with
-            // ourselves that device is the recipient, and the phone shows
-            // the message read; anywhere else it says nothing about the
-            // peer.
+            // Own-device delivery counts as read only in the self chat.
             ReceiptType::Sender if chat == self.me() => Delivery::Read,
             _ => return,
         };
@@ -1249,7 +1216,7 @@ impl Worker {
             "receipt moved {changed} of {} messages in {chat} to {status:?}",
             receipt.message_ids.len()
         );
-        // A read receipt covers everything before it too.
+        // Read receipts advance all earlier messages.
         if status >= Delivery::Read
             && newest > 0
             && let Ok(ids) = self.archive.advance_statuses(&chat, newest, status, at)
@@ -1261,8 +1228,7 @@ impl Worker {
         self.emit_chat(&chat);
     }
 
-    /// The people a message names, as WhatsApp wrote them and as the
-    /// archive knows them.
+    /// Returns raw mention tokens and canonical ids.
     fn mentions_of(&self, raw: &[String]) -> Vec<MentionRef> {
         raw.iter()
             .filter_map(|jid| {
@@ -1312,7 +1278,7 @@ impl Worker {
                     if let Some(edited) = protocol.edited_message.as_option()
                         && let Some(mut content) = classify(edited.get_base_message())
                     {
-                        // An edited caption keeps the file already fetched.
+                        // Preserve downloaded media when updating a caption.
                         if let Ok(Some(existing)) = self.archive.message(&chat, &target)
                             && let (Some(new), Some(old)) =
                                 (content.media_mut(), existing.content.media())
@@ -1396,7 +1362,7 @@ impl Worker {
             from_me: false,
             timestamp: info.timestamp.timestamp(),
             content: Content::Unsupported {
-                what: "waiting for this message; open WhatsApp on your phone".to_owned(),
+                what: "Waiting for this message. Open WhatsApp on your phone".to_owned(),
             },
             status: Delivery::None,
             delivered_at: None,
@@ -1411,7 +1377,7 @@ impl Worker {
         self.store_message(row, None, push_name.as_deref());
     }
 
-    /// Files a message and tells the interface about the chat and the row.
+    /// Archives a message and emits chat and row updates.
     fn store_message(&mut self, message: Message, raw: Option<Vec<u8>>, push_name: Option<&str>) {
         let chat = message.chat.clone();
         self.ensure_chat(&chat, if message.from_me { None } else { push_name });
@@ -1440,8 +1406,7 @@ impl Worker {
             .ok()
             .flatten()
             .unwrap_or(message);
-        // Live and from someone else: the desktop may want to say so.
-        // History being replayed is not news.
+        // Notify only for live incoming messages, not history replay.
         let incoming = (is_new && !stored.from_me && !self.syncing).then(|| stored.clone());
         self.emit(Event::Messages {
             chat: chat.clone(),
@@ -1479,8 +1444,7 @@ impl Worker {
                 )
             })
             .unwrap_or_default();
-        // A quoted copy often comes without its mention list; the `@user`
-        // tokens in the text are the next best thing.
+        // Recover quote mentions from `@user` tokens when metadata is missing.
         let summary = self.pn_tokens(&summary);
         let mentions = if listed.is_empty() {
             self.mention_tokens(&summary)
@@ -1496,8 +1460,7 @@ impl Worker {
         })
     }
 
-    /// `@user` tokens in a text with privacy ids replaced by the phone
-    /// numbers the archive names people by, where known.
+    /// Replaces known privacy ids in `@user` tokens with phone-number ids.
     fn pn_tokens(&self, text: &str) -> String {
         let mut out = String::with_capacity(text.len());
         let mut rest = text;
@@ -1521,8 +1484,7 @@ impl Worker {
         out
     }
 
-    /// The people `@user` tokens in a text stand for, by the archive's
-    /// ids, for text that came without a mention list.
+    /// Infers canonical mention ids from `@user` tokens.
     fn mention_tokens(&self, text: &str) -> Vec<MentionRef> {
         let mut found = Vec::new();
         let mut rest = text;
@@ -1575,7 +1537,7 @@ impl Worker {
             Ok(Err(error)) => {
                 log::warn!("a history chunk could not be read: {error}");
                 self.emit(Event::Error(format!(
-                    "Part of the history could not be read: {error}"
+                    "Could not read part of the chat history: {error}"
                 )));
             }
             Err(error) => log::warn!("history parsing panicked: {error}"),
@@ -1586,10 +1548,8 @@ impl Worker {
         self.emit_chats();
     }
 
-    /// Files a decoded chunk. `metadata` says whether the chunk speaks for
-    /// the chats' state (unread, archived…) or only carries messages, as an
-    /// answer to a request does. Returns, per chat, how many messages came
-    /// and whether the phone holds more.
+    /// Archives a history chunk. `metadata` controls chat-state updates.
+    /// Returns each chat's message count and whether the phone has more.
     fn apply_history(
         &mut self,
         parsed: ParsedHistory,
@@ -1644,8 +1604,7 @@ impl Worker {
                 let name = match chat.name.filter(|name| !name.is_empty()) {
                     Some(name) if ChatKind::from_id(&id) == ChatKind::Group => name,
                     Some(name) => {
-                        // A direct chat's conversation name is the address
-                        // book name when the phone has one.
+                        // Prefer the phone's address-book name for direct chats.
                         let contact = self.contacts.entry(id.clone()).or_insert_with(|| Contact {
                             id: id.clone(),
                             full_name: None,
@@ -1763,14 +1722,12 @@ impl Worker {
         filed
     }
 
-    /// Delivers what the phone sent for a request for older messages.
+    /// Completes pending requests covered by an on-demand history chunk.
     fn answer_older(&mut self, filed: Vec<(ChatId, usize, Option<bool>)>) {
         for (chat, count, more_on_phone) in filed {
             let more = count > 0 && more_on_phone != Some(false);
             let Some((_, (before_time, before_id))) = self.pending_older.remove(&chat) else {
-                // An answer nobody waits for any more (it came late, or the
-                // request was given up on): what it brought is in the
-                // archive, and the app pages the archive again on this.
+                // Late responses are already archived; tell the app to page again.
                 self.emit(Event::OlderFetched { chat, more });
                 continue;
             };
@@ -1795,7 +1752,7 @@ impl Worker {
         }
     }
 
-    /// Gives up on requests the phone has not answered.
+    /// Times out unanswered phone-history requests.
     fn expire_older_requests(&mut self) {
         let expired: Vec<ChatId> = self
             .pending_older
@@ -1809,11 +1766,10 @@ impl Worker {
                 chat: chat.clone(),
                 more: true,
             });
-            // Once per chat: the app backs off on its own, the reader does
-            // not need telling every time.
+            // Report the timeout once per chat; later retries back off silently.
             if self.older_warned.insert(chat) {
                 self.emit(Event::Error(
-                    "Your phone did not send older messages; is it online?".to_owned(),
+                    "Your phone did not send older messages. Check that it is online".to_owned(),
                 ));
             }
         }
@@ -1824,13 +1780,11 @@ impl Worker {
             return;
         }
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
-            // Offline: nothing to say, the banner says it; the app asks
-            // again once connected.
+            // Offline requests retry after reconnection; the banner shows state.
             self.emit(Event::OlderFetched { chat, more: true });
             return;
         };
-        // History sync sometimes brings a chat with no messages at all; the
-        // phone still answers a request anchored at the present.
+        // Chats without messages request history from the current time.
         let (id, from_me, timestamp) = match self.archive.oldest(&chat) {
             Ok(Some(oldest)) => (oldest.id, oldest.from_me, oldest.timestamp),
             _ => (String::new(), false, crate::util::now()),
@@ -1846,7 +1800,7 @@ impl Worker {
                 log::warn!("older messages not requested: {error}");
                 let _ = commands.send(Command::OlderFailed {
                     chat: chat.clone(),
-                    error: format!("could not ask the phone for older messages: {error}"),
+                    error: format!("Could not request older messages from your phone: {error}"),
                 });
             }
         });
@@ -1928,11 +1882,10 @@ impl Worker {
             Command::SendSticker { chat, path } => self.send_sticker(chat, path),
             Command::SaveSticker { path } => match self.save_sticker(&path) {
                 Ok(()) => self.emit_stickers(),
-                Err(error) => self.emit(Event::Error(format!("Sticker not saved: {error}"))),
+                Err(error) => self.emit(Event::Error(format!("Could not save sticker: {error}"))),
             },
             Command::ForgetSticker { path } => {
-                // Only files of the saved collection; the path came from
-                // the picker but stays checked anyway.
+                // Restrict deletion to files in the saved-sticker directory.
                 if path.starts_with(self.dirs.saved_sticker_dir())
                     && std::fs::remove_file(&path).is_ok()
                 {
@@ -1957,7 +1910,7 @@ impl Worker {
                         .pick_file()
                     {
                         Some(path) => super::sticker_import::import_archive(&path, &packs),
-                        // The dialog was closed; nothing to say.
+                        // Ignore file-picker cancellation.
                         None => Err(String::new()),
                     };
                     let _ = commands.send(Command::StickerPackImported { result });
@@ -1990,7 +1943,7 @@ impl Worker {
             }
             Command::ContactSaved { id, name, error } => {
                 if let Some(error) = error {
-                    self.emit(Event::Error(format!("Contact not saved: {error}")));
+                    self.emit(Event::Error(format!("Could not save contact: {error}")));
                     return;
                 }
                 let contact = Contact {
@@ -2001,10 +1954,10 @@ impl Worker {
                 if let Err(error) = self.archive.upsert_contact(&contact) {
                     log::warn!("could not store the contact: {error}");
                 }
-                // The stored row keeps the push name the upsert left alone.
+                // Preserve the stored push name during contact updates.
                 let stored = self.archive.contact(&id).ok().flatten().unwrap_or(contact);
                 self.emit(Event::Contacts(vec![stored]));
-                self.emit(Event::Info(format!("{name} is in your contacts")));
+                self.emit(Event::Info(format!("Added {name} to contacts")));
                 self.emit_chat(&id);
             }
             Command::NewContact {
@@ -2020,8 +1973,7 @@ impl Worker {
                 let commands = self.commands.clone();
                 let jid = Jid::pn(&phone);
                 tokio::spawn(async move {
-                    // The same check the phone runs before starting a chat
-                    // with a typed number.
+                    // Use WhatsApp's registration check before opening the chat.
                     let registered = match client.contacts().is_on_whatsapp(&[jid]).await {
                         Ok(results) => results.iter().any(|result| result.is_registered),
                         Err(error) => {
@@ -2069,10 +2021,12 @@ impl Worker {
             Command::StickerPackImported { result } => match result {
                 Ok(name) => {
                     self.emit_stickers();
-                    self.emit(Event::Info(format!("The pack \"{name}\" is in")));
+                    self.emit(Event::Info(format!("Added sticker pack \"{name}\"")));
                 }
                 Err(error) if error.is_empty() => self.emit_stickers(),
-                Err(error) => self.emit(Event::Error(format!("Sticker pack not added: {error}"))),
+                Err(error) => {
+                    self.emit(Event::Error(format!("Could not add sticker pack: {error}")))
+                }
             },
             Command::DeleteStickerPack { dir } => {
                 let root = self.packs_dir();
@@ -2212,7 +2166,9 @@ impl Worker {
                 }
                 Err(error) => {
                     self.pairing_phone = None;
-                    self.emit(Event::Error(format!("Pairing by phone failed: {error}")));
+                    self.emit(Event::Error(format!(
+                        "Could not link by phone number: {error}"
+                    )));
                     let status = self.unlinked();
                     self.set_status(status);
                 }
@@ -2242,7 +2198,7 @@ impl Worker {
             }
             Command::Sent { chat, id, error } => {
                 if id.is_empty() {
-                    // Not a message: an errand in the chat failed.
+                    // This is a command failure, not a failed message send.
                     if let Some(error) = error {
                         self.emit(Event::Error(error));
                     }
@@ -2400,9 +2356,7 @@ impl Worker {
         });
     }
 
-    /// Brings a stored row up to date with what is known now: a quote
-    /// filed under a privacy id before its number was learned, or before
-    /// the name was.
+    /// Refreshes stored quote ids and names with current mappings.
     fn polish(&self, message: &mut Message) {
         if let Some(quoted) = message.quoted.as_mut() {
             let sender = self.canonical_str(&quoted.sender);
@@ -2447,7 +2401,7 @@ impl Worker {
             Err(error) => self.emit(Event::Error(format!("Could not read the chat: {error}"))),
         }
         if before.is_none() && ChatKind::from_id(&chat) == ChatKind::Group {
-            // Opening a group is the moment its members matter.
+            // Force group metadata when opening a group.
             self.request_group_info(&chat, false);
         }
         if before.is_none()
@@ -2478,7 +2432,7 @@ impl Worker {
             self.emit(Event::Media {
                 chat,
                 message: id,
-                result: Err("The attachment's keys are not in the archive".to_owned()),
+                result: Err("Attachment download keys are missing".to_owned()),
             });
             return;
         };
@@ -2522,13 +2476,11 @@ impl Worker {
                 self.emit(Event::Media {
                     chat,
                     message: id,
-                    result: Err("Nothing to download in this message".to_owned()),
+                    result: Err("This message has no downloadable file".to_owned()),
                 });
                 return;
             };
-        // What a re-upload request needs, should the file be off the
-        // servers: WhatsApp answers with a fresh path and the download is
-        // tried once more with it.
+        // Keep metadata needed for one media re-upload request and retry.
         let media_key = base
             .image_message
             .as_option()
@@ -2618,8 +2570,7 @@ impl Worker {
                     let expired = ["403", "404", "410"].iter().any(|code| text.contains(code));
                     match (&jid, expired && !media_key.is_empty()) {
                         (Some(jid), true) => {
-                            // Off the servers: ask WhatsApp to put it back
-                            // (the phone re-uploads it), then fetch again.
+                            // Ask the phone to re-upload expired media, then retry once.
                             let request = MediaReuploadRequest {
                                 msg_id: &id,
                                 chat_jid: jid,
@@ -2637,10 +2588,12 @@ impl Worker {
                                         None => Err(text),
                                     }
                                 }
-                                Ok(_) => Err("No longer on WhatsApp's servers".to_owned()),
+                                Ok(_) => {
+                                    Err("No longer available on WhatsApp's servers".to_owned())
+                                }
                                 Err(error) => {
                                     log::info!("media re-upload was not granted: {error}");
-                                    Err("No longer on WhatsApp's servers".to_owned())
+                                    Err("No longer available on WhatsApp's servers".to_owned())
                                 }
                             }
                         }
@@ -2652,8 +2605,7 @@ impl Worker {
         });
     }
 
-    /// Fetches what the picker lacks a file for: the phone's recent
-    /// stickers, and sticker messages nobody has opened yet.
+    /// Downloads missing recent and archived stickers for the picker.
     fn fetch_missing_stickers(&mut self) {
         let Some(client) = self.client.clone() else {
             return;
@@ -2709,9 +2661,7 @@ impl Worker {
         }
     }
 
-    /// The picker's list: every sticker with a file, the phone's recent
-    /// ones and those in the archive, most recently used first, one entry
-    /// per distinct sticker.
+    /// Returns distinct downloaded stickers by most recent use.
     fn emit_stickers(&mut self) {
         let mut seen = HashSet::new();
         let mut list: Vec<(i64, PathBuf)> = Vec::new();
@@ -2756,13 +2706,12 @@ impl Worker {
         });
     }
 
-    /// Where imported packs live, one folder each.
+    /// Root directory for imported sticker packs.
     fn packs_dir(&self) -> PathBuf {
         self.dirs.saved_sticker_dir().join("packs")
     }
 
-    /// The imported packs, newest first; a pack is its folder's WebP
-    /// files in name order.
+    /// Returns imported packs, newest first, with files in name order.
     fn sticker_packs(&self) -> Vec<crate::model::StickerPack> {
         let Ok(entries) = std::fs::read_dir(self.packs_dir()) else {
             return Vec::new();
@@ -2805,8 +2754,7 @@ impl Worker {
         packs.into_iter().map(|(_, pack)| pack).collect()
     }
 
-    /// The kept collection: the files of the saved directory, newest
-    /// save first.
+    /// Returns saved sticker files, newest first.
     fn saved_stickers(&self) -> Vec<PathBuf> {
         let Ok(entries) = std::fs::read_dir(self.dirs.saved_sticker_dir()) else {
             return Vec::new();
@@ -2830,8 +2778,7 @@ impl Worker {
         saved.into_iter().map(|(_, path)| path).collect()
     }
 
-    /// Copies a sticker file into the saved directory, named by its
-    /// content, so saving the same sticker twice keeps one copy.
+    /// Saves a sticker under its content hash to deduplicate copies.
     fn save_sticker(&self, path: &Path) -> Result<(), String> {
         use sha2::{Digest, Sha256};
         let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
@@ -2865,7 +2812,7 @@ impl Worker {
             self.emit(Event::Avatar { id, full, path });
             return;
         }
-        // Our own picture answers to whichever of our ids WhatsApp prefers.
+        // Try both of our ids for our profile picture.
         let candidates: Vec<Jid> = if self.is_me(&id) || id == self.me() {
             [self.me_pn.clone(), self.me_lid.clone()]
                 .into_iter()
@@ -2888,8 +2835,7 @@ impl Worker {
             .as_ref()
             .is_some_and(|client| client.is_connected());
         let Some(client) = self.client.clone().filter(|_| connected) else {
-            // Not connected yet: the interface keeps waiting, and the lookup
-            // runs once the link is up.
+            // Defer profile-picture lookup until connected.
             self.pending_avatars.entry((id, full)).or_insert(0);
             return;
         };
@@ -2952,7 +2898,7 @@ impl Worker {
         });
     }
 
-    /// Runs the picture lookups that waited for the link, or failed.
+    /// Retries deferred or failed profile-picture requests.
     fn retry_avatars(&mut self) {
         if !self
             .client
@@ -2979,8 +2925,7 @@ impl Worker {
         }
     }
 
-    /// Everything between a quoted message and what is loaded, so the view
-    /// can scroll to it.
+    /// Loads archived messages needed to scroll to a quote.
     fn search_messages(&mut self, query: String) {
         match self.archive.search_messages(&query, 50) {
             Ok(mut messages) => {
@@ -3002,7 +2947,7 @@ impl Worker {
                 complete: false,
             });
             self.emit(Event::Error(
-                "That message is not on this computer".to_owned(),
+                "This message is not stored on this computer".to_owned(),
             ));
             return;
         };
@@ -3044,7 +2989,7 @@ impl Worker {
                 let _ = commands.send(Command::Sent {
                     chat,
                     id: String::new(),
-                    error: Some(format!("the edit was not sent: {error}")),
+                    error: Some(format!("Could not send the edit: {error}")),
                 });
             }
         });
@@ -3068,7 +3013,9 @@ impl Worker {
                 let _ = commands.send(Command::Sent {
                     chat,
                     id: String::new(),
-                    error: Some(format!("the message was not deleted for everyone: {error}")),
+                    error: Some(format!(
+                        "Could not delete the message for everyone: {error}"
+                    )),
                 });
             }
         });
@@ -3084,7 +3031,7 @@ impl Worker {
             let chat = chat.clone();
             let dir = self.dirs.media_cache_dir();
             let me = self.me();
-            // The caption goes with the first file, as on the phone.
+            // Attach the caption to the first file.
             let caption = if index == 0 { caption.clone() } else { None };
             tokio::spawn(async move {
                 let outcome = async {
@@ -3114,7 +3061,7 @@ impl Worker {
                         let _ = commands.send(Command::Sent {
                             chat,
                             id: String::new(),
-                            error: Some(format!("could not send the file: {error}")),
+                            error: Some(format!("Could not send the file: {error}")),
                         });
                     }
                 }
@@ -3141,7 +3088,7 @@ impl Worker {
             let outcome = async {
                 let encoded = tokio::task::spawn_blocking(move || {
                     let image = image::RgbaImage::from_raw(width, height, rgba)
-                        .ok_or_else(|| "the clipboard picture is malformed".to_owned())?;
+                        .ok_or_else(|| "Clipboard image data is invalid".to_owned())?;
                     encode_jpeg(&image::DynamicImage::ImageRgba8(image), 88)
                 })
                 .await
@@ -3162,15 +3109,14 @@ impl Worker {
                     let _ = commands.send(Command::Sent {
                         chat,
                         id: String::new(),
-                        error: Some(format!("could not send the picture: {error}")),
+                        error: Some(format!("Could not send the picture: {error}")),
                     });
                 }
             }
         });
     }
 
-    /// Encodes a recording to OGG/Opus and sends it as a voice message,
-    /// quoting whatever was being replied to.
+    /// Encodes and sends an OGG/Opus voice message with optional quote.
     fn send_voice(&mut self, chat: ChatId, samples: Vec<f32>, quoting: Option<String>) {
         let Some(client) = self.client.clone() else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
@@ -3241,15 +3187,14 @@ impl Worker {
                     let _ = commands.send(Command::Sent {
                         chat,
                         id: String::new(),
-                        error: Some(format!("could not send the voice message: {error}")),
+                        error: Some(format!("Could not send the voice message: {error}")),
                     });
                 }
             }
         });
     }
 
-    /// The blue microphone on the sender's side: a played receipt, sent
-    /// the way the phone sends it.
+    /// Sends a played receipt for an incoming voice message.
     fn mark_played(&mut self, chat: ChatId, message: String, sender: String) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             return;
@@ -3298,7 +3243,7 @@ impl Worker {
                     let _ = commands.send(Command::Sent {
                         chat,
                         id: String::new(),
-                        error: Some(format!("could not send the sticker: {error}")),
+                        error: Some(format!("Could not send the sticker: {error}")),
                     });
                 }
             }
@@ -3348,23 +3293,21 @@ impl Worker {
                     let _ = commands.send(Command::Sent {
                         chat,
                         id: String::new(),
-                        error: Some(format!("could not send the GIF: {error}")),
+                        error: Some(format!("Could not send the GIF: {error}")),
                     });
                 }
             }
         });
     }
 
-    /// Files an uploaded attachment's message and sends it.
+    /// Archives and sends an uploaded attachment message.
     fn outbound(&mut self, chat: ChatId, row: Message, raw: Vec<u8>) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
         };
         let Ok(message) = wa::Message::decode_from_slice(&raw) else {
-            self.emit(Event::Error(
-                "The attachment could not be encoded".to_owned(),
-            ));
+            self.emit(Event::Error("Could not encode the attachment".to_owned()));
             return;
         };
         let id = row.id.clone();
@@ -3409,8 +3352,7 @@ impl Worker {
 
 // --- free helpers ----------------------------------------------------------
 
-/// What a chat is called before anyone tells us: the phone number, or the
-/// bare id.
+/// Fallback chat name from a phone number or bare id.
 fn fallback_name(id: &str) -> String {
     match crate::model::phone_of(id) {
         Some(digits) => crate::util::phone(digits),
@@ -3419,7 +3361,7 @@ fn fallback_name(id: &str) -> String {
     }
 }
 
-/// WhatsApp writes some timestamps in milliseconds; normalise to seconds.
+/// Normalizes WhatsApp timestamps to seconds.
 fn seconds(timestamp: i64) -> i64 {
     if timestamp > 100_000_000_000 {
         timestamp / 1000
@@ -3491,7 +3433,7 @@ fn non_empty(text: &Option<String>) -> Option<String> {
     text.clone().filter(|text| !text.trim().is_empty())
 }
 
-/// The context (quote, mentions) a message carries, wherever it sits.
+/// Extracts quote and mention context from a message.
 fn context_of(base: &wa::Message) -> Option<&wa::ContextInfo> {
     if let Some(text) = base.extended_text_message.as_option() {
         return text.context_info.as_option();
@@ -3520,7 +3462,7 @@ fn context_of(base: &wa::Message) -> Option<&wa::ContextInfo> {
     None
 }
 
-/// The JIDs a message names with `@`, as WhatsApp wrote them.
+/// Returns raw JIDs mentioned by a message.
 fn mentioned_of(base: &wa::Message) -> Vec<String> {
     context_of(base)
         .map(|context| context.mentioned_jid.clone())
@@ -3533,15 +3475,14 @@ fn forwarded_of(base: &wa::Message) -> bool {
     })
 }
 
-/// The first web address in a text, for a preview whose message did not
-/// say which link it was about.
+/// Finds the first web address when preview metadata omits its URL.
 fn first_link(text: &str) -> Option<String> {
     text.split_whitespace()
         .find(|token| token.starts_with("http://") || token.starts_with("https://"))
         .map(|token| token.trim_end_matches(['.', ',', ')', ']']).to_owned())
 }
 
-/// The small picture that travels with an attachment or a link preview.
+/// Extracts the attachment or link-preview thumbnail.
 fn thumbnail_of(base: &wa::Message) -> Option<Vec<u8>> {
     let bytes = if let Some(image) = base.image_message.as_option() {
         image.jpeg_thumbnail.clone()
@@ -3561,8 +3502,7 @@ fn thumbnail_of(base: &wa::Message) -> Option<Vec<u8>> {
     bytes.filter(|bytes| !bytes.is_empty())
 }
 
-/// What a message shows, or `None` for protocol traffic the user never
-/// sees.
+/// Converts a protocol message to visible content, or `None` for internal traffic.
 fn classify(base: &wa::Message) -> Option<Content> {
     if let Some(text) = base.text_content() {
         let preview = base.extended_text_message.as_option().and_then(|extended| {
@@ -3771,8 +3711,7 @@ fn classify(base: &wa::Message) -> Option<Content> {
     unsupported("message")
 }
 
-/// An attachment ready to go: the protobuf WhatsApp gets, and what the
-/// archive keeps.
+/// Uploaded attachment protobuf and archive content.
 struct Prepared {
     message: wa::Message,
     content: Content,
@@ -3791,14 +3730,13 @@ fn encode_jpeg(image: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, Stri
     Ok(bytes)
 }
 
-/// The little picture WhatsApp shows before an attachment is fetched.
+/// Builds the pre-download attachment thumbnail.
 fn thumbnail_jpeg(image: &image::DynamicImage) -> Option<Vec<u8>> {
     let small = image.thumbnail(THUMBNAIL_SIDE, THUMBNAIL_SIDE);
     encode_jpeg(&small, 60).ok()
 }
 
-/// Uploads a recording and builds the push-to-talk message that carries
-/// it, waveform and all, so every client draws it as a voice message.
+/// Uploads a recording and builds a push-to-talk message with waveform.
 async fn prepare_voice(
     client: &Client,
     bytes: Vec<u8>,
@@ -3837,8 +3775,7 @@ async fn prepare_voice(
     })
 }
 
-/// Uploads a file and builds the message that carries it. Pictures go as
-/// JPEG, which is what every WhatsApp client expects.
+/// Uploads a file and builds its message. Images are encoded as JPEG.
 async fn prepare_media(
     client: &Client,
     bytes: Vec<u8>,
@@ -3984,8 +3921,7 @@ async fn prepare_media(
     })
 }
 
-/// Uploads a WebP sticker and builds its message; the library has no
-/// builder for stickers, so the fields are set by hand.
+/// Uploads a WebP sticker and builds its message without a library builder.
 async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, String> {
     let (animated, width, height) = tokio::task::spawn_blocking({
         let bytes = bytes.clone();
@@ -4051,8 +3987,7 @@ fn percent_encode(text: &str) -> String {
     out
 }
 
-/// Asks GIPHY, and fetches a still of each answer so the picker can show
-/// it. An empty query lists what is trending.
+/// Searches GIPHY and downloads result stills. Empty queries list trending GIFs.
 fn search_gifs(query: &str, key: &str, dir: &Path) -> Result<Vec<Gif>, GifError> {
     let plain = |message: String| GifError {
         message,
@@ -4076,19 +4011,18 @@ fn search_gifs(query: &str, key: &str, dir: &Path) -> Result<Vec<Gif>, GifError>
         Ok(mut response) => response
             .body_mut()
             .read_to_string()
-            .map_err(|error| plain(format!("GIPHY did not answer: {error}")))?,
-        // 401 and 403 are about the key itself: missing, revoked, or over
-        // its limits. The picker turns this into the set-a-key screen.
+            .map_err(|error| plain(format!("GIPHY request failed: {error}")))?,
+        // Treat 401 and 403 as API-key failures for the picker.
         Err(ureq::Error::StatusCode(code @ (401 | 403))) => {
             return Err(GifError {
-                message: format!("GIPHY refused the API key (error {code})."),
+                message: format!("GIPHY rejected the API key (error {code})."),
                 bad_key: true,
             });
         }
-        Err(error) => return Err(plain(format!("GIPHY did not answer: {error}"))),
+        Err(error) => return Err(plain(format!("GIPHY request failed: {error}"))),
     };
     let json: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|error| plain(format!("GIPHY answered oddly: {error}")))?;
+        .map_err(|error| plain(format!("Invalid GIPHY response: {error}")))?;
     if let Some(message) = json["meta"]["msg"].as_str()
         && let Some(status) = json["meta"]["status"]
             .as_u64()
@@ -4101,7 +4035,7 @@ fn search_gifs(query: &str, key: &str, dir: &Path) -> Result<Vec<Gif>, GifError>
     }
     let data = json["data"]
         .as_array()
-        .ok_or_else(|| plain("GIPHY answered without results".to_owned()))?;
+        .ok_or_else(|| plain("GIPHY response contained no results".to_owned()))?;
     std::fs::create_dir_all(dir).map_err(|error| plain(error.to_string()))?;
     let mut gifs: Vec<(Gif, Option<String>)> = data
         .iter()
@@ -4166,8 +4100,7 @@ fn search_gifs(query: &str, key: &str, dir: &Path) -> Result<Vec<Gif>, GifError>
     Ok(gifs.into_iter().map(|(gif, _)| gif).collect())
 }
 
-/// Keeps a copy of a sent attachment where the view can show it, and
-/// builds the archive row for it.
+/// Copies a sent attachment to media storage and builds its archive row.
 async fn file_outbound(
     client: &Client,
     chat: &str,
@@ -4232,7 +4165,7 @@ async fn file_outbound(
     Ok((row, prepared.message.encode_to_vec()))
 }
 
-/// Decodes one history chunk into rows, off the worker thread.
+/// Decodes a history chunk off the worker thread.
 fn parse_history(compressed: &[u8]) -> Result<ParsedHistory, String> {
     let mut stream = HistorySyncStream::new(compressed, MAX_DECOMPRESSED);
     let mut chats = Vec::new();
@@ -4533,10 +4466,7 @@ mod receipt_tests {
     const PEER: &str = "4917663430455@s.whatsapp.net";
     const PEER_LID: &str = "167650256810092@lid";
 
-    /// A worker with an in-memory archive and nothing on the other end of
-    /// its channels; the receivers live as long as the worker.
-    /// Unnamed groups line up for one metadata query at a time; a failure
-    /// waits its turn again, unless the refusal was final.
+    /// Creates a test worker with an in-memory archive and open channels.
     #[test]
     fn group_questions_wait_in_line() {
         let (mut worker, _events, _inbox, _wa) = worker();
@@ -4552,20 +4482,20 @@ mod receipt_tests {
         worker.request_group_info("2-2@g.us", false);
         worker.request_group_info("1-1@g.us", false);
         assert_eq!(worker.group_info_queue.len(), 2, "asked once each");
-        // A forced ask goes to the head of the line.
+        // Forced requests go to the front.
         worker.request_group_info("1-1@g.us", true);
         assert_eq!(
             worker.group_info_queue.front().map(String::as_str),
             Some("1-1@g.us")
         );
-        // Without a client, a turn schedules a retry instead of querying.
+        // Without a client, processing schedules a retry.
         worker.pump_group_info();
         assert!(worker.group_info_queue.is_empty() || worker.group_info_retry.len() >= 2);
-        // A failure the server calls final is not asked again.
+        // Permanent failures are not requeued.
         worker.group_info_retry.clear();
         worker.handle_failed_group("gone@g.us".to_owned(), true);
         assert!(worker.group_info_retry.is_empty());
-        // An ordinary failure waits and returns.
+        // Retry transient failures after their delay.
         worker.handle_failed_group("busy@g.us".to_owned(), false);
         assert_eq!(worker.group_info_retry.len(), 1);
         assert_eq!(worker.group_info_tries.get("busy@g.us"), Some(&1));

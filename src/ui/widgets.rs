@@ -1,4 +1,4 @@
-//! Building blocks the views share: avatars, fields, menus, badges.
+//! Shared avatars, fields, menus, and badges.
 
 use std::path::Path;
 
@@ -10,7 +10,7 @@ use crate::emoji;
 use crate::model::Delivery;
 use crate::theme::{self, Icon, Palette};
 
-/// A laid-out line (or few lines) of text with its emoji, ready to paint.
+/// Laid-out text and its color emoji placements.
 pub struct Line {
     pub galley: std::sync::Arc<egui::Galley>,
     placements: Vec<String>,
@@ -27,8 +27,7 @@ impl Line {
     }
 }
 
-/// Text cut to `max_rows` lines within `width`, ending in an ellipsis, with
-/// emoji drawn in colour.
+/// Lays out text within `width` and `max_rows`, with an ellipsis and color emoji.
 pub fn line(
     ui: &Ui,
     text: &str,
@@ -40,8 +39,7 @@ pub fn line(
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = width;
     job.wrap.max_rows = max_rows;
-    // A single line fills its row to the ellipsis; several lines break at
-    // words, or a card description ends in a split word.
+    // Break anywhere for single-line ellipsis; wrap multi-line text at words.
     job.wrap.break_anywhere = max_rows == 1;
     job.wrap.overflow_character = Some('…');
     let mut placements = Vec::new();
@@ -59,8 +57,7 @@ pub fn line(
     }
 }
 
-/// A single line of text with emoji, allocated in the layout and truncated
-/// to the available width.
+/// Allocates one truncated line with color emoji.
 pub fn rich_text(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32) -> egui::Response {
     let width = ui.available_width().max(1.0);
     let line = line(ui, text, font, color, width, 1);
@@ -71,7 +68,7 @@ pub fn rich_text(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32) ->
     response
 }
 
-/// Like [`rich_text`], and the text can be swept and copied.
+/// Selectable version of [`rich_text`].
 pub fn selectable_rich_text(
     ui: &mut Ui,
     text: &str,
@@ -81,8 +78,7 @@ pub fn selectable_rich_text(
     let width = ui.available_width().max(1.0);
     let line = line(ui, text, font, color, width, 1);
     let (rect, response) = ui.allocate_exact_size(line.size(), Sense::click_and_drag());
-    // Registered with the copy rewriter, so emoji in a copied name come
-    // out as themselves rather than as placeholder glyphs.
+    // Register emoji placements so copied text restores the original sequences.
     if let Some(rows) = ui.ctx().data(|data| {
         data.get_temp::<std::sync::Arc<std::sync::Mutex<Vec<crate::transcript::Row>>>>(
             egui::Id::new("copy-rows"),
@@ -111,8 +107,7 @@ pub fn selectable_rich_text(
     response
 }
 
-/// A round picture, or initials on a colour derived from the id when there
-/// is none. The picture is loaded by egui from its file.
+/// Round profile picture, or id-colored initials when no picture is available.
 pub fn avatar(
     ui: &mut Ui,
     palette: &Palette,
@@ -167,7 +162,7 @@ pub fn paint_avatar(
     }
 }
 
-/// The check marks under our own messages.
+/// Outgoing-message status ticks.
 pub fn ticks(ui: &Ui, palette: &Palette, rect: Rect, status: Delivery) {
     let (icon, color) = match status {
         Delivery::None => return,
@@ -180,7 +175,7 @@ pub fn ticks(ui: &Ui, palette: &Palette, rect: Rect, status: Delivery) {
     theme::paint_icon(ui, icon, rect, rect.height(), color);
 }
 
-/// The unread count on a chat row.
+/// Chat-row unread badge.
 pub fn badge(ui: &Ui, palette: &Palette, at: egui::Pos2, count: u32, muted: bool) -> f32 {
     let label = if count > 99 {
         "99+".to_owned()
@@ -202,7 +197,7 @@ pub fn badge(ui: &Ui, palette: &Palette, at: egui::Pos2, count: u32, muted: bool
     width
 }
 
-/// How wide a menu must be to fit its entries, so it is no wider.
+/// Minimum width needed for menu labels.
 pub fn menu_width(ui: &Ui, labels: &[&str], icons: bool) -> f32 {
     let widest = labels
         .iter()
@@ -294,7 +289,7 @@ pub fn menu_separator(ui: &mut Ui, palette: &Palette) {
     );
 }
 
-/// The frame every popup menu uses.
+/// Shared popup-menu frame.
 pub fn menu_frame(palette: &Palette) -> egui::Frame {
     egui::Frame::new()
         .fill(palette.overlay)
@@ -328,7 +323,7 @@ pub fn empty_state(ui: &mut Ui, palette: &Palette, icon: Icon, title: &str, body
     });
 }
 
-/// A rounded search box with a magnifier and a clear button.
+/// Search field with icon and clear button.
 pub fn search_field(
     ui: &mut Ui,
     palette: &Palette,
@@ -409,7 +404,7 @@ pub fn search_field(
     response
 }
 
-/// A toggle drawn as a switch.
+/// Switch control.
 pub fn switch(ui: &mut Ui, palette: &Palette, on: &mut bool) -> egui::Response {
     let size = vec2(40.0, 22.0);
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
@@ -432,7 +427,7 @@ pub fn switch(ui: &mut Ui, palette: &Palette, on: &mut bool) -> egui::Response {
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A labelled row in a settings section.
+/// Labeled settings row.
 pub fn setting_row(
     ui: &mut Ui,
     palette: &Palette,
@@ -472,7 +467,7 @@ pub fn paint_vertical_gradient(ui: &Ui, rect: Rect, top: Color32, bottom: Color3
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
-/// A pill with a short label, for "Today" separators and pinned marks.
+/// Small pill label used for date separators and pinned markers.
 pub fn chip(ui: &mut Ui, palette: &Palette, label: &str) -> egui::Response {
     let galley =
         ui.painter()

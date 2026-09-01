@@ -1,17 +1,14 @@
-//! What the interface shows: chats, messages, and the actions views emit.
+//! UI models for chats, messages, and view actions.
 //!
-//! These are the app's own types, translated from the protocol's in
-//! `backend.rs`, so a view never touches a protobuf and the archive on disk
-//! has a stable shape.
+//! The backend translates protocol types into these models, keeping protobufs
+//! out of views and giving the archive a stable shape.
 
 use std::path::PathBuf;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-/// A chat is keyed by its JID as text: `<phone>@s.whatsapp.net` for a
-/// person, `<id>@g.us` for a group, `<id>@lid` for a person behind a
-/// privacy-preserving id.
+/// Chat JID string: `<phone>@s.whatsapp.net`, `<id>@g.us`, or `<id>@lid`.
 pub type ChatId = String;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,7 +16,7 @@ pub type ChatId = String;
 pub enum ChatKind {
     Direct,
     Group,
-    /// A newsletter channel or a broadcast list; read-only here.
+    /// Read-only newsletter or broadcast list.
     Broadcast,
 }
 
@@ -36,22 +33,21 @@ impl ChatKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chat {
     pub id: ChatId,
-    /// The best name known: the address book's, then the push name, then
-    /// the phone number.
+    /// Best known address-book, push, or phone-number name.
     pub name: String,
     pub kind: ChatKind,
-    /// Unix seconds of the newest message, for ordering.
+    /// Latest-message Unix timestamp used for ordering.
     pub last_activity: i64,
     pub unread: u32,
     pub archived: bool,
     pub pinned: bool,
-    /// Unix seconds until which notifications are off; `Some(0)` is forever.
+    /// Mute end as Unix seconds; `Some(0)` means indefinite.
     pub muted_until: Option<i64>,
-    /// The newest message, as the chat list shows it.
+    /// Latest message shown in the chat list.
     pub last: Option<LastMessage>,
-    /// Members of a group, as canonical ids; empty until WhatsApp answers.
+    /// Canonical group-member ids, empty until loaded.
     pub participants: Vec<String>,
-    /// An announcement group where only admins post, and we are not one.
+    /// Whether this is an announcement group where we cannot post.
     pub read_only: bool,
 }
 
@@ -59,7 +55,7 @@ pub struct Chat {
 pub struct LastMessage {
     pub from_me: bool,
     pub sender: String,
-    /// Who sent it, in a group.
+    /// Group-message sender.
     pub sender_name: Option<String>,
     pub summary: String,
     pub status: Delivery,
@@ -91,26 +87,26 @@ impl Chat {
         matches!(self.muted_until, Some(0)) || self.muted_until.is_some_and(|until| until > now)
     }
 
-    /// The phone number for a direct chat, as digits.
+    /// Direct-chat phone number as digits.
     pub fn phone(&self) -> Option<&str> {
         phone_of(&self.id)
     }
 }
 
-/// The digits of a `<phone>@s.whatsapp.net` id.
+/// Extracts digits from a `<phone>@s.whatsapp.net` id.
 pub fn phone_of(id: &str) -> Option<&str> {
     let (user, server) = id.split_once('@')?;
     (server == "s.whatsapp.net" && user.chars().all(|c| c.is_ascii_digit())).then_some(user)
 }
 
-/// How far our own message has travelled.
+/// Outgoing-message delivery state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Delivery {
-    /// Not ours; receipts do not apply.
+    /// Incoming message without outgoing receipts.
     #[default]
     None,
-    /// Handed to the backend, not yet acknowledged by the server.
+    /// Sent to the backend but not acknowledged by the server.
     Pending,
     Sent,
     Delivered,
@@ -121,49 +117,46 @@ pub enum Delivery {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Message {
-    /// WhatsApp's id; unique within a chat.
+    /// WhatsApp message id, unique within a chat.
     pub id: String,
     pub chat: ChatId,
-    /// The sender's JID as text; ours when `from_me`.
+    /// Sender JID, including our own for outgoing messages.
     pub sender: String,
-    /// The sender's push name when the message arrived, for groups.
+    /// Group sender's push name at receipt time.
     pub sender_name: Option<String>,
     pub from_me: bool,
     /// Unix seconds.
     pub timestamp: i64,
     pub content: Content,
     pub status: Delivery,
-    /// Unix seconds when the first delivered receipt came, for our own
-    /// messages; `None` for what predates the receipt log.
+    /// First delivered-receipt Unix timestamp for outgoing messages.
     #[serde(default)]
     pub delivered_at: Option<i64>,
-    /// Unix seconds when the first read (or played) receipt came.
+    /// First read or played receipt Unix timestamp.
     #[serde(default)]
     pub read_at: Option<i64>,
     pub quoted: Option<Quoted>,
     pub reactions: Vec<Reaction>,
     pub edited: bool,
-    /// People named with `@` in the text or caption.
+    /// Mentions in the text or caption.
     #[serde(default)]
     pub mentions: Vec<MentionRef>,
-    /// Passed on from another chat.
+    /// Forwarded from another chat.
     #[serde(default)]
     pub forwarded: bool,
-    /// The small picture WhatsApp sends ahead of an attachment or with a
-    /// link preview, as JPEG bytes.
+    /// JPEG preview sent with an attachment or link.
     #[serde(default)]
     pub thumbnail: Option<Vec<u8>>,
 }
 
-/// Someone named in a message: the digits after the `@` as WhatsApp wrote
-/// them, and the canonical id they stand for.
+/// Raw WhatsApp mention token and its canonical id.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MentionRef {
     pub user: String,
     pub id: String,
 }
 
-/// What WhatsApp found behind a link when the message was sent.
+/// Link metadata attached by WhatsApp.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinkPreview {
     pub url: String,
@@ -172,7 +165,7 @@ pub struct LinkPreview {
 }
 
 impl Message {
-    /// One line describing the message, for chat rows and quotes.
+    /// One-line summary used in chat rows and quotes.
     pub fn summary(&self) -> String {
         self.content.summary()
     }
@@ -184,7 +177,7 @@ pub struct Quoted {
     pub sender: String,
     pub sender_name: Option<String>,
     pub summary: String,
-    /// The people the quoted text names, so they show as names.
+    /// Mentions in quoted text.
     #[serde(default)]
     pub mentions: Vec<MentionRef>,
 }
@@ -218,7 +211,7 @@ pub enum Content {
         media: Media,
         seconds: Option<u32>,
         voice_note: bool,
-        /// The 64 bars the sender's app drew for a voice message.
+        /// Sender-provided 64-bar voice waveform.
         #[serde(default)]
         waveform: Vec<u8>,
     },
@@ -248,8 +241,7 @@ pub enum Content {
     },
     /// "This message was deleted."
     Revoked,
-    /// Something this client does not render; `what` names the protobuf
-    /// field so the user knows what they are missing.
+    /// Unsupported content with a user-facing description.
     Unsupported {
         what: String,
     },
@@ -331,19 +323,18 @@ fn with_caption(label: &str, caption: &Option<String>) -> String {
     }
 }
 
-/// An attachment: what is known before it is fetched, and the file once it
-/// has been. The keys to fetch it stay in the raw message the archive
-/// keeps, never here.
+/// Attachment metadata, download state, and optional local file. Download keys
+/// remain in the archive's raw message.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Media {
     pub mime: String,
     pub size: u64,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// The decrypted file, once downloaded.
+    /// Decrypted downloaded file.
     #[serde(default)]
     pub path: Option<PathBuf>,
-    /// Live download state; not persisted.
+    /// Non-persisted download state.
     #[serde(skip)]
     pub state: MediaState,
 }
@@ -356,8 +347,7 @@ pub enum MediaState {
     Failed(String),
 }
 
-/// A person the account knows: the address book name arrives through app
-/// state sync, the push name with each message.
+/// Contact names from app-state sync and message push names.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Contact {
     pub id: String,
@@ -373,8 +363,7 @@ impl Contact {
             .or(self.push_name.as_deref().filter(|name| !name.is_empty()))
     }
 
-    /// The name as WhatsApp shows it: the address book's as is, a name the
-    /// person chose for themselves with a tilde in front.
+    /// WhatsApp display name: address-book name or `~`-prefixed push name.
     pub fn label(&self) -> Option<String> {
         if let Some(name) = self.full_name.as_deref().filter(|name| !name.is_empty()) {
             return Some(name.to_owned());
@@ -400,8 +389,7 @@ pub enum PickerTab {
     Stickers,
 }
 
-/// A named set of stickers imported together, kept as one folder of
-/// WebP files whose folder name is the pack's.
+/// Imported sticker pack stored as a named WebP directory.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StickerPack {
     pub name: String,
@@ -409,12 +397,11 @@ pub struct StickerPack {
     pub stickers: Vec<PathBuf>,
 }
 
-/// Why a GIF search came back empty.
+/// GIF search failure.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GifError {
     pub message: String,
-    /// GIPHY refused the key itself, so searching again is pointless
-    /// until another key is set.
+    /// GIPHY rejected the API key.
     pub bad_key: bool,
 }
 
@@ -422,7 +409,7 @@ pub struct GifError {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gif {
     pub id: String,
-    /// A still frame on disk, once fetched.
+    /// Downloaded still-frame path.
     pub still: Option<PathBuf>,
     pub mp4: String,
     pub width: u32,
@@ -434,9 +421,9 @@ pub enum Dialog {
     Shortcuts,
     About,
     ConfirmUnlink,
-    /// Link with a phone number instead of a QR code; holds the number typed.
+    /// Phone number used for pairing-code linking.
     PairWithPhone,
-    /// A number typed by hand, to message or to save under a name.
+    /// Manually entered number for messaging or saving a contact.
     NewContact,
     ChatInfo(ChatId),
 }
@@ -454,19 +441,17 @@ pub struct Toast {
     pub created: Instant,
 }
 
-/// Everything a view can ask the app to do. Views push these while drawing;
-/// the app applies them after the frame, so no view mutates state it is
-/// borrowing.
+/// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Open(Page),
     OpenChat(ChatId),
-    /// Open a chat with someone not yet talked to, creating it locally.
+    /// Creates and opens a chat for a contact without one.
     StartChat {
         id: ChatId,
         name: String,
     },
-    /// Open a chat at one of its messages (a search hit).
+    /// Opens a chat at a message search result.
     OpenMessage {
         chat: ChatId,
         message: String,
@@ -475,94 +460,91 @@ pub enum Action {
     SendText {
         chat: ChatId,
         text: String,
-        /// The message being replied to.
+        /// Quoted message id.
         quoting: Option<String>,
     },
-    /// Say whether we are typing in a chat.
+    /// Updates our typing state in a chat.
     Composing {
         chat: ChatId,
         composing: bool,
     },
     MarkRead(ChatId),
     LoadOlder(ChatId),
-    /// Ask the phone for messages older than what the archive has.
+    /// Requests messages older than the local archive.
     FetchOlder(ChatId),
     Download {
         chat: ChatId,
         message: String,
     },
-    /// Play or pause a voice message or audio file that is on disk.
+    /// Plays or pauses a downloaded voice or audio message.
     PlayVoice {
         message: String,
         path: PathBuf,
     },
-    /// Jump to a point, 0 to 1, in one and play from there.
+    /// Seeks to a fraction from 0 to 1 and starts playback.
     SeekVoice {
         message: String,
         path: PathBuf,
         fraction: f32,
     },
-    /// The microphone: start a voice message, drop it, or send it.
+    /// Starts, cancels, or sends a voice recording.
     StartRecording,
     CancelRecording,
     SendRecording,
     OpenFile(PathBuf),
     OpenUrl(String),
     CopyText(String),
-    /// Start composing a reply to a message in the open chat.
+    /// Starts a reply to a message in the open chat.
     Reply(String),
     CancelReply,
-    /// Put one of our own messages back in the composer to change it.
+    /// Loads an outgoing message into the composer for editing.
     Edit(String),
     CancelEdit,
-    /// Take back a message of ours from everyone.
+    /// Revokes an outgoing message for everyone.
     DeleteForEveryone(String),
-    /// Forget a message on this computer only.
+    /// Deletes a message locally.
     DeleteForMe(String),
-    /// Choose files to send to the open chat.
+    /// Opens the attachment picker for the current chat.
     Attach,
     SendFiles(Vec<PathBuf>),
-    /// A picture from the clipboard, as straight RGBA.
+    /// Clipboard image as straight-alpha RGBA.
     PasteImage {
         width: usize,
         height: usize,
         rgba: Vec<u8>,
     },
-    /// Open the picker on a tab, or close it if that tab is showing.
+    /// Toggles a picker tab.
     TogglePicker(PickerTab),
     ClosePicker,
-    /// Put an emoji into the composer where the cursor is.
+    /// Inserts an emoji at the composer cursor.
     InsertEmoji(String),
     SendSticker(PathBuf),
-    /// Keep a copy of a sticker seen in a chat, for the picker's Saved
-    /// row.
+    /// Saves a sticker for the picker.
     SaveSticker(PathBuf),
-    /// Take a sticker out of the Saved row again.
+    /// Removes a saved sticker.
     ForgetSticker(PathBuf),
-    /// Fetch a whole pack from a pasted signal.art link.
+    /// Imports a sticker pack from a signal.art link.
     ImportStickerUrl(String),
-    /// Ask for a .wastickers (or zip) file and import it as a pack.
+    /// Selects and imports a .wastickers or zip file.
     PickStickerArchive,
-    /// Delete an imported pack, folder and all.
+    /// Deletes an imported pack directory.
     DeleteStickerPack(PathBuf),
-    /// Open the info card's name editor, prefilled.
+    /// Opens the prefilled contact-name editor.
     EditContact(String),
-    /// Save a person under a name, through WhatsApp's own contact sync,
-    /// so the phone and every linked device learn it too. `first` is what
-    /// WhatsApp shows on its own; the surname completes the full name.
+    /// Saves a contact through WhatsApp contact sync. `first` is the short
+    /// display name and `last` completes the full name.
     SaveContact {
         id: String,
         first: String,
         last: String,
     },
-    /// A number typed by hand: check it is on WhatsApp, then message it,
-    /// saving it first when a first name is given.
+    /// Checks a number, optionally saves it, and opens its chat.
     NewContact {
         phone: String,
         first: String,
         last: String,
     },
-    /// Look GIFs up; an empty query lists what is trending.
+    /// Searches GIFs or lists trending results for an empty query.
     SearchGifs(String),
     SendGif(Gif),
     React {
@@ -578,37 +560,35 @@ pub enum Action {
     FocusSearch,
     FocusComposer,
     ScrollToBottom,
-    /// Bring a message of the open chat into view.
+    /// Scrolls the open chat to a message.
     ScrollTo(String),
-    /// The chat list's search text changed.
+    /// Updates chat-list search text.
     Search(String),
     SettingsChanged,
     ZoomBy(f32),
     ResetZoom,
-    /// Ask WhatsApp for a pairing code for this phone number.
+    /// Requests a pairing code for a phone number.
     PairWithPhone(String),
-    /// Forget this device on the phone and locally.
+    /// Unlinks the device remotely and locally.
     Unlink,
     Reconnect,
     Quit,
-    /// Bring the window forward, creating it if the app lives in the tray.
+    /// Shows the window, creating it when running headless.
     ShowWindow,
-    /// Close the window but keep the app in the tray.
+    /// Closes the window while keeping the app in the tray.
     HideWindow,
-    /// Close the window as its close button would: into the tray when the
-    /// app keeps running, else quitting.
+    /// Applies the configured close-button behavior.
     CloseWindow,
-    /// Mute a chat until the given time, `Some(0)` for good, `None` to
-    /// unmute.
+    /// Mutes until Unix time, indefinitely with `Some(0)`, or unmutes with `None`.
     SetMuted(ChatId, Option<i64>),
-    /// Send what is staged in the composer, with the text as its caption.
+    /// Sends pending attachments with the composer text as caption.
     SendPending {
         chat: ChatId,
         caption: String,
     },
-    /// Take one staged attachment out of the composer.
+    /// Removes one pending attachment.
     RemovePending(usize),
-    /// Take every staged attachment out of the composer.
+    /// Removes all pending attachments.
     ClearPending,
 }
 

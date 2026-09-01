@@ -1,40 +1,36 @@
 ---
 title: How it links
-description: The companion-device model, what the phone is needed for, and what stays local.
+description: How FastsApp links, when it needs the phone, and what it stores locally.
 nav_order: 1
 ---
 
 ## A companion device
 
-FastsApp registers with WhatsApp as a linked device over the multi-device
-protocol, exactly the slot WhatsApp Web and WhatsApp Desktop use, through
+FastsApp registers as a linked device through
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust). Messages are
-end-to-end encrypted to it like to any device; the pairing happens through
-the QR code or the pairing code, and the phone lists it under **Linked
-devices**, where it can be signed out at any time.
+end-to-end encrypted for each device. Pair with a QR code or phone-number
+code. The phone lists FastsApp under **Linked devices**, where you can unlink
+it at any time.
 
-One connection exists per linked device: running FastsApp twice, or
-FastsApp and another client on the same slot, has them taking the
-connection from each other. FastsApp guards against its own copies (a
-second launch just shows the window of the first), and links on its own
-slot otherwise.
+Each linked device can have one connection. Two clients using the same device
+keys will disconnect each other. A second FastsApp launch reopens the existing
+window instead of starting another instance.
 
 ## What the phone is for
 
 - **History.** WhatsApp replays only recent history to a fresh device.
-  FastsApp archives everything it sees from then on, and asks the phone
-  for older messages when you scroll past the archive; the phone must be
-  online to answer those requests, and to re-upload attachments whose
-  server copies expired.
-- **Nothing else.** Sending, receiving, receipts, and presence go through
+  FastsApp archives new messages and asks the phone for older messages when
+  you scroll past the archive. The phone must be online for these requests and
+  to re-upload expired attachments.
+- **Other features.** Sending, receiving, receipts, and presence go through
   WhatsApp's servers directly; the phone can be offline for all of it.
 
 ## What stays local
 
-The message archive, the media, and the session keys live on your disk
-and never leave it; [Settings & Files](/settings-and-files/) lists every
-path. FastsApp talks to WhatsApp's servers, and to GIPHY only when GIF
-search is used with an API key. There is no telemetry.
+The message archive, media, and session keys stay on your computer.
+[Settings & Files](/settings-and-files/) lists their paths. FastsApp connects
+to WhatsApp's servers and, when you search for GIFs, GIPHY. It has no
+telemetry.
 
 Unlinking from Settings tells the phone to forget the device and deletes
 the local archive and caches.

@@ -1,12 +1,7 @@
-//! The tray item on Windows and macOS: the same menu as on Linux, so closing
-//! the window leaves the link up on every desktop.
+//! Windows notification-area and macOS menu-bar item.
 //!
-//! Windows runs the item on its own thread with a message loop, like the
-//! Linux one. macOS allows status items on the main thread only, and only
-//! while its event loop runs, so there the item is created with the first
-//! window and, while no window exists, the headless loop in `main` pumps
-//! the application's events itself. Its Dock icon remains available and a
-//! Dock activation recreates the window.
+//! Windows uses a separate message-loop thread. macOS creates the item on the
+//! main thread and pumps AppKit events while no window exists.
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -35,23 +30,22 @@ fn command_for(id: &MenuId) -> Option<TrayCommand> {
     }
 }
 
-/// The item, kept alive for as long as it is shown.
+/// Tray item lifetime guard.
 struct Item {
     _icon: TrayIcon,
 }
 
-/// Builds the item on the current thread and routes its events to `sender`.
+/// Creates the tray item and forwards its events to `sender`.
 fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::error::Error>> {
     let size = 32u32;
     #[cfg(not(target_os = "macos"))]
     let icon = Icon::from_rgba(crate::util::app_icon_rgba(size as usize), size, size)?;
-    // macOS draws template images itself, black or white to match the menu
-    // bar, so the item looks native in either theme.
+    // Use a macOS template image so the system selects its color.
     #[cfg(target_os = "macos")]
     let icon = Icon::from_rgba(crate::util::tray_template_rgba(size as usize), size, size)?;
     let menu = Menu::new();
     menu.append_items(&[
-        &MenuItem::with_id(SHOW, "Show / hide FastsApp", true, None),
+        &MenuItem::with_id(SHOW, "Show or hide FastsApp", true, None),
         &PredefinedMenuItem::separator(),
         &MenuItem::with_id(QUIT, "Quit", true, None),
     ])?;
@@ -59,8 +53,7 @@ fn build(sender: Sender<TrayCommand>, wake: Wake) -> Result<Item, Box<dyn std::e
         .with_icon(icon)
         .with_tooltip("FastsApp")
         .with_menu(Box::new(menu));
-    // A plain click shows or hides the window on every platform; the menu
-    // stays on right click.
+    // Left-click toggles the window; right-click opens the menu.
     #[cfg(target_os = "macos")]
     let builder = builder
         .with_icon_as_template(true)
@@ -99,8 +92,7 @@ mod host {
         DispatchMessageW, GetMessageW, MSG, TranslateMessage,
     };
 
-    /// Runs the item on its own thread. Answers with the thread's id once
-    /// the item exists, or with why it could not be made.
+    /// Runs the item on its own thread and reports startup result.
     pub fn start(sender: Sender<TrayCommand>, wake: Wake) -> Result<u32, String> {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new()
@@ -127,7 +119,7 @@ mod host {
         }
         ready_rx
             .recv_timeout(Duration::from_secs(5))
-            .map_err(|_| "the tray thread did not answer".to_string())?
+            .map_err(|_| "The tray thread stopped responding".to_string())?
     }
 }
 
@@ -139,7 +131,7 @@ pub struct TrayService {
 
 #[cfg(windows)]
 impl TrayService {
-    /// Registers the tray item. `None` when it cannot be made.
+    /// Registers the tray item, or returns `None` on failure.
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
         let (sender, commands) = std::sync::mpsc::channel();
         match host::start(sender, Arc::new(wake)) {
@@ -158,15 +150,14 @@ impl TrayService {
         self.commands.try_iter().collect()
     }
 
-    /// Nothing to do: the item lives on its own thread from the start.
+    /// The tray already runs on its own thread.
     pub fn attach(&mut self) {}
 
-    /// Nothing to do either; see `attach`.
+    /// No per-window cleanup is needed.
     pub fn hidden(&mut self) {}
 }
 
-/// Waits while the app lives in the tray without a window. Windows has
-/// nothing to pump here: the item runs on its own thread.
+/// Waits while headless; the Windows tray continues on its own thread.
 #[cfg(windows)]
 pub fn idle(duration: Duration) {
     std::thread::sleep(duration);
@@ -185,7 +176,7 @@ mod host {
     use super::*;
 
     thread_local! {
-        /// The status item, which only the main thread may touch.
+        /// Main-thread-only macOS status item.
         pub static ITEM: RefCell<Option<Item>> = const { RefCell::new(None) };
         pub(super) static REOPEN: RefCell<Option<Sender<TrayCommand>>> = const { RefCell::new(None) };
     }
@@ -242,7 +233,7 @@ mod host {
         }
     }
 
-    /// Creates the item, once, on the main thread.
+    /// Creates the item once on the main thread.
     pub fn create(sender: Sender<TrayCommand>, wake: Wake) {
         let Some(mtm) = MainThreadMarker::new() else {
             log::warn!("the status item can only be made on the main thread");
@@ -269,8 +260,7 @@ mod host {
         app.activateIgnoringOtherApps(true);
     }
 
-    /// Runs the application's event loop for `duration`, so the status
-    /// item keeps answering without a window.
+    /// Pumps AppKit events for `duration` while headless.
     pub fn pump(duration: Duration) {
         let Some(mtm) = MainThreadMarker::new() else {
             std::thread::sleep(duration);
@@ -278,7 +268,7 @@ mod host {
         };
         let app = NSApplication::sharedApplication(mtm);
         let deadline = NSDate::dateWithTimeIntervalSinceNow(duration.as_secs_f64());
-        // Safety: reading an extern static AppKit defines and never changes.
+        // Safety: AppKit defines this immutable extern static.
         let mode = unsafe { NSDefaultRunLoopMode };
         loop {
             let event = app.nextEventMatchingMask_untilDate_inMode_dequeue(
@@ -298,14 +288,13 @@ mod host {
 #[cfg(target_os = "macos")]
 pub struct TrayService {
     commands: Receiver<TrayCommand>,
-    /// What the item needs, until the first window lets it be made.
+    /// State kept until the first window can create the item.
     pending: Option<(Sender<TrayCommand>, Wake)>,
 }
 
 #[cfg(target_os = "macos")]
 impl TrayService {
-    /// Prepares the item. It is made with the first window, when AppKit's
-    /// event loop is running, which it must be.
+    /// Stores item state until AppKit runs with the first window.
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
         let (sender, commands) = std::sync::mpsc::channel();
         Some(Self {
@@ -318,8 +307,7 @@ impl TrayService {
         self.commands.try_iter().collect()
     }
 
-    /// A window exists: make the item if this is the first one and bring the
-    /// application forward.
+    /// Creates the item if needed and activates the application.
     pub fn attach(&mut self) {
         if let Some((sender, wake)) = self.pending.take() {
             host::create(sender, wake);
@@ -329,12 +317,11 @@ impl TrayService {
         }
     }
 
-    /// No window: the status item and Dock icon both remain available.
+    /// Keeps the status item and Dock icon available without a window.
     pub fn hidden(&mut self) {}
 }
 
-/// Waits while the app lives in the tray without a window, keeping AppKit
-/// served meanwhile.
+/// Waits while headless and pumps AppKit events.
 #[cfg(target_os = "macos")]
 pub fn idle(duration: Duration) {
     host::pump(duration);

@@ -6,45 +6,35 @@ nav_order: 0
 
 ## Why FastsApp
 
-WhatsApp has no official Linux app, and its web client lives in a browser
-tab. FastsApp is a small graphical client instead: a native WhatsApp app
-written in Rust with [egui](https://github.com/emilk/egui), speaking to
-WhatsApp through
-[whatsapp-rust](https://github.com/oxidezap/whatsapp-rust). It is a single
-native binary with no embedded browser engine, starts in well under a
-second, and keeps its layout close to WhatsApp Web, so nothing needs
-relearning.
+WhatsApp has no official Linux app. FastsApp is a native WhatsApp client
+written in Rust with [egui](https://github.com/emilk/egui). It connects through
+[whatsapp-rust](https://github.com/oxidezap/whatsapp-rust). FastsApp is a
+single binary with no browser engine, starts in well under a second, and uses a
+layout similar to WhatsApp Web.
 
 ![FastsApp showing a chat with a photo, a voice message, and a link preview](/screenshot.png)
 
 ## What it does
 
-- **Your chats, kept.** FastsApp links to your phone as a companion device,
-  like WhatsApp Web. Messages are stored in one SQLite file on your disk,
-  so history survives restarts and grows past what WhatsApp replays. Older
-  history is fetched from the phone as you scroll.
-- **Sends everything usual.** Text with formatting, replies, edits,
-  reactions, pictures pasted or dropped, files, stickers, GIFs, and voice
-  messages recorded in the app. Attachments wait in the composer so a
-  caption can join them.
-- **Plays everything usual.** Voice messages play in the bubble with
-  WhatsApp's own waveform; GIFs and animated stickers play in place, with
-  the video and audio decoders built into the binary, so nothing needs
-  installing.
-- **One name per person.** Names come from your address book by default,
-  the way your phone shows them, in chats, mentions, replies, and
-  notifications alike; a setting switches to public names.
-- **Stays out of the way.** Closing the window keeps messages arriving
-  from the system tray. Notifications show the person's or group's
-  picture, a click opens the chat, and muting a chat here mutes it on the
-  phone too.
-- **Text you can take.** Sweep any part of a message and copy it; a
-  selection across messages copies the way the phone shares one, each line
-  stamped with the time, the date, and the writer.
+- **Stores your chats.** FastsApp links as a companion device and stores
+  messages in one SQLite file. History remains after restart, and older
+  messages are fetched from your phone as you scroll.
+- **Sends common message types.** Send formatted text, replies, edits,
+  reactions, pictures, files, stickers, GIFs, and recorded voice messages.
+  You can add captions to attachments before sending them.
+- **Plays media in the chat.** Voice messages, GIFs, and animated stickers
+  play in place. The required audio and video decoders are built in.
+- **Uses consistent names.** Choose address-book names or public WhatsApp
+  profile names for chats, mentions, replies, and notifications.
+- **Runs in the background.** Closing the window keeps FastsApp in the system
+  tray. Notifications can show the chat picture and open the chat. Muting a
+  chat also mutes it on your phone.
+- **Copies message text.** Select part of a message or copy across messages
+  with the time, date, and sender included.
 
 ## What it does not do yet
 
-FastsApp deliberately has a limited scope:
+FastsApp does not currently support:
 
 - Calls, status posts, communities, newsletters, and group administration.
 - Playing ordinary videos in the app; they open in your player. Voice
@@ -54,28 +44,25 @@ FastsApp deliberately has a limited scope:
 - Colour emoji on Windows: Segoe UI Emoji is not a bitmap font, so emoji
   stay monochrome there for now.
 
-If something misbehaves, [an issue](https://github.com/crmne/fastsapp/issues)
-should say what happened, what you expected, and roughly when, so the log
-in your state directory has it.
+When reporting [an issue](https://github.com/crmne/fastsapp/issues), include
+what happened, what you expected, and when it happened. This helps match the
+problem to the log in the state directory.
 
 ## Account safety
 
-FastsApp is an **unofficial** client, and WhatsApp's terms of service do
-not endorse unofficial clients. FastsApp keeps its behaviour as close to
-WhatsApp Web as it can: it links as a companion device over WhatsApp's own
-multi-device protocol, sends the same receipts a browser tab would, does
-not automate messages, and does nothing in bulk. Even so, use it with the
-understanding that WhatsApp could object; if that risk is not acceptable
-to you, or the account is critical, stay with the official clients.
+FastsApp is an **unofficial** client. Using it may be against WhatsApp's terms
+of service. It uses WhatsApp's companion-device protocol, sends normal
+receipts, and does not automate or send messages in bulk. WhatsApp may still
+restrict accounts that use unofficial clients. Use an official client if you
+cannot accept that risk.
 
 ## Prior art
 
-FastsApp speaks WhatsApp through
+FastsApp connects through
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust), which grew out
 of the [whatsmeow](https://github.com/tulir/whatsmeow) lineage. WhatsApp
-Web defines the companion-device model it follows.
-[Fastpotify](https://fastpotify.rocks) is its sibling, the same idea
-applied to Spotify.
+Web defines the companion-device model. [Fastpotify](https://fastpotify.rocks)
+is a related native client for Spotify.
 
 FastsApp is an independent project, not affiliated with or endorsed by
 WhatsApp LLC or Meta. WhatsApp is a trademark of WhatsApp LLC.

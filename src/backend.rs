@@ -1,10 +1,7 @@
-//! The bridge between the interface thread and everything asynchronous.
+//! Channel bridge between the UI and asynchronous runtime.
 //!
-//! egui runs on the main thread and must never block. A dedicated tokio
-//! runtime hosts the WhatsApp connection, the message archive, and media
-//! downloads; the two sides talk through channels. Every event wakes the
-//! interface with `request_repaint`, so the app stays event-driven and idle
-//! when nothing is happening.
+//! A dedicated tokio runtime owns the WhatsApp connection, archive, and media
+//! work. Commands and events cross channels, and events wake the UI.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,16 +12,15 @@ use tokio::sync::mpsc;
 use crate::model::{Chat, ChatId, Contact, Gif, GifError, Message, StickerPack};
 use crate::paths::AppDirs;
 
-// The picker peeks at `looks_like_signal_url` to import on paste.
+// Re-exported so the picker can detect pasted Signal pack links.
 pub(crate) mod sticker_import;
 mod worker;
 
-/// Where the link to the phone stands.
+/// Phone-link state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkStatus {
     Starting,
-    /// Waiting for the phone to scan the code, or to accept the pair code
-    /// if one was asked for.
+    /// Waiting for QR scanning or pairing-code acceptance.
     Unlinked {
         qr: Option<String>,
         pair_code: Option<String>,
@@ -32,11 +28,11 @@ pub enum LinkStatus {
     },
     Connecting,
     Connected,
-    /// The connection dropped; the library reconnects on its own.
+    /// Connection dropped and automatic reconnection is active.
     Disconnected {
         reason: String,
     },
-    /// The phone unlinked this device.
+    /// Device unlinked by the phone.
     LoggedOut,
     Failed(String),
 }
@@ -47,9 +43,7 @@ impl LinkStatus {
     }
 }
 
-/// Where a page of messages ends: the time and id of the oldest message
-/// loaded, so the next page starts right after it even when several
-/// messages share that second.
+/// Oldest loaded message timestamp and id used as a page boundary.
 pub type PageKey = (i64, String);
 
 #[derive(Clone, Debug)]
@@ -59,61 +53,56 @@ pub enum Command {
         text: String,
         quoting: Option<String>,
     },
-    /// We are, or stopped, typing in a chat.
+    /// Updates our typing state in a chat.
     Composing {
         chat: ChatId,
         composing: bool,
     },
-    /// The chat is on screen: clear its unread count, and send read
-    /// receipts for what was unread when `receipts` is on.
+    /// Marks a visible chat read and optionally sends receipts.
     MarkRead {
         chat: ChatId,
         receipts: bool,
     },
-    /// Messages of a chat from the archive, older than `before` when given.
+    /// Loads archived chat messages before an optional boundary.
     LoadChat {
         chat: ChatId,
         before: Option<PageKey>,
     },
-    /// Ask the phone for what came before the archive's earliest message.
+    /// Requests messages before the archive's earliest message.
     FetchOlder(ChatId),
     Download {
         chat: ChatId,
         message: String,
     },
-    /// A profile picture; `full` for the large one an info dialog shows.
+    /// Requests a profile picture; `full` selects the info-dialog size.
     FetchAvatar {
         id: String,
         full: bool,
     },
-    /// Every archived message of a chat from `id` up to what is loaded,
-    /// so a quoted message can be scrolled to.
+    /// Loads archived messages from `id` through the current page.
     LoadUntil {
         chat: ChatId,
         id: String,
         before: PageKey,
     },
-    /// Archived messages whose visible text contains the query.
+    /// Searches visible archived message text.
     SearchMessages {
         query: String,
     },
-    /// Make sure the archive knows a chat, so a first message can land in
-    /// a conversation started from a contact.
+    /// Creates an archive chat before its first message is sent.
     EnsureChat {
         chat: ChatId,
         name: String,
     },
-    /// Internal: the phone could not be asked for older messages.
+    /// Internal result for a failed phone-history request.
     OlderFailed {
         chat: ChatId,
         error: String,
     },
-    /// Internal: a group's metadata could not be fetched; it will be asked
-    /// for again.
+    /// Internal group-metadata failure.
     GroupInfoFailed {
         chat: ChatId,
-        /// The server's refusal is final (not a member any more, say):
-        /// asking again will not change it.
+        /// Whether the server refusal is permanent.
         permanent: bool,
     },
     EditText {
@@ -129,15 +118,15 @@ pub enum Command {
         chat: ChatId,
         id: String,
     },
-    /// Open the desktop's file picker and send what is chosen.
+    /// Selects and sends files with the desktop picker.
     PickFiles(ChatId),
-    /// Files to send; the caption goes with the first.
+    /// Sends files with the caption on the first.
     SendFiles {
         chat: ChatId,
         paths: Vec<PathBuf>,
         caption: Option<String>,
     },
-    /// A picture off the clipboard, as straight RGBA.
+    /// Sends a clipboard image as straight-alpha RGBA.
     SendImage {
         chat: ChatId,
         width: u32,
@@ -145,75 +134,69 @@ pub enum Command {
         rgba: Vec<u8>,
         caption: Option<String>,
     },
-    /// Mute a chat until the given time (seconds), `Some(0)` for good,
-    /// `None` to unmute; told to the phone as well.
+    /// Syncs chat mute state. `Some(0)` is indefinite and `None` unmutes.
     SetMuted(ChatId, Option<i64>),
-    /// A recorded voice message: mono samples at 48 kHz, normalized,
-    /// encoded, and sent as push-to-talk, quoting a message if replying.
+    /// Normalizes, encodes, and sends mono 48 kHz push-to-talk audio.
     SendVoice {
         chat: ChatId,
         samples: Vec<f32>,
         quoting: Option<String>,
     },
-    /// Tell the sender their voice message was listened to.
+    /// Sends a played receipt for a voice message.
     MarkPlayed {
         chat: ChatId,
         message: String,
         sender: String,
     },
-    /// A sticker file (WebP) to send.
+    /// Sends a WebP sticker.
     SendSticker {
         chat: ChatId,
         path: PathBuf,
     },
-    /// Copy a sticker into the saved collection.
+    /// Saves a sticker file.
     SaveSticker {
         path: PathBuf,
     },
-    /// Delete a sticker from the saved collection.
+    /// Removes a saved sticker.
     ForgetSticker {
         path: PathBuf,
     },
-    /// Fetch a whole pack from a signal.art link.
+    /// Imports a pack from a signal.art link.
     ImportStickerUrl {
         url: String,
     },
-    /// Open the file picker for a .wastickers or zip archive and import
-    /// what is chosen.
+    /// Selects and imports a .wastickers or zip archive.
     PickStickerArchive,
-    /// Delete an imported pack's folder.
+    /// Deletes an imported pack directory.
     DeleteStickerPack {
         dir: PathBuf,
     },
-    /// Internal: a pack import finished. `Ok` carries the pack's name;
-    /// an empty error means the picker dialog was simply closed.
+    /// Internal pack-import result. An empty error means the picker was canceled.
     StickerPackImported {
         result: Result<String, String>,
     },
-    /// Save a person under a name through WhatsApp's contact sync.
-    /// `first_name` is the short name WhatsApp itself shows; `to_phone`
-    /// files the contact in the phone's own address book as well.
+    /// Saves a name through contact sync. `first_name` is the short display
+    /// name; `to_phone` also adds it to the phone's address book.
     SaveContact {
         id: String,
         full_name: String,
         first_name: Option<String>,
         to_phone: bool,
     },
-    /// Internal: the contact mutation went out, or did not.
+    /// Internal contact-save result.
     ContactSaved {
         id: String,
         name: String,
         error: Option<String>,
     },
-    /// A number typed by hand: ask WhatsApp whether it exists, then save
-    /// it (when named) and tell the app to open the chat.
+    /// Checks a number, optionally saves it, and opens its chat.
     NewContact {
         phone: String,
         full_name: Option<String>,
         first_name: Option<String>,
         to_phone: bool,
     },
-    /// Internal: WhatsApp answered whether the number is registered.
+    /// Internal number-lookup result.
     ContactChecked {
         phone: String,
         full_name: Option<String>,
@@ -221,18 +204,17 @@ pub enum Command {
         to_phone: bool,
         registered: bool,
     },
-    /// Fetch a GIF from the web and send it as WhatsApp does, a short
-    /// looping video.
+    /// Downloads and sends a GIF as a short looping video.
     SendGif {
         chat: ChatId,
         gif: Gif,
     },
-    /// Ask GIPHY; an empty query lists what is trending.
+    /// Searches GIPHY or lists trending results for an empty query.
     SearchGifs {
         query: String,
         key: String,
     },
-    /// The stickers seen lately, for the picker.
+    /// Loads recent and saved stickers for the picker.
     RecentStickers,
     React {
         chat: ChatId,
@@ -242,73 +224,70 @@ pub enum Command {
     SetArchived(ChatId, bool),
     SetPinned(ChatId, bool),
     PairWithPhone(String),
-    /// Forget this device on the phone and locally.
+    /// Unlinks the device remotely and locally.
     Unlink,
     Reconnect,
     Shutdown,
-    /// Internal: a send finished.
+    /// Internal send result.
     Sent {
         chat: ChatId,
         id: String,
         error: Option<String>,
     },
-    /// Internal: an attachment landed on disk, or did not.
+    /// Internal attachment-download result.
     Downloaded {
         chat: ChatId,
         id: String,
         result: Result<PathBuf, String>,
     },
-    /// Internal: one of the phone's recent stickers landed on disk, or did
-    /// not.
+    /// Internal recent-sticker download result.
     StickerFetched {
         hash: String,
         result: Result<PathBuf, String>,
     },
-    /// Internal: a profile picture was looked up.
+    /// Internal profile-picture result.
     AvatarFetched {
         id: String,
         full: bool,
         path: Option<PathBuf>,
     },
-    /// Internal: a picture lookup failed and should be tried again later.
+    /// Internal retryable profile-picture failure.
     AvatarFailed {
         id: String,
         full: bool,
     },
-    /// Internal: our own "about" text.
+    /// Internal account about-text result.
     MeInfo {
         about: Option<String>,
     },
-    /// Internal: GIPHY answered.
+    /// Internal GIPHY result.
     GifResults {
         query: String,
         results: Result<Vec<Gif>, GifError>,
     },
-    /// Internal: the file picker closed.
+    /// Internal file-picker result.
     Picked {
         chat: ChatId,
         paths: Vec<PathBuf>,
     },
-    /// Internal: an attachment is uploaded and its message built; file it
-    /// and send it.
+    /// Internal uploaded attachment ready for archiving and sending.
     Outbound {
         chat: ChatId,
         row: Box<Message>,
         raw: Vec<u8>,
     },
-    /// Internal: what WhatsApp knows about a group.
+    /// Internal group metadata result.
     GroupInfo {
         chat: ChatId,
         name: Option<String>,
         participants: Vec<String>,
         read_only: bool,
     },
-    /// Internal: pairing by phone number produced a code, or failed.
+    /// Internal pairing-code result.
     PairCode {
         result: Result<String, String>,
     },
-    /// Internal: WhatsApp answered whether the account sends read
-    /// receipts, asked on connect.
+    /// Internal account read-receipt setting.
     ReceiptsPrivacy {
         disabled: bool,
     },
@@ -317,18 +296,17 @@ pub enum Command {
 #[derive(Debug)]
 pub enum Event {
     Link(LinkStatus),
-    /// Who we are, once known.
+    /// Linked account identity.
     Me {
         id: String,
         name: Option<String>,
         about: Option<String>,
     },
-    /// The whole chat list, newest first.
+    /// Full chat list, newest first.
     Chats(Vec<Chat>),
     ChatUpdated(Box<Chat>),
-    /// Messages of a chat, oldest first. `older` means they go before what
-    /// is shown; otherwise they are appended. `complete` says the archive
-    /// has nothing earlier.
+    /// Chat messages in ascending order. `older` prepends them; `complete`
+    /// means the archive has no earlier rows.
     Messages {
         chat: ChatId,
         messages: Vec<Message>,
@@ -336,20 +314,18 @@ pub enum Event {
         complete: bool,
     },
     MessageUpdated(Box<Message>),
-    /// Files chosen in the picker, for the composer to stage.
+    /// Files selected for the composer.
     Picked {
         chat: ChatId,
         paths: Vec<PathBuf>,
     },
-    /// A message just arrived from someone else, live (not from history),
-    /// for the desktop notification.
+    /// Live incoming message for desktop notification.
     Incoming {
         chat: ChatId,
         message: Box<Message>,
     },
     Contacts(Vec<Contact>),
-    /// What a message search found, newest first, echoing its query so a
-    /// stale answer cannot overwrite a newer search.
+    /// Message search results with their query, newest first.
     SearchHits {
         query: String,
         messages: Vec<Message>,
@@ -373,13 +349,12 @@ pub enum Event {
         chat: ChatId,
         id: String,
     },
-    /// GIFs for a query, or why there are none.
+    /// GIF search results or failure.
     Gifs {
         query: String,
         results: Result<Vec<Gif>, GifError>,
     },
-    /// The picker's stickers: the kept collection, the imported packs,
-    /// then the ones seen lately, each newest first.
+    /// Saved stickers, imported packs, and recent stickers for the picker.
     Stickers {
         saved: Vec<PathBuf>,
         packs: Vec<StickerPack>,
@@ -390,34 +365,30 @@ pub enum Event {
         message: String,
         result: Result<PathBuf, String>,
     },
-    /// History is being replayed after linking.
+    /// Link-time history sync state.
     Syncing(bool),
-    /// How far the replay has come, when WhatsApp says.
+    /// Reported history-sync percentage.
     SyncProgress(u32),
-    /// The phone answered (or did not) a request for older messages;
-    /// `more` says whether asking again could bring more.
+    /// Phone-history result. `more` indicates whether another request may help.
     OlderFetched {
         chat: ChatId,
         more: bool,
     },
-    /// The account's own privacy setting has read receipts off, so
-    /// whatsapp-rust sends none in direct chats whatever our own toggle
-    /// says.
+    /// Whether account privacy disables direct-chat read receipts.
     ReceiptsPrivacy {
         disabled: bool,
     },
-    /// A typed number exists on WhatsApp; the chat can open (the name,
-    /// when one was given, is on its way through contact sync).
+    /// Number lookup succeeded and its chat can open.
     ContactReady {
         id: String,
         name: Option<String>,
     },
-    /// Something worth a quiet toast: a pack that landed, say.
+    /// Informational toast message.
     Info(String),
     Error(String),
 }
 
-/// Wakes the window, if one exists, from any thread.
+/// Cross-thread window wake handle.
 #[derive(Clone, Default)]
 pub struct Waker(Arc<std::sync::Mutex<Option<egui::Context>>>);
 
@@ -436,7 +407,7 @@ impl Waker {
         }
     }
 
-    /// A repaint a little later, for something that moves on its own.
+    /// Schedules a delayed repaint.
     pub fn wake_after(&self, delay: std::time::Duration) {
         if let Some(ctx) = self.0.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
             ctx.request_repaint_after(delay);
@@ -444,7 +415,7 @@ impl Waker {
     }
 }
 
-/// The interface's handle to the runtime.
+/// UI handle to the backend runtime.
 pub struct Backend {
     commands: mpsc::UnboundedSender<Command>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -481,8 +452,7 @@ impl Backend {
         }
     }
 
-    /// A backend that never connects, for the demo mode and headless tests.
-    /// Events can still be fed to the app through the returned sender.
+    /// Creates a disconnected backend and event sender for demos and tests.
     pub fn detached() -> (Self, std::sync::mpsc::Sender<Event>) {
         let (command_tx, _command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
@@ -497,7 +467,7 @@ impl Backend {
         )
     }
 
-    /// Stops commands from leaving the process; shutdown still works.
+    /// Disables commands except shutdown.
     pub fn set_offline(&mut self, offline: bool) {
         self.offline = offline;
     }

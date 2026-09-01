@@ -1,18 +1,11 @@
-//! Whole sticker packs, imported in one gesture.
+//! Sticker-pack import from signal.art links and .wastickers archives.
 //!
-//! Two doors in: a `signal.art` link (the open pack format behind
-//! signalstickers.com; the URL fragment carries the pack id and the key,
-//! the CDN serves the encrypted files to anyone holding them) and a
-//! `.wastickers` archive (a plain zip, what most WhatsApp sticker sites
-//! hand out). Either way a pack becomes one folder of WebP files under
-//! the saved-sticker directory, and the folder's name is the pack's.
+//! Imported packs become named directories of WebP files.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// A pack id (32 hex characters) and the key that opens it, out of a
-/// pasted `signal.art/addstickers/#pack_id=…&pack_key=…` address. The
-/// bare `pack_id=…&pack_key=…` tail works too.
+/// Parses a pack id and key from a signal.art URL or parameter string.
 pub fn parse_signal_url(url: &str) -> Result<(String, [u8; 32]), String> {
     let tail = url.rsplit('#').next().unwrap_or(url);
     let mut id = None;
@@ -27,10 +20,10 @@ pub fn parse_signal_url(url: &str) -> Result<(String, [u8; 32]), String> {
     }
     let id = id
         .filter(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .ok_or("the link carries no pack_id; copy the whole signal.art address")?;
+        .ok_or("Missing pack_id. Copy the full signal.art link")?;
     let key = key
         .and_then(|key| hex_bytes(&key))
-        .ok_or("the link carries no usable pack_key; copy the whole signal.art address")?;
+        .ok_or("Missing or invalid pack_key. Copy the full signal.art link")?;
     Ok((id, key))
 }
 
@@ -45,46 +38,40 @@ fn hex_bytes(hex: &str) -> Option<[u8; 32]> {
     Some(bytes)
 }
 
-/// Whether a pasted text looks like a complete pack link, so the picker
-/// can import on the paste itself.
+/// Whether pasted text contains a complete signal.art pack link.
 pub fn looks_like_signal_url(text: &str) -> bool {
     parse_signal_url(text).is_ok()
 }
 
-/// Opens one encrypted pack file: HKDF splits the pack key into an AES
-/// and an HMAC half, the tail MAC is checked over IV and ciphertext,
-/// then AES-256-CBC unwraps the content. The format of Signal's own
-/// clients.
+/// Decrypts one Signal sticker file using HKDF, HMAC-SHA256, and AES-256-CBC.
 pub fn decrypt_blob(payload: &[u8], pack_key: &[u8; 32]) -> Result<Vec<u8>, String> {
     use aes::cipher::{BlockModeDecrypt, KeyInit, KeyIvInit, block_padding::Pkcs7};
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     if payload.len() < 16 + 16 + 32 {
-        return Err("the pack answered with too little data".to_owned());
+        return Err("The sticker data is incomplete".to_owned());
     }
     let mut keys = [0u8; 64];
     hkdf::Hkdf::<Sha256>::new(Some(&[0u8; 32]), pack_key)
         .expand(b"Sticker Pack", &mut keys)
-        .map_err(|_| "the key would not derive".to_owned())?;
+        .map_err(|_| "Could not derive the sticker key".to_owned())?;
     let (aes_key, mac_key) = keys.split_at(32);
     let (iv, rest) = payload.split_at(16);
     let (ciphertext, mac) = rest.split_at(rest.len() - 32);
     let mut hmac = <Hmac<Sha256> as KeyInit>::new_from_slice(mac_key)
-        .map_err(|_| "the key would not derive".to_owned())?;
+        .map_err(|_| "Could not derive the sticker key".to_owned())?;
     hmac.update(iv);
     hmac.update(ciphertext);
     hmac.verify_slice(mac)
-        .map_err(|_| "the key does not open this pack".to_owned())?;
+        .map_err(|_| "The key does not match this pack".to_owned())?;
     let iv: [u8; 16] = iv.try_into().expect("split at 16");
     let aes_key: [u8; 32] = aes_key.try_into().expect("split at 32");
     cbc::Decryptor::<aes::Aes256>::new(&aes_key.into(), &iv.into())
         .decrypt_padded_vec::<Pkcs7>(ciphertext)
-        .map_err(|_| "the pack would not decrypt".to_owned())
+        .map_err(|_| "Could not decrypt the sticker pack".to_owned())
 }
 
-/// The pack's title and its sticker ids, out of the manifest protobuf
-/// (`StickerPack { title = 1, stickers = 4 { id = 1 } }`). Read by hand:
-/// two fields do not earn a codegen step.
+/// Reads the pack title and sticker ids from the small manifest protobuf.
 pub fn parse_manifest(bytes: &[u8]) -> Result<(String, Vec<u64>), String> {
     let mut title = String::new();
     let mut ids = Vec::new();
@@ -117,14 +104,14 @@ fn read_varint(bytes: &[u8], pos: &mut usize) -> Result<u64, String> {
     for shift in 0..10 {
         let byte = *bytes
             .get(*pos)
-            .ok_or("the manifest ends mid-number".to_owned())?;
+            .ok_or("The sticker manifest is incomplete".to_owned())?;
         *pos += 1;
         value |= u64::from(byte & 0x7f) << (shift * 7);
         if byte & 0x80 == 0 {
             return Ok(value);
         }
     }
-    Err("the manifest holds a number too long".to_owned())
+    Err("The sticker manifest contains an invalid number".to_owned())
 }
 
 fn read_tag(bytes: &[u8], pos: &mut usize) -> Result<(u64, u64), String> {
@@ -137,7 +124,7 @@ fn read_chunk<'a>(bytes: &'a [u8], pos: &mut usize) -> Result<&'a [u8], String> 
     let end = pos
         .checked_add(length)
         .filter(|end| *end <= bytes.len())
-        .ok_or("the manifest ends mid-field".to_owned())?;
+        .ok_or("The sticker manifest is incomplete".to_owned())?;
     let chunk = &bytes[*pos..end];
     *pos = end;
     Ok(chunk)
@@ -153,17 +140,15 @@ fn skip_field(bytes: &[u8], pos: &mut usize, wire: u64) -> Result<(), String> {
             read_chunk(bytes, pos)?;
         }
         5 => *pos += 4,
-        _ => return Err("the manifest uses an unknown field kind".to_owned()),
+        _ => return Err("The sticker manifest contains an unknown field".to_owned()),
     }
     if *pos > bytes.len() {
-        return Err("the manifest ends mid-field".to_owned());
+        return Err("The sticker manifest is incomplete".to_owned());
     }
     Ok(())
 }
 
-/// Signal's own certificate authority, as their clients pin it (from
-/// Signal Desktop's config/default.json; valid to 2032). The sticker CDN
-/// answers with a chain this CA signs, which no public root store knows.
+/// Signal's pinned certificate authority for the sticker CDN, valid to 2032.
 const SIGNAL_CA: &str = "-----BEGIN CERTIFICATE-----\n\
 MIIF2zCCA8OgAwIBAgIUAMHz4g60cIDBpPr1gyZ/JDaaPpcwDQYJKoZIhvcNAQEL\n\
 BQAwdTELMAkGA1UEBhMCVVMxEzARBgNVBAgTCkNhbGlmb3JuaWExFjAUBgNVBAcT\n\
@@ -199,11 +184,11 @@ Lrsybb0z5gg8w7ZblEuB9zOW9M3l60DXuJO6l7g+deV6P96rv2unHS8UlvWiVWDy\n\
 9qfgAJizyy3kqM4lOwBH\n\
 -----END CERTIFICATE-----";
 
-/// A client that trusts exactly Signal's CA, for the sticker CDN.
+/// HTTP client that trusts only Signal's sticker CDN authority.
 fn signal_agent() -> Result<ureq::Agent, String> {
     use ureq::tls::{Certificate, RootCerts, TlsConfig};
     let ca = Certificate::from_pem(SIGNAL_CA.as_bytes())
-        .map_err(|error| format!("the Signal certificate would not parse: {error}"))?;
+        .map_err(|error| format!("Could not read the Signal certificate: {error}"))?;
     let tls = TlsConfig::builder()
         .root_certs(RootCerts::new_with_certs(&[ca]))
         .build();
@@ -214,14 +199,13 @@ fn fetch(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
     agent
         .get(url)
         .call()
-        .map_err(|error| format!("signal.art did not answer: {error}"))?
+        .map_err(|error| format!("signal.art request failed: {error}"))?
         .body_mut()
         .read_to_vec()
-        .map_err(|error| format!("signal.art did not answer: {error}"))
+        .map_err(|error| format!("Could not read the signal.art response: {error}"))
 }
 
-/// Fetches, decrypts, and files a whole pack; the folder's name is the
-/// pack's title. Returns that title.
+/// Downloads a signal.art pack into a directory named after its title.
 pub fn import_signal_pack(url: &str, packs: &Path) -> Result<String, String> {
     let (id, key) = parse_signal_url(url)?;
     let agent = signal_agent()?;
@@ -234,9 +218,9 @@ pub fn import_signal_pack(url: &str, packs: &Path) -> Result<String, String> {
     )?;
     let (title, ids) = parse_manifest(&manifest)?;
     if ids.is_empty() {
-        return Err("the pack lists no stickers".to_owned());
+        return Err("This pack contains no stickers".to_owned());
     }
-    // A pack holds up to 200 files; a few lanes keep the wait short.
+    // Download several of the pack's files concurrently.
     let mut blobs: Vec<Option<Vec<u8>>> = vec![None; ids.len()];
     let lane = ids.len().div_ceil(6).max(1);
     std::thread::scope(|scope| {
@@ -261,14 +245,12 @@ pub fn import_signal_pack(url: &str, packs: &Path) -> Result<String, String> {
     write_pack(packs, &title, files)
 }
 
-/// Unpacks a `.wastickers` file (or any zip of sticker pictures) into a
-/// pack folder. The title comes from the archive's `title.txt` when it
-/// has one, else from the file's own name.
+/// Imports a .wastickers or zip archive. Uses `title.txt` or the filename as title.
 pub fn import_archive(path: &Path, packs: &Path) -> Result<String, String> {
     let file =
-        std::fs::File::open(path).map_err(|error| format!("the file would not open: {error}"))?;
+        std::fs::File::open(path).map_err(|error| format!("Could not open the file: {error}"))?;
     let mut archive = zip::ZipArchive::new(file)
-        .map_err(|error| format!("the file is not a sticker archive: {error}"))?;
+        .map_err(|error| format!("This file is not a sticker archive: {error}"))?;
     let mut title: Option<String> = None;
     let mut pictures: Vec<(String, Vec<u8>)> = Vec::new();
     for index in 0..archive.len() {
@@ -290,7 +272,7 @@ pub fn import_archive(path: &Path, packs: &Path) -> Result<String, String> {
         let picture = [".webp", ".png", ".jpg", ".jpeg"]
             .iter()
             .any(|extension| name.ends_with(extension));
-        // The tray icon is the pack's thumbnail, not a sticker.
+        // Exclude the pack thumbnail.
         if picture && !name.contains("tray") {
             pictures.push((name, bytes));
         }
@@ -309,15 +291,15 @@ pub fn import_archive(path: &Path, packs: &Path) -> Result<String, String> {
     write_pack(packs, &title, files)
 }
 
-/// Files the pack's pictures under a fresh folder named after the title.
+/// Writes pack images to a new directory named after the title.
 fn write_pack(packs: &Path, title: &str, files: Vec<Vec<u8>>) -> Result<String, String> {
     if files.is_empty() {
-        return Err("no sticker of the pack could be read".to_owned());
+        return Err("No stickers could be read from this pack".to_owned());
     }
     let dir = unique_pack_dir(packs, title)?;
     for (index, bytes) in files.iter().enumerate() {
         std::fs::write(dir.join(format!("{index:03}.webp")), bytes)
-            .map_err(|error| format!("the pack could not be written: {error}"))?;
+            .map_err(|error| format!("Could not write the sticker pack: {error}"))?;
     }
     Ok(dir
         .file_name()
@@ -325,11 +307,8 @@ fn write_pack(packs: &Path, title: &str, files: Vec<Vec<u8>>) -> Result<String, 
         .unwrap_or_else(|| title.to_owned()))
 }
 
-/// The picture as WebP, motion intact: passed through when it already is
-/// one, turned into an animated WebP when it is an APNG or an animated
-/// GIF (Signal ships its moving stickers as APNG, WhatsApp wants WebP),
-/// re-encoded as a still (capped at 512 a side, the sticker size) when
-/// it is any other picture, dropped when it is none.
+/// Converts an image to WebP. Preserves WebP, converts animated APNG/GIF to
+/// animated WebP, and scales other images to 512 pixels per side.
 fn webp_bytes(bytes: Vec<u8>) -> Option<Vec<u8>> {
     if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         return Some(bytes);
@@ -356,8 +335,7 @@ fn webp_bytes(bytes: Vec<u8>) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The frames and their delays in milliseconds, when the bytes hold an
-/// APNG or a GIF with more than one frame.
+/// Returns frames and millisecond delays for animated APNG or GIF data.
 fn animation_frames(bytes: &[u8]) -> Option<Vec<(image::RgbaImage, u32)>> {
     use image::AnimationDecoder;
     let cursor = std::io::Cursor::new(bytes);
@@ -385,8 +363,7 @@ fn animation_frames(bytes: &[u8]) -> Option<Vec<(image::RgbaImage, u32)>> {
     (frames.len() > 1).then_some(frames)
 }
 
-/// One animated WebP out of the frames, lossy at sticker size, so a
-/// pack's motion survives the trip into WhatsApp's format.
+/// Encodes frames as a lossy animated WebP at sticker size.
 fn encode_animated(frames: Vec<(image::RgbaImage, u32)>) -> Option<Vec<u8>> {
     use webp_animation::prelude::*;
     let (source_width, source_height) = frames.first().map(|(frame, _)| frame.dimensions())?;
@@ -418,8 +395,7 @@ fn encode_animated(frames: Vec<(image::RgbaImage, u32)>) -> Option<Vec<u8>> {
     Some(encoder.finalize(clock).ok()?.to_vec())
 }
 
-/// A fresh folder for the pack: the title with filesystem-hostile
-/// characters dropped, counted up when the name is taken.
+/// Creates a unique pack directory from a sanitized title.
 fn unique_pack_dir(root: &Path, title: &str) -> Result<PathBuf, String> {
     let clean: String = title
         .trim()
@@ -441,11 +417,11 @@ fn unique_pack_dir(root: &Path, title: &str) -> Result<PathBuf, String> {
         let dir = root.join(&name);
         if !dir.exists() {
             std::fs::create_dir_all(&dir)
-                .map_err(|error| format!("the pack folder could not be made: {error}"))?;
+                .map_err(|error| format!("Could not create the pack folder: {error}"))?;
             return Ok(dir);
         }
     }
-    Err("too many packs already carry this name".to_owned())
+    Err("Too many sticker packs have this name".to_owned())
 }
 
 #[cfg(test)]
@@ -549,7 +525,7 @@ mod tests {
             vec!["000.webp", "001.webp"],
             "tray and title stay out"
         );
-        // The same pack again lands beside, not on top.
+        // Reimporting creates a separate numbered directory.
         let again = import_archive(&archive_path, &packs).expect("imports");
         assert_eq!(again, "Happy Frogs 2");
         let _ = std::fs::remove_dir_all(root);
@@ -596,10 +572,8 @@ mod tests {
         assert!(decoder.has_animation(), "the motion survives");
     }
 
-    /// Signal's own example pack (Bandit the Cat, from the protocol
-    /// documentation), against the live CDN; `FASTSAPP_TEST_PACK` swaps
-    /// in any other signal.art link. Prints how many stickers came out
-    /// animated, for checking a moving pack by hand.
+    /// Imports Signal's example pack from the live CDN. `FASTSAPP_TEST_PACK`
+    /// can provide another signal.art link.
     #[test]
     #[ignore = "network"]
     fn fetches_a_real_pack_from_signal_on_this_machine() {
@@ -630,9 +604,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// The converted file itself must hold clean frames: libwebp (the
-    /// reference decoder) sees the square's old position transparent
-    /// once it has moved on.
+    /// Verifies converted frames apply animation disposal correctly.
     #[test]
     fn a_moving_square_converts_without_a_trace() {
         let side = 64u32;

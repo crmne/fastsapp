@@ -1,4 +1,4 @@
-//! Modal dialogs: shortcuts, about, unlink, pairing by phone, chat info.
+//! Shortcuts, account, linking, contact, and chat dialogs.
 
 use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke};
 
@@ -67,8 +67,7 @@ fn title(ui: &mut egui::Ui, app: &mut App, label: &str) {
 fn shortcuts(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     title(ui, app, "Keyboard shortcuts");
-    // The keys column gets its widest label's room up front; the grid
-    // would otherwise elide the labels while its columns settle.
+    // Reserve enough width for the longest shortcut before laying out the grid.
     let keys_width = super::keys::SHORTCUTS
         .iter()
         .map(|(keys, _)| {
@@ -125,7 +124,7 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     theme::paragraph(
         ui,
-        "A native WhatsApp client written in Rust with egui, speaking the WhatsApp Web protocol through whatsapp-rust. Messages are end-to-end encrypted on this computer.",
+        "A native WhatsApp client written in Rust with egui. It connects through whatsapp-rust. Messages are end-to-end encrypted on this device.",
         theme::regular(13.0),
         palette.text,
     );
@@ -155,7 +154,7 @@ fn confirm_unlink(app: &mut App, ui: &mut egui::Ui) {
     title(ui, app, "Unlink this computer?");
     theme::paragraph(
         ui,
-        "WhatsApp on your phone will forget this device, and the chats kept here will be deleted. You can link again at any time by scanning a new code.",
+        "This removes the device from WhatsApp and deletes the chats stored here. You can link again with a new code.",
         theme::regular(13.5),
         palette.text,
     );
@@ -165,7 +164,7 @@ fn confirm_unlink(app: &mut App, ui: &mut egui::Ui) {
             if danger_button(ui, app, "Unlink") {
                 app.actions.push(Action::Unlink);
             }
-            if theme::pill_button(ui, &palette, "Keep", false).clicked() {
+            if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
                 app.actions.push(Action::CloseDialog);
             }
         });
@@ -177,7 +176,7 @@ fn pair_with_phone(app: &mut App, ui: &mut egui::Ui) {
     title(ui, app, "Link with a phone number");
     theme::paragraph(
         ui,
-        "Type the number WhatsApp is registered to, with the country code and no leading zeros or plus sign. WhatsApp will show a code to enter on the phone.",
+        "Enter the WhatsApp phone number with its country code. Do not include a plus sign or leading zero. You will get a code to enter on the phone.",
         theme::regular(13.0),
         palette.secondary,
     );
@@ -191,8 +190,7 @@ fn pair_with_phone(app: &mut App, ui: &mut egui::Ui) {
         .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                // The row would centre on the label's height and let the
-                // taller field grow past it; claim the field's height first.
+                // Set the row height from the field instead of the shorter label.
                 ui.set_min_height(
                     ui.ctx()
                         .fonts_mut(|fonts| fonts.row_height(&theme::regular(16.0)))
@@ -238,7 +236,7 @@ fn new_contact(app: &mut App, ui: &mut egui::Ui) {
     title(ui, app, "New contact");
     theme::paragraph(
         ui,
-        "The number with its country code, no leading zeros or plus sign. A name saves them through WhatsApp's contact sync; without one the chat just opens. The first name is what WhatsApp shows on its own.",
+        "Enter a phone number with its country code, without a plus sign or leading zero. Add a name to save the contact, or leave it blank to open the chat. WhatsApp uses the first name as the display name.",
         theme::regular(13.0),
         palette.secondary,
     );
@@ -251,8 +249,7 @@ fn new_contact(app: &mut App, ui: &mut egui::Ui) {
                 .inner_margin(Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        // The field is taller than the label; claim its
-                        // height first or the plus rides high.
+                        // Use the field height to align the plus sign.
                         ui.set_min_height(
                             ui.ctx()
                                 .fonts_mut(|fonts| fonts.row_height(&theme::regular(16.0)))
@@ -334,7 +331,7 @@ fn new_contact(app: &mut App, ui: &mut egui::Ui) {
             theme::spinner(ui, 16.0, palette.accent);
             theme::text(
                 ui,
-                "Asking WhatsApp…",
+                "Checking the number…",
                 theme::regular(12.5),
                 palette.secondary,
             );
@@ -345,8 +342,7 @@ fn new_contact(app: &mut App, ui: &mut egui::Ui) {
             if theme::pill_button(ui, &palette, "Cancel", false).clicked() {
                 app.actions.push(Action::CloseDialog);
             }
-            // Enter goes where the name points: given, the person is
-            // saved; empty, the chat just opens.
+            // Enter saves a named contact or opens an unnamed chat.
             if ready && (save || (submitted && named)) {
                 app.actions.push(Action::NewContact {
                     phone: digits.clone(),
@@ -366,7 +362,7 @@ fn new_contact(app: &mut App, ui: &mut egui::Ui) {
 
 fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let palette = app.palette;
-    // A chat, or someone met in a group who has no chat of their own.
+    // Group members may not have an existing chat.
     let chat = app
         .chat(id)
         .cloned()
@@ -374,16 +370,13 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let has_chat = app.chat(id).is_some();
     let name = app.chat_title(&chat);
     title(ui, app, if chat.is_group() { "Group" } else { "Contact" });
-    // The card follows the window: the photo takes about a third of its
-    // height and the member list gives rows up, so a small window still
-    // holds the whole card.
+    // Scale the photo and member list to fit the window.
     let window = ui.ctx().content_rect().height();
     let photo = (window * 0.34).clamp(120.0, 240.0);
     let picture = app.avatar_full(id).or_else(|| app.avatar(id));
     let mine = app.me.as_deref() == Some(id);
     let editable = chat.phone().is_some() && !mine;
-    // The name editor's buffer is checked out for the frame; not putting
-    // it back is how saving or cancelling closes the editor.
+    // Saving or cancelling leaves the editor buffer checked out.
     let mut editing = app.contact_edit.take().filter(|_| editable);
     let mut saved = None;
     ui.vertical_centered(|ui| {
@@ -428,7 +421,7 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     18.0,
                     palette.secondary,
                     palette.accent,
-                    "Save the name (Enter)",
+                    "Save name (Enter)",
                 )
                 .clicked()
                 {
@@ -489,7 +482,7 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
             palette.secondary,
         );
         ui.add_space(4.0);
-        // One row each, in a list that scrolls: a group can have thousands.
+        // Limit the visible rows because groups can have thousands of members.
         let row_height = 30.0;
         let rows = ((window - photo - 300.0) / row_height)
             .floor()
@@ -566,7 +559,7 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
         );
     }
     ui.add_space(4.0);
-    // The buttons that apply, in rows centred under the picture.
+    // Center the available actions below the picture.
     let mut buttons: Vec<(Icon, &str, Vec<Action>)> = Vec::new();
     if !chat.is_group() && !mine {
         buttons.push((
@@ -638,7 +631,7 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let mut fired: Option<Vec<Action>> = None;
     let mut start = 0;
     while start < buttons.len() {
-        // As many buttons as the row holds, then the row centred.
+        // Fit and center as many buttons as each row allows.
         let mut end = start;
         let mut total = 0.0;
         while end < buttons.len() {
@@ -669,7 +662,7 @@ fn chat_info(app: &mut App, ui: &mut egui::Ui, id: &str) {
     }
 }
 
-/// A filled button in the danger colour, for the one irreversible action.
+/// A filled button for a destructive action.
 fn danger_button(ui: &mut egui::Ui, app: &mut App, label: &str) -> bool {
     let palette = app.palette;
     let galley = ui.painter().layout_no_wrap(

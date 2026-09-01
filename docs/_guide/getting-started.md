@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-description: Install FastsApp, link it with your phone, and let the history arrive.
+description: Install FastsApp, link your phone, and load chat history.
 nav_order: 2
 ---
 
@@ -17,9 +17,8 @@ cd fastsapp
 cargo install --path .
 ```
 
-On Linux the build needs the development packages any egui application
-does, plus ALSA and cmake (libopus and the H.264 decoder compile from
-source). On Arch:
+On Linux, the build needs egui's development libraries, ALSA, and CMake.
+libopus and the H.264 decoder build from source. On Arch Linux:
 
 ```sh
 sudo pacman -S --needed alsa-lib libxkbcommon wayland cmake
@@ -35,26 +34,24 @@ A desktop entry ships in `packaging/applications/fastsapp.desktop`.
 
 ## Link with your phone
 
-FastsApp is a companion device, like WhatsApp Web. Start it and either:
+FastsApp links as a companion device, like WhatsApp Web. Start it and either:
 
 - scan the QR code with your phone (WhatsApp, **Settings**, **Linked
   devices**, **Link a device**), or
-- click **Link with phone number** and type the eight-character code into
-  the phone instead, when the camera is not handy.
+- click **Link with phone number** and enter the eight-character code on your
+  phone.
 
-The link survives restarts; your phone does not need to stay on the same
-network, or online, for reading what has already arrived.
+The link survives restarts. Your phone does not need to stay on the same
+network or be online to read messages already stored in FastsApp.
 
-## The history arrives twice
+## Message history
 
-Right after linking, the phone sends the recent history: the chat list
-fills within seconds, and messages keep streaming in for a few minutes.
-From then on, FastsApp keeps everything it sees in its own archive, so its
-history grows past what WhatsApp replays. Scrolling to the top of a chat
-asks your phone for what came before; the phone must be online to answer.
+After linking, the phone sends recent history. The chat list appears within
+seconds, and messages can take a few minutes to finish loading. FastsApp stores
+new messages in its own archive. When you scroll past the stored history,
+FastsApp asks your phone for older messages. The phone must be online.
 
-## A safe place to try things
+## Try it in your own chat
 
-Your own chat (the one WhatsApp calls **Message yourself**) behaves like
-any other and is the place to try sending, reactions, edits, voice
-messages, and attachments without an audience.
+Use WhatsApp's **Message yourself** chat to try messages, reactions, edits,
+voice messages, and attachments privately.

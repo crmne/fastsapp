@@ -1,12 +1,7 @@
-//! Faces borrowed from the system for scripts the interface font cannot draw.
+//! System font fallbacks for scripts Inter does not support.
 //!
-//! Inter draws Latin, Greek, and Cyrillic and nothing else, and the faces
-//! egui bundles add no more, so a title in any other script arrives as a row
-//! of tofu boxes. Shipping the fonts that would cover them is not an option
-//! -- Noto CJK alone is ten times this binary -- but a desktop that displays
-//! a script already carries a face for it. This asks every installed font
-//! what it covers, with the parser epaint rasterizes with, and lends the best
-//! face per script to the interface.
+//! Installed fonts are scanned once. The best regular sans-serif face for each
+//! missing script is added to egui's fallback list.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,21 +9,16 @@ use std::sync::OnceLock;
 
 use skrifa::MetadataProvider as _;
 
-/// One borrowed face: the name to register it under, the file, and the face
-/// to open inside it.
+/// Registered fallback name, font bytes, and face index.
 pub struct Fallback {
     pub name: String,
     pub bytes: Vec<u8>,
     pub index: u32,
 }
 
-/// The scripts Inter cannot draw: a character that says whether a face covers
-/// one, and the word a face designed for it puts in its name.
+/// Missing scripts represented by a probe character and preferred name hint.
 ///
-/// One face is borrowed per entry, in this order, so a font that covers
-/// several scripts is registered once and the rest fall through to it. Only
-/// the glyphs a title actually uses are ever rasterized, so an entry that
-/// finds a face costs the file in memory and nothing in drawing.
+/// Entries are ordered so one font covering several scripts is registered once.
 const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
     ("han", '\u{4e2d}', "cjk"),
     ("kana", '\u{3042}', "cjk"),
@@ -52,19 +42,14 @@ const FALLBACK_SCRIPTS: &[(&str, char, &str)] = &[
     ("georgian", '\u{10d0}', "georgian"),
     ("ethiopic", '\u{1200}', "ethiopic"),
     ("cherokee", '\u{13a0}', "cherokee"),
-    // Not scripts in daily use here, but the styled letters and marks
-    // people put in their names: the ꧁꧂ ornaments (Javanese, probed by the
-    // ornament itself), mathematical alphanumerics (the 𝓯𝓪𝓷𝓬𝔂 alphabets),
-    // enclosed letters, and the loose symbols. Inter draws none of them,
-    // and they showed as boxes wherever a name used them.
+    // Include ornamental and styled characters commonly used in display names.
     ("javanese", '\u{a9c1}', "javanese"),
     ("math", '\u{1d4d0}', "math"),
     ("enclosed", '\u{24b6}', "symbol"),
     ("symbols", '\u{2661}', "symbol"),
 ];
 
-/// The regional cut of a pan-CJK font a locale should be shown, longest
-/// prefix first.
+/// Preferred pan-CJK region by locale prefix, longest first.
 const HAN_REGIONS: &[(&str, &str)] = &[
     ("zh_tw", "tc"),
     ("zh_hant", "tc"),
@@ -75,40 +60,31 @@ const HAN_REGIONS: &[(&str, &str)] = &[
     ("ko", "kr"),
 ];
 
-/// The regional cuts a pan-CJK family can name itself after.
+/// Region names used by pan-CJK font families.
 const HAN_REGION_NAMES: &[&str] = &["sc", "tc", "hk", "jp", "kr"];
 
-/// How deep to walk each font directory. Distributions nest a level or two
-/// (`/usr/share/fonts/truetype/noto`); nothing legitimate goes deeper, and the
-/// bound also ends any symlink loop.
+/// Maximum font-directory depth, also limiting symlink loops.
 const FONT_SCAN_DEPTH: usize = 4;
 
-/// A collection says how many faces it holds, and a corrupt or hostile file
-/// can say billions. No real one holds more than a few dozen.
+/// Maximum accepted faces in a collection to reject invalid counts.
 const MAX_FACES: u32 = 64;
 
-/// One borrowed face per script this system can draw and Inter cannot.
+/// One system fallback per unsupported Inter script.
 ///
-/// The search happens once per process: `theme::install` runs again for
-/// every window the app creates, and this reads every font on the machine.
+/// The font scan runs once per process, across recreated windows.
 pub fn fallbacks() -> &'static [Fallback] {
     static FONTS: OnceLock<Vec<Fallback>> = OnceLock::new();
     FONTS.get_or_init(load)
 }
 
-/// A face that covers a script, and how well it suits the interface.
+/// Candidate font face and interface-suitability score.
 struct Candidate {
     score: u32,
     path: PathBuf,
     index: u32,
 }
 
-/// Finds the best face for each of [`FALLBACK_SCRIPTS`] and reads the files
-/// they live in.
-///
-/// Asking every installed font what it covers is the only question that
-/// survives a distribution renaming its packages, and the answer comes from
-/// the parser epaint already uses to rasterize the glyphs.
+/// Finds and reads the best installed face for each [`FALLBACK_SCRIPTS`] entry.
 fn load() -> Vec<Fallback> {
     let han = han_region(&locale());
     let started = std::time::Instant::now();
@@ -123,9 +99,7 @@ fn load() -> Vec<Fallback> {
         FALLBACK_SCRIPTS.len()
     );
 
-    // A face that covers several scripts -- a pan-CJK collection covers three
-    // of them alone -- is read and registered once, under the first script
-    // that chose it.
+    // Read and register a face only once when it covers several scripts.
     let mut fonts: Vec<Fallback> = Vec::new();
     let mut taken: Vec<(PathBuf, u32)> = Vec::new();
     for (script, _, _) in FALLBACK_SCRIPTS {
@@ -158,7 +132,7 @@ fn load() -> Vec<Fallback> {
     fonts
 }
 
-/// Probes every font file below `dir`, keeping the best face per script.
+/// Scans font files below `dir` and keeps the best face per script.
 fn probe_dir(dir: &Path, depth: usize, han: &str, best: &mut BTreeMap<&str, Candidate>) {
     if depth >= FONT_SCAN_DEPTH {
         return;
@@ -167,9 +141,7 @@ fn probe_dir(dir: &Path, depth: usize, han: &str, best: &mut BTreeMap<&str, Cand
         return;
     };
     for entry in entries.flatten() {
-        // The kind comes back with the directory listing, so only a symlink
-        // (Debian nests its font tree behind them, as does a Flatpak's
-        // `/run/host/fonts`) costs a look at the target.
+        // Resolve file type only for symlinks used by Debian and Flatpak paths.
         let Ok(kind) = entry.file_type() else {
             continue;
         };
@@ -182,7 +154,7 @@ fn probe_dir(dir: &Path, depth: usize, han: &str, best: &mut BTreeMap<&str, Cand
     }
 }
 
-/// Whether a path names a font this can open.
+/// Whether the path has a supported font extension.
 fn is_font_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -194,19 +166,15 @@ fn is_font_file(path: &Path) -> bool {
         })
 }
 
-/// Offers every face in one font file to every script that still wants one.
+/// Scores each face in a font file for missing scripts.
 fn probe_file(path: &Path, han: &str, best: &mut BTreeMap<&str, Candidate>) {
     let Ok(file) = std::fs::File::open(path) else {
         return;
     };
-    // Mapping the file rather than reading it keeps this to the few pages
-    // holding each font's header, names, and character map: reading every
-    // font on a normal Linux tree whole costs half a second, mapping them
-    // costs a tenth of that.
+    // Memory-map files so scanning touches only headers, names, and charmaps.
     //
-    // Safety: the mapping is read-only and lives inside this call. A font
-    // file rewritten underneath it during that window would fault, which is
-    // the same bet every font enumerator on the platform makes.
+    // Safety: the read-only mapping does not outlive this call. Replacing the
+    // file concurrently could fault, as with other platform font scanners.
     let Ok(map) = (unsafe { memmap2::Mmap::map(&file) }) else {
         return;
     };
@@ -231,8 +199,7 @@ fn probe_file(path: &Path, han: &str, best: &mut BTreeMap<&str, Candidate>) {
         let charmap = font.charmap();
         let outlines = font.outline_glyphs();
         for (script, probe, hint) in FALLBACK_SCRIPTS {
-            // A face must draw the character, not merely map it: a bitmap or
-            // colour-only font passes the charmap and renders nothing.
+            // Require an outline, not only a charmap entry from a bitmap font.
             let covers = charmap
                 .map(*probe)
                 .is_some_and(|glyph| outlines.get(glyph).is_some());
@@ -240,8 +207,7 @@ fn probe_file(path: &Path, han: &str, best: &mut BTreeMap<&str, Candidate>) {
                 continue;
             }
             let score = face_score(&family, attributes.weight.value(), han, hint);
-            // Ties break on the path so two machines carrying the same fonts
-            // resolve the same face, whatever order their directories list.
+            // Break score ties by path for deterministic selection.
             if best
                 .get(script)
                 .is_none_or(|held| (score, path) < (held.score, held.path.as_path()))
@@ -259,24 +225,16 @@ fn probe_file(path: &Path, han: &str, best: &mut BTreeMap<&str, Candidate>) {
     }
 }
 
-/// Ranks a face as interface text for the script named by `hint`, lowest
-/// first.
+/// Scores a face for interface use with `hint`; lower is better.
 ///
-/// Serif, monospace, and display cuts lose to a plain sans, and anything far
-/// from regular weight loses to something near it, so the fallback sits
-/// beside Inter rather than shouting over it.
+/// Prefer regular sans-serif faces over serif, monospace, and display styles.
 fn face_score(family: &str, weight: f32, han: &str, hint: &str) -> u32 {
     let mut score = ((weight - 400.0).abs() / 25.0) as u32;
-    // A face that names the script was drawn for it. Liberation Sans carries
-    // enough Hebrew to pass the coverage test, but Noto Sans Hebrew is the
-    // one a reader wants.
+    // Prefer families designed for the target script over incidental coverage.
     if !family.contains(hint) {
         score += 25;
     }
-    // A family that calls itself sans is asking to be read at interface size.
-    // The rest of a Noto set are the specialised cuts -- Nastaliq for Urdu
-    // poetry, Rashi for rabbinic commentary, Kufi for display -- which are
-    // correct typography for a body of text and wrong for a track title.
+    // Prefer sans families at interface sizes over specialized display cuts.
     if !family.contains("sans") {
         score += 50;
     }
@@ -294,10 +252,7 @@ fn face_score(family: &str, weight: f32, han: &str, hint: &str) -> u32 {
             score += penalty;
         }
     }
-    // Han characters are unified in Unicode, so 直 and 骨 have a Japanese
-    // shape and a Chinese one and the font decides which a reader sees. A
-    // pan-CJK family names its regional cut last ("Noto Sans CJK SC",
-    // "PingFang TC"); prefer the cut this locale reads.
+    // Prefer the locale's regional pan-CJK glyph forms.
     if let Some(region) = family
         .rsplit(' ')
         .next()
@@ -309,8 +264,7 @@ fn face_score(family: &str, weight: f32, han: &str, hint: &str) -> u32 {
     score
 }
 
-/// The user's locale, lowercased, or an empty string when none is set. A
-/// variable that is set but empty does not count, as POSIX has it.
+/// Lowercase user locale, or an empty string when unset.
 fn locale() -> String {
     ["LC_ALL", "LC_CTYPE", "LANG"]
         .iter()
@@ -319,8 +273,7 @@ fn locale() -> String {
         .to_lowercase()
 }
 
-/// The pan-CJK cut a locale reads, defaulting to Simplified Chinese -- the
-/// most widely read of them, and what a desktop that never set a locale gets.
+/// Preferred pan-CJK region, defaulting to Simplified Chinese.
 fn han_region(locale: &str) -> &'static str {
     HAN_REGIONS
         .iter()
@@ -348,9 +301,7 @@ fn font_dirs() -> Vec<PathBuf> {
             add(PathBuf::from(local).join(r"Microsoft\Windows\Fonts"));
         }
     } else {
-        // Every data directory fontconfig looks in, in its order, so a
-        // distribution that keeps its fonts elsewhere (NixOS, Guix) is
-        // covered along with the usual two.
+        // Include XDG data directories used by distributions such as NixOS and Guix.
         let data_dirs = std::env::var("XDG_DATA_DIRS")
             .ok()
             .filter(|value| !value.is_empty())
@@ -358,16 +309,14 @@ fn font_dirs() -> Vec<PathBuf> {
         for dir in data_dirs.split(':').filter(|dir| !dir.is_empty()) {
             add(PathBuf::from(dir).join("fonts"));
         }
-        // What a Flatpak sees of the host's fonts.
+        // Flatpak host fonts.
         add(PathBuf::from("/run/host/fonts"));
-        // The pre-XDG per-user directory, which fontconfig still honours.
+        // Legacy per-user font directory still supported by fontconfig.
         if let Some(user) = &user {
             add(user.home_dir().join(".fonts"));
         }
     }
-    // `~/Library/Fonts` on macOS and `$XDG_DATA_HOME/fonts` on Linux: where a
-    // font the user installed by hand lands. Windows keeps none, and its
-    // per-user store is the `LOCALAPPDATA` path above.
+    // Add the platform's per-user font directory when it is separate.
     if let Some(font_dir) = user.as_ref().and_then(|user| user.font_dir()) {
         add(font_dir.to_path_buf());
     }
@@ -401,7 +350,7 @@ mod tests {
 
     #[test]
     fn a_face_drawn_for_the_script_wins() {
-        // Liberation Sans covers Hebrew, but Noto Sans Hebrew is drawn for it.
+        // Prefer a script-specific family over incidental glyph coverage.
         assert!(
             face_score("noto sans hebrew", 400.0, "sc", "hebrew")
                 < face_score("liberation sans", 400.0, "sc", "hebrew")
@@ -419,7 +368,7 @@ mod tests {
         );
     }
 
-    /// Lists which scripts found a face on this machine:
+    /// Lists the fallback selected for each script:
     /// `cargo test system_fonts -- --ignored --nocapture`.
     #[test]
     #[ignore = "reads this machine's fonts"]
@@ -442,7 +391,7 @@ mod tests {
 
     #[test]
     fn probing_the_system_never_panics() {
-        // Whatever fonts this machine has, including none.
+        // The result depends on installed fonts and may be empty.
         let _ = fallbacks();
     }
 }

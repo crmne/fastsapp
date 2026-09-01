@@ -3,7 +3,7 @@
 use jiff::civil::Date;
 use jiff::{Timestamp, Zoned};
 
-/// Local wall-clock time of a Unix timestamp, in the local time zone.
+/// Converts a Unix timestamp to local time.
 fn zoned(unix_seconds: i64) -> Option<Zoned> {
     let timestamp = Timestamp::from_second(unix_seconds).ok()?;
     Some(timestamp.to_zoned(jiff::tz::TimeZone::system()))
@@ -13,15 +13,14 @@ fn today() -> Date {
     Zoned::now().date()
 }
 
-/// "14:05", the time a message was sent, in local time.
+/// Local message time such as "14:05".
 pub fn clock(unix_seconds: i64) -> String {
     zoned(unix_seconds)
         .map(|when| format!("{:02}:{:02}", when.hour(), when.minute()))
         .unwrap_or_default()
 }
 
-/// The stamp WhatsApp writes before each message when several are copied
-/// together: `22:41, 8/18/2026`.
+/// WhatsApp transcript timestamp such as `22:41, 8/18/2026`.
 pub fn copy_stamp(unix_seconds: i64) -> String {
     zoned(unix_seconds)
         .map(|when| {
@@ -37,8 +36,7 @@ pub fn copy_stamp(unix_seconds: i64) -> String {
         .unwrap_or_default()
 }
 
-/// The stamp on a chat row: the time today, "Yesterday", a weekday within
-/// the week, and a date beyond it.
+/// Chat-row timestamp: time today, weekday this week, or date.
 pub fn chat_stamp(unix_seconds: i64) -> String {
     let Some(when) = zoned(unix_seconds) else {
         return String::new();
@@ -59,9 +57,7 @@ fn stamp_relative_to(date: Date, today: Date, when: &Zoned) -> String {
     }
 }
 
-/// A display name split for the contact editor: the first word, and the
-/// rest as the surname. A guess for prefilling; the person typing has
-/// the last word.
+/// Splits a display name into first name and surname for editor defaults.
 pub fn split_name(name: &str) -> (String, String) {
     let name = name.trim();
     match name.split_once(' ') {
@@ -70,8 +66,7 @@ pub fn split_name(name: &str) -> (String, String) {
     }
 }
 
-/// The stamp on a message's info rows: the day as the chat list says it,
-/// with the minute it happened.
+/// Message-info timestamp with date and minute.
 pub fn moment_stamp(unix_seconds: i64) -> String {
     let Some(when) = zoned(unix_seconds) else {
         return String::new();
@@ -89,7 +84,7 @@ pub fn moment_stamp(unix_seconds: i64) -> String {
     }
 }
 
-/// The label of a day separator in a conversation.
+/// Conversation day-separator label.
 pub fn day_label(unix_seconds: i64) -> String {
     let Some(when) = zoned(unix_seconds) else {
         return String::new();
@@ -108,7 +103,7 @@ pub fn day_label(unix_seconds: i64) -> String {
     }
 }
 
-/// The local calendar day a timestamp falls on, for grouping messages.
+/// Local calendar day used to group messages.
 pub fn day_key(unix_seconds: i64) -> Option<Date> {
     zoned(unix_seconds).map(|when| when.date())
 }
@@ -166,12 +161,12 @@ pub fn now() -> i64 {
     Timestamp::now().as_second()
 }
 
-/// "0:12" for the length of a voice message.
+/// Duration such as "0:12".
 pub fn duration(seconds: u32) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
-/// "1.2 MB", for a document.
+/// File size such as "1.2 MB".
 pub fn bytes(size: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut value = size as f64;
@@ -187,7 +182,7 @@ pub fn bytes(size: u64) -> String {
     }
 }
 
-/// Up to two initials, for an avatar without a picture.
+/// Up to two initials for a fallback avatar.
 pub fn initials(name: &str) -> String {
     let mut words = name
         .split(|character: char| character.is_whitespace() || character == '-')
@@ -206,7 +201,7 @@ pub fn initials(name: &str) -> String {
     initials
 }
 
-/// A phone number as people write it: a plus and the digits, spaced.
+/// Formats a phone number with a plus sign and grouped digits.
 pub fn phone(digits: &str) -> String {
     let digits: String = digits.chars().filter(char::is_ascii_digit).collect();
     if digits.is_empty() {
@@ -214,8 +209,7 @@ pub fn phone(digits: &str) -> String {
     }
     let mut out = String::from("+");
     for (index, character) in digits.chars().enumerate() {
-        // Country code, then groups of three; imprecise for many countries
-        // but readable for all of them.
+        // Approximate a country code followed by groups of three digits.
         if index == 2 || (index > 2 && (index - 2) % 3 == 0) {
             out.push(' ');
         }
@@ -224,7 +218,7 @@ pub fn phone(digits: &str) -> String {
     out
 }
 
-/// A stable hue for a name, so an avatar keeps its colour between runs.
+/// Stable id-derived avatar hue.
 pub fn hue(seed: &str) -> f32 {
     let mut hash: u32 = 2_166_136_261;
     for byte in seed.bytes() {
@@ -234,11 +228,10 @@ pub fn hue(seed: &str) -> f32 {
     (hash % 360) as f32
 }
 
-/// The mark: `packaging/icons/fastsapp.svg`, the one drawing the desktop
-/// files, the window, the tray, and the notifications all show.
+/// Embedded SVG app logo used across platform surfaces.
 const MARK: &[u8] = include_bytes!("../packaging/icons/fastsapp.svg");
 
-/// The mark rasterised to straight RGBA at `size` by `size`.
+/// Rasterizes the logo to straight-alpha RGBA.
 pub fn app_icon_rgba(size: usize) -> Vec<u8> {
     let side = size.max(1) as u32;
     let rendered = resvg::usvg::Tree::from_data(MARK, &resvg::usvg::Options::default())
@@ -264,8 +257,7 @@ pub fn app_icon_rgba(size: usize) -> Vec<u8> {
         });
     match rendered {
         Some(rgba) => rgba,
-        // The drawing is part of the build and tested; a plain disc is the
-        // only sensible thing to show if it ever failed to render.
+        // Fall back to an accent disc if the embedded SVG cannot render.
         None => plain_disc(size),
     }
 }
@@ -289,8 +281,7 @@ fn plain_disc(size: usize) -> Vec<u8> {
     rgba
 }
 
-/// The mark as a macOS template image: the disc black, the glyph a hole,
-/// so the menu bar can draw it in whichever colour matches its theme.
+/// Converts the logo to a monochrome macOS menu-bar template.
 pub fn tray_template_rgba(size: usize) -> Vec<u8> {
     let mut rgba = app_icon_rgba(size);
     for pixel in rgba.as_chunks_mut::<4>().0 {

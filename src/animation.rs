@@ -1,11 +1,8 @@
-//! Moving pictures: WhatsApp's GIFs (short MP4 videos), animated stickers
-//! (animated WebP), and GIF files.
+//! Playback for WhatsApp GIFs, animated WebP stickers, and GIF files.
 //!
-//! Frames are decoded once, off the interface thread, into textures the
-//! view cycles through. WebP and GIF decode in-process; MP4 goes through
-//! the `ffmpeg` command when the desktop has one, and shows its poster
-//! otherwise. Decoded animations are dropped again once nothing has drawn
-//! them for a while, since a chat can hold a great many.
+//! Decoding runs off the UI thread. WebP, GIF, and H.264 MP4 decode in-process;
+//! other MP4 codecs use `ffmpeg` when available. Idle animations are removed
+//! from memory.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -16,21 +13,20 @@ use std::time::{Duration, Instant};
 
 use egui::{ColorImage, TextureHandle, TextureOptions};
 
-/// Frames are scaled down to at most this wide before upload.
+/// Maximum frame width uploaded to the GPU.
 const MAX_WIDTH: u32 = 320;
-/// And no more than this many are kept; a long GIF loops early.
+/// Maximum frames kept per animation.
 const MAX_FRAMES: usize = 150;
-/// How long an animation nobody has drawn stays decoded.
+/// Time an unseen animation remains decoded.
 const IDLE: Duration = Duration::from_secs(20);
-/// Decoders running at once; a sticker-heavy chat queues the rest.
+/// Maximum concurrent decoders.
 const MAX_DECODERS: usize = 2;
-/// Frames kept as textures across every animation; the least recently
-/// drawn go first when this is exceeded.
+/// Global texture-frame budget. Least-recently-used animations are removed first.
 const MAX_RESIDENT_FRAMES: usize = 450;
 
 static DECODING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Holds one of the decoder slots for as long as it lives.
+/// Guard for one decoder slot.
 struct DecodeSlot;
 
 impl Drop for DecodeSlot {
@@ -59,10 +55,10 @@ enum Entry {
 #[derive(Clone, Default)]
 struct Cache(Arc<Mutex<HashMap<PathBuf, Entry>>>);
 
-/// What a decoder thread delivers: the file, and its frames if any.
+/// Result returned by a decoder thread.
 type Delivery = (PathBuf, Option<Decoded>);
 
-/// Decoded frames waiting to become textures; filled by decoder threads.
+/// Decoded frames waiting for texture upload.
 #[derive(Clone, Default)]
 struct Inbox(Arc<Mutex<Vec<Delivery>>>);
 
@@ -80,22 +76,21 @@ fn inbox(ctx: &egui::Context) -> Inbox {
     })
 }
 
-/// What to show for an animated file right now.
+/// Current display state for an animated file.
 pub enum Frame {
-    /// The picture for this instant.
+    /// Current animation frame.
     Ready(TextureHandle),
-    /// Still decoding; show the poster.
+    /// Decode in progress; show the poster.
     Pending,
-    /// Cannot be played here; show the poster and offer to open it.
+    /// Unsupported in-app; show the poster and allow opening the file.
     Unavailable,
 }
 
-/// The frame to draw for `path` at this moment, starting the decode the
-/// first time. Asks for a repaint when the next frame is due.
+/// Returns the current frame, starting decoding when needed. Schedules the next repaint.
 pub fn frame(ctx: &egui::Context, path: &Path) -> Frame {
     let cache = cache(ctx);
     let inbox = inbox(ctx);
-    // Move what the decoders delivered into textures, on this thread.
+    // Upload decoded frames on the UI thread.
     let arrived: Vec<Delivery> =
         std::mem::take(&mut *inbox.0.lock().unwrap_or_else(|p| p.into_inner()));
     let mut entries = cache.0.lock().unwrap_or_else(|p| p.into_inner());
@@ -124,8 +119,7 @@ pub fn frame(ctx: &egui::Context, path: &Path) -> Frame {
         };
         entries.insert(arrived_path, entry);
     }
-    // Forget what nobody looks at any more, and beyond the budget, what
-    // was looked at longest ago.
+    // Remove idle and least-recently-used animations.
     let now = Instant::now();
     entries.retain(|_, entry| match entry {
         Entry::Ready(playing) => now.duration_since(playing.last_drawn) < IDLE,
@@ -177,7 +171,7 @@ pub fn frame(ctx: &egui::Context, path: &Path) -> Frame {
         Some(Entry::Failed) => Frame::Unavailable,
         None => {
             if DECODING.load(std::sync::atomic::Ordering::Acquire) >= MAX_DECODERS {
-                // Every decoder is busy; ask again shortly.
+                // Retry shortly when all decoder slots are busy.
                 ctx.request_repaint_after(Duration::from_millis(150));
                 return Frame::Pending;
             }
@@ -190,7 +184,7 @@ pub fn frame(ctx: &egui::Context, path: &Path) -> Frame {
                 .name("animation-decode".into())
                 .spawn(move || {
                     let _slot = slot;
-                    // A decoder that panics still answers, with nothing.
+                    // Convert decoder panics to failed results.
                     let decoded =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&file)))
                             .unwrap_or(None);
@@ -210,13 +204,12 @@ pub fn frame(ctx: &egui::Context, path: &Path) -> Frame {
     }
 }
 
-/// Whether MP4 playback is possible on this desktop: always, since H.264
-/// decodes in-process; kept for the interface.
+/// MP4 playback is always available because H.264 decodes in-process.
 pub fn can_play_video() -> bool {
     true
 }
 
-/// Whether ffmpeg is around for anything H.264 cannot cover.
+/// Whether `ffmpeg` is available for other MP4 codecs.
 fn ffmpeg_present() -> bool {
     static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *KNOWN.get_or_init(|| {
@@ -241,7 +234,7 @@ fn decode(path: &Path) -> Option<Decoded> {
     }
 }
 
-/// Animated GIF through the `image` crate; WebP goes to libwebp.
+/// Decodes animated GIF with the `image` crate.
 fn decode_image(path: &Path, extension: &str) -> Option<Decoded> {
     use image::AnimationDecoder;
     if extension != "gif" {
@@ -263,10 +256,8 @@ fn decode_image(path: &Path, extension: &str) -> Option<Decoded> {
     Some(Decoded { frames: decoded })
 }
 
-/// Animated WebP through libwebp itself. The `image` crate's WebP
-/// decoder composites frames without disposing the ones before, so a
-/// moving subject left its earlier selves behind; libwebp hands back
-/// each full canvas. Its timestamps mark where a frame ends.
+/// Decodes animated WebP with libwebp. It returns complete canvas frames,
+/// unlike the `image` decoder, which did not apply frame disposal correctly.
 fn decode_webp(path: &Path) -> Option<Decoded> {
     let bytes = std::fs::read(path).ok()?;
     let decoder = webp_animation::Decoder::new(&bytes).ok()?;
@@ -279,7 +270,7 @@ fn decode_webp(path: &Path) -> Option<Decoded> {
         previous = i64::from(frame.timestamp());
         decoded.push((to_color_image(&image), Duration::from_millis(delay)));
     }
-    // A single frame is a still; the plain picture path draws it.
+    // Single-frame files use the static-image path.
     (decoded.len() > 1).then_some(Decoded { frames: decoded })
 }
 
@@ -301,15 +292,13 @@ fn to_color_image(image: &image::RgbaImage) -> ColorImage {
     )
 }
 
-/// MP4 through the `ffmpeg` command: raw RGBA frames at a modest rate and
-/// width, read off its standard output.
+/// Decodes MP4 to scaled RGBA frames with `ffmpeg`.
 fn decode_video(path: &Path) -> Option<Decoded> {
-    // WhatsApp's GIFs are H.264 in MP4, which decodes here without any
-    // program installed; anything else goes to ffmpeg when there is one.
+    // Decode WhatsApp's H.264 MP4s in-process and use ffmpeg for other codecs.
     decode_mp4(path).or_else(|| decode_with_ffmpeg(path))
 }
 
-/// The video track of an MP4, decoded in-process.
+/// Decodes an MP4 video track in-process.
 fn decode_mp4(path: &Path) -> Option<Decoded> {
     let file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
@@ -330,7 +319,7 @@ fn decode_mp4(path: &Path) -> Option<Decoded> {
     let mut decoder = openh264::decoder::Decoder::new().ok()?;
     let mut frames: Vec<(ColorImage, Duration)> = Vec::new();
     let mut delays: std::collections::VecDeque<Duration> = std::collections::VecDeque::new();
-    // The parameter sets first, then each sample, all as Annex B.
+    // Send parameter sets and samples to the decoder in Annex B format.
     let mut parameters = Vec::new();
     push_annex_b(&mut parameters, &sps);
     push_annex_b(&mut parameters, &pps);
@@ -368,7 +357,7 @@ fn decode_mp4(path: &Path) -> Option<Decoded> {
     (!frames.is_empty()).then_some(Decoded { frames })
 }
 
-/// One decoded picture as a frame, scaled down to the playback width.
+/// Converts and scales one decoded frame.
 fn frame_of(
     yuv: &openh264::decoder::DecodedYUV<'_>,
     delay: Duration,
@@ -402,8 +391,7 @@ fn push_annex_b(out: &mut Vec<u8>, nal: &[u8]) {
     out.extend_from_slice(nal);
 }
 
-/// MP4 samples carry NAL units behind four-byte lengths; the decoder wants
-/// them behind start codes.
+/// Converts length-prefixed AVCC NAL units to Annex B start codes.
 fn avcc_to_annex_b(out: &mut Vec<u8>, sample: &[u8]) {
     let mut rest = sample;
     while rest.len() >= 4 {
@@ -443,8 +431,7 @@ fn decode_with_ffmpeg(path: &Path) -> Option<Decoded> {
         return None;
     }
     let out_width = width.min(MAX_WIDTH);
-    // Even dimensions keep every encoder happy; the height follows the
-    // aspect ratio.
+    // Use even dimensions and preserve aspect ratio.
     let out_height = ((height as u64 * out_width as u64 / width as u64) as u32).max(2) & !1;
     let fps = 15u32;
     let mut child = Command::new("ffmpeg")
@@ -488,9 +475,7 @@ fn decode_with_ffmpeg(path: &Path) -> Option<Decoded> {
 mod tests {
     use super::*;
 
-    /// The bug the picker showed: a moving subject left its earlier
-    /// selves behind, because the image crate's WebP decoder blends
-    /// frames without disposing the ones before.
+    /// Verifies animated WebP frame disposal.
     #[test]
     fn a_moving_subject_leaves_no_trace_behind() {
         use webp_animation::prelude::*;
@@ -529,7 +514,7 @@ mod tests {
 
     #[test]
     fn animated_webp_decodes_into_frames() {
-        // Two frames, 100 ms apart, built with the image crate itself.
+        // Two frames 100 ms apart.
         let dir = std::env::temp_dir().join(format!("fastsapp-anim-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("two.gif");
@@ -578,13 +563,11 @@ mod tests {
             .status()
             .is_ok_and(|status| status.success());
         if !made {
-            // No encoder on this ffmpeg; nothing to check.
+            // Skip when this ffmpeg lacks the encoder.
             return;
         }
         let decoded = decode(&path).expect("decodes");
-        // Half a second, resampled to 15 frames a second.
-        // Five samples at ten a second: the in-process path keeps each one
-        // and its own timing (ffmpeg would resample to fifteen a second).
+        // Five frames at 10 fps. The in-process path preserves their timing.
         assert_eq!(decoded.frames.len(), 5);
         assert_eq!(decoded.frames[0].1, Duration::from_millis(100));
         assert_eq!(decoded.frames[0].0.size, [64, 48]);
@@ -608,7 +591,7 @@ mod tests {
 mod probe {
     use super::*;
 
-    /// Decodes the file named by `FASTSAPP_MP4_PROBE` and reports on it:
+    /// Decodes the file in `FASTSAPP_MP4_PROBE`:
     /// `FASTSAPP_MP4_PROBE=some.mp4 cargo test --all-features probe -- --ignored --nocapture`.
     #[test]
     #[ignore = "needs a file to look at"]

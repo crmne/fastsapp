@@ -1,60 +1,52 @@
 ---
 title: Using FastsApp
-description: Everyday messaging, attachments, voice messages, and the shortcuts behind them.
+description: Send messages and use attachments, voice messages, and keyboard shortcuts.
 nav_order: 3
 ---
 
 ## Writing
 
-Enter sends and Shift+Enter breaks a line (swap them in Settings).
+Enter sends and Shift+Enter adds a line. You can swap them in Settings.
 `*bold*`, `_italic_`, `~strike~`, and ```` ```monospace ```` ```` format
-the way the phone does, and a message of nothing but emoji shows large.
+like WhatsApp, and a message of nothing but emoji shows large.
 Mentions in a group are written with `@`; the smiley opens emoji
 (searchable), GIFs, and stickers, including the stickers used on the
 phone.
 
-Reply, react, edit, forward, and delete live in a message's right-click
-menu, on the whole bubble, along with the message's journey: sent,
-delivered, and read, each with its moment. Hovering a reaction names who
-gave it. Editing your own message reuses the composer; Escape backs out
-of anything.
+Right-click a message to reply, react, edit, forward, delete, or check when it
+was sent, delivered, and read. Hover over a reaction to see who added it.
+Editing uses the composer. Press Escape to cancel.
 
 ## Stickers
 
-Right-click any sticker, in a chat or in the picker, to keep it; the
-kept ones live in a Saved row of the sticker tab. Whole packs come in
-through one paste: the Find packs button opens the
-[signalstickers.org](https://signalstickers.org) gallery, and a copied
-signal.art link imports its pack the moment it lands in the field. A
-`.wastickers` file from any sticker site works through Open file.
-Animated packs keep their motion, and a moving sticker plays while the
-pointer rests on it. A pack leaves through the little bin beside its
-name; everything lives as plain WebP files in a folder of yours.
+Right-click a sticker in a chat or the picker to save it. Saved stickers
+appear in the **Saved** row. To import a pack, click **Find packs**, copy a
+`signal.art` link from [signalstickers.org](https://signalstickers.org), and
+paste it into the field. You can also open a `.wastickers` file. Animated
+stickers remain animated and play on hover. Use the delete button beside a
+pack to remove it. Packs are stored as WebP files on your computer.
 
 ## Attachments
 
-Paste a picture, drop files on the window, or pick them with the
-paperclip: they wait in a strip above the composer until you send, with
-whatever you typed as the caption; Escape or the tile's cross puts one
-back. Incoming attachments up to 64 MB fetch as they scroll into view
-(or on a click, in Settings), with WhatsApp's blurred preview until then.
-A file the servers have let go of is asked for again through the phone,
-and only failing that does the bubble say so.
+Paste a picture, drop files on the window, or select them with the paperclip.
+They stay above the composer until you send them, with the typed text as a
+caption. Press Escape or click a file's close button to remove it. Incoming
+attachments up to 64 MB download when they enter view, or on click if automatic
+downloads are off. If an attachment has expired, FastsApp asks your phone to
+upload it again.
 
 ## Voice messages
 
-They play in the bubble: the button, WhatsApp's own waveform to scrub
-through, the time. The first play tells the sender, the way the phone
-does. With nothing typed, the send button is a microphone: a red light,
-the clock, and the sound as it comes in; Enter or the button sends,
-Escape or the bin discards. Quiet takes are brought up to speaking volume
-before they go out, and replying first quotes the message under the
-recording.
+Voice messages play in the chat with a seekable waveform. The first play sends
+a played receipt. When the composer is empty, the send button becomes a
+microphone. Press Enter or the send button to send the recording, or Escape or
+the delete button to discard it. FastsApp raises the volume of quiet recordings.
+Starting a reply before recording includes the quoted message.
 
 ## Copying
 
-Any message text can be swept with the pointer and copied. A selection
-across several messages copies the way the phone shares one:
+Select and copy any message text. A selection across messages uses WhatsApp's
+sharing format:
 
 ```
 [18:21, 8/30/2026] Ada Lovelace: Hello from France!
@@ -63,22 +55,21 @@ across several messages copies the way the phone shares one:
 
 ## Chats
 
-The search bar answers in three parts: chats whose name, number, or
-last line match; messages, found by their words across everything kept
-on this computer, where clicking one opens the chat at that very
-message; and contacts you have not talked to yet, where clicking one
-starts the conversation. `Alt+↑/↓` walks the chats without leaving the
-composer.
-The chat menu (right-click a chat) pins, archives, and mutes, for eight
-hours, a week, or for good, and the phone follows suit. A chat's header
-opens its page: the picture, the number, and in groups every member.
+The search bar finds chats by name, number, or latest message; searches all
+messages stored on this computer; and finds contacts without an existing chat.
+Click a message result to jump to it, or a contact to start a chat. Use
+`Alt+↑/↓` to switch chats without leaving the composer.
+
+Right-click a chat to pin, archive, or mute it for eight hours, one week, or
+indefinitely. These changes also apply on your phone. Click the chat header to
+see its picture, number, and group members.
 
 ## Notifications and the tray
 
-Closing the window keeps FastsApp in the tray with the link up; the tray
-icon or launching the app again brings the window back. Notifications
-carry the chat's picture and open the chat when clicked; muted chats stay
-quiet. Both behaviours have switches in Settings.
+Closing the window keeps FastsApp linked in the tray. Click the tray icon or
+launch the app again to reopen it. Notifications show the chat picture and open
+the chat when clicked. Muted chats do not send notifications. You can change
+both settings.
 
-`Ctrl+/` lists every shortcut, and so does the little keyboard button
-under the composer.
+Press `Ctrl+/` or click the keyboard button under the composer to list all
+shortcuts.

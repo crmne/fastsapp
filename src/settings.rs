@@ -1,4 +1,4 @@
-//! User preferences, stored as one readable JSON file.
+//! User preferences stored in JSON.
 
 use std::path::Path;
 
@@ -29,39 +29,34 @@ impl ThemeChoice {
 #[serde(default)]
 pub struct Settings {
     pub theme: ThemeChoice,
-    /// Interface zoom, egui's zoom factor; Ctrl+plus/minus changes it.
+    /// egui zoom factor.
     pub zoom: f32,
     pub sidebar_width: f32,
-    /// Enter sends the message; Shift+Enter inserts a line break. Off, the
-    /// two are swapped.
+    /// Whether Enter sends and Shift+Enter adds a line. Off swaps them.
     pub enter_sends: bool,
-    /// Tell the sender when their message has been read here. WhatsApp
-    /// applies the account's own privacy setting on top of this.
+    /// Send read receipts, subject to the account privacy setting.
     pub send_read_receipts: bool,
-    /// Show "typing…" to the other side while composing.
+    /// Send typing state while composing.
     pub send_typing: bool,
-    /// Fetch attachments as they come into view rather than on click.
+    /// Download attachments when they enter view instead of on click.
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
-    /// Show the sender's picture beside every message, not only in groups.
+    /// Show sender avatars outside groups too.
     pub show_sender_pictures: bool,
-    /// Which chat was open, to reopen it at the next start.
+    /// Last open chat, restored at startup.
     pub last_chat: Option<String>,
     pub show_shortcut_hints: bool,
-    /// Emoji picked lately, newest first.
+    /// Recently used emoji, newest first.
     pub recent_emoji: Vec<String>,
-    /// A GIPHY API key, for the GIF search; empty means the built-in one,
-    /// if this build carries any.
+    /// User GIPHY API key. Empty uses the optional built-in key.
     pub giphy_key: String,
-    /// Closing the window hides to the tray and keeps the link up.
+    /// Keep the app linked in the tray when the window closes.
     pub keep_running_in_background: bool,
-    /// Desktop notifications for messages that arrive while away.
+    /// Desktop notifications while away from the chat.
     pub notifications: bool,
-    /// People are named as the address book has them (else as they call
-    /// themselves); off, the other way round. One rule everywhere.
+    /// Prefer address-book names over public profile names.
     pub names_from_contacts: bool,
-    /// A contact saved here also lands in the phone's own address book,
-    /// not only in WhatsApp.
+    /// Also add saved contacts to the phone's address book.
     pub save_contacts_to_phone: bool,
 }
 
@@ -88,13 +83,11 @@ impl Default for Settings {
     }
 }
 
-/// A GIPHY key baked in when the app was built, from the
-/// `FASTSAPP_GIPHY_KEY` environment variable; none in a plain build.
+/// Optional build-time GIPHY key from `FASTSAPP_GIPHY_KEY`.
 pub const BUILT_IN_GIPHY_KEY: Option<&str> = option_env!("FASTSAPP_GIPHY_KEY");
 
 impl Settings {
-    /// The GIPHY key to search with: the user's own, else the built-in
-    /// one, else none.
+    /// Returns the user key, built-in key, or `None`.
     pub fn effective_giphy_key(&self) -> Option<String> {
         let own = self.giphy_key.trim();
         if !own.is_empty() {
@@ -123,8 +116,7 @@ impl Settings {
         }
     }
 
-    /// Writes the file whole, through a temporary name, so a crash halfway
-    /// leaves the previous settings intact.
+    /// Atomically replaces the settings file through a temporary file.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

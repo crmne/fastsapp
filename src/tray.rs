@@ -1,10 +1,7 @@
-//! A status-notifier tray item (Linux), so closing the window can leave the
-//! link up and messages arriving.
+//! Linux status-notifier tray item.
 //!
-//! The tray runs on its own thread and exchanges messages with the
-//! interface: a missing or broken status-notifier host must never take the
-//! link or the window down with it. When no host is present, spawning fails
-//! and the app simply quits on close as before.
+//! It runs on a separate thread. If no tray host is available, window close
+//! falls back to quitting.
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -44,7 +41,7 @@ impl ksni::Tray for FastTray {
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         let size = 64usize;
         let rgba = crate::util::app_icon_rgba(size);
-        // ksni wants ARGB32 in network byte order.
+        // ksni expects network-byte-order ARGB32.
         let mut data = Vec::with_capacity(rgba.len());
         let (pixels, _) = rgba.as_chunks::<4>();
         for [r, g, b, a] in pixels {
@@ -65,7 +62,7 @@ impl ksni::Tray for FastTray {
         use ksni::menu::*;
         vec![
             StandardItem {
-                label: "Show / hide FastsApp".into(),
+                label: "Show or hide FastsApp".into(),
                 activate: Box::new(|tray: &mut Self| tray.send(TrayCommand::ShowHide)),
                 ..Default::default()
             }
@@ -87,7 +84,7 @@ pub struct TrayService {
 }
 
 impl TrayService {
-    /// Registers the tray item. `None` when no status-notifier host exists.
+    /// Registers the tray item, or returns `None` without a host.
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
         let (sender, commands) = std::sync::mpsc::channel();
         let tray = FastTray {
@@ -110,15 +107,14 @@ impl TrayService {
         self.commands.try_iter().collect()
     }
 
-    /// Nothing to do: the item lives on its own thread from the start.
+    /// The tray already runs on its own thread.
     pub fn attach(&mut self) {}
 
-    /// Nothing to do either; see `attach`.
+    /// No per-window cleanup is needed.
     pub fn hidden(&mut self) {}
 }
 
-/// Waits while the app lives in the tray without a window. Linux has
-/// nothing to pump here: the tray runs on its own thread.
+/// Waits while headless; the tray continues on its own thread.
 pub fn idle(duration: Duration) {
     std::thread::sleep(duration);
 }

@@ -52,7 +52,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         ui,
                         &palette,
                         "Zoom",
-                        "Ctrl+plus and Ctrl+minus change it too.",
+                        "You can also use Ctrl+plus and Ctrl+minus.",
                         |ui| {
                             if theme::icon_button(ui, Icon::Plus, 16.0, palette.secondary, palette.text, "Larger").clicked() {
                                 app.actions.push(Action::ZoomBy(0.1));
@@ -70,32 +70,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     );
 
                     section(ui, app, "Chats");
-                    toggle(ui, app, "Enter sends", "Off, Enter adds a line and Ctrl+Enter sends.", |settings| &mut settings.enter_sends);
+                    toggle(ui, app, "Enter sends", "When off, Enter adds a line and Ctrl+Enter sends.", |settings| &mut settings.enter_sends);
                     let receipts_note = if app.account_receipts_off {
-                        "Your WhatsApp account has read receipts turned off, so none go out in one-to-one chats whatever this says. Groups always get them, as on the phone."
+                        "Read receipts are disabled for your WhatsApp account. One-to-one chats will not send them. Groups always do."
                     } else {
-                        "Let people see when you have read their messages. WhatsApp's own privacy setting still applies."
+                        "Let people see when you read their messages. Your WhatsApp privacy setting still applies."
                     };
                     toggle(ui, app, "Send read receipts", receipts_note, |settings| &mut settings.send_read_receipts);
                     toggle(ui, app, "Show when you are typing", "", |settings| &mut settings.send_typing);
-                    toggle(ui, app, "Download attachments automatically", "Pictures, videos, voice messages, and documents up to 64 MB are fetched as they come into view. Off, each is fetched when you click it.", |settings| &mut settings.auto_download);
+                    toggle(ui, app, "Download attachments automatically", "Download pictures, videos, voice messages, and documents up to 64 MB when they enter view. When off, click a file to download it.", |settings| &mut settings.auto_download);
                     toggle(ui, app, "Show sender pictures in every chat", "WhatsApp shows them in groups only.", |settings| &mut settings.show_sender_pictures);
-                    toggle(ui, app, "Names from your address book", "People are shown as you saved them, and as they call themselves on WhatsApp when you have not. Off, the other way round. The same everywhere: the chat list, senders, replies, mentions, and notifications.", |settings| &mut settings.names_from_contacts);
-                    toggle(ui, app, "Save contacts to the phone's address book", "A contact saved here also lands among the phone's own contacts. Off, they stay a WhatsApp contact only; either way the name reaches every linked device.", |settings| &mut settings.save_contacts_to_phone);
+                    toggle(ui, app, "Names from your address book", "Prefer saved contact names. When off, prefer public WhatsApp profile names. This applies throughout the app.", |settings| &mut settings.names_from_contacts);
+                    toggle(ui, app, "Save contacts to the phone's address book", "Also add contacts saved here to your phone's address book. When off, they remain WhatsApp contacts. Names sync to linked devices either way.", |settings| &mut settings.save_contacts_to_phone);
                     toggle(ui, app, "Show shortcut hints", "", |settings| &mut settings.show_shortcut_hints);
 
                     section(ui, app, "Window");
-                    toggle(ui, app, "Keep running when the window closes", "FastsApp hides to the system tray and stays linked. Quit from the tray menu or with Ctrl+Q.", |settings| &mut settings.keep_running_in_background);
-                    toggle(ui, app, "Notify about new messages", "Through the desktop's own notifications, when the window is hidden, in the background, or showing another chat. Muted chats stay quiet.", |settings| &mut settings.notifications);
+                    toggle(ui, app, "Keep running when the window closes", "Keep FastsApp linked in the system tray. Quit from the tray menu or with Ctrl+Q.", |settings| &mut settings.keep_running_in_background);
+                    toggle(ui, app, "Notify about new messages", "Show desktop notifications when the window is hidden, in the background, or showing another chat. Muted chats do not notify you.", |settings| &mut settings.notifications);
 
                     widgets::setting_row(
                         ui,
                         &palette,
                         "GIPHY API key",
                         if crate::settings::BUILT_IN_GIPHY_KEY.is_some() {
-                            "For the GIF search in the picker. This build carries a key already; one of your own, from developers.giphy.com, replaces it."
+                            "Used for GIF search. This build includes a key. Enter a key from developers.giphy.com to replace it."
                         } else {
-                            "For the GIF search in the picker; a free key from developers.giphy.com."
+                            "Required for GIF search. Get a free key from developers.giphy.com."
                         },
                         |ui| {
                             let response = ui.add(

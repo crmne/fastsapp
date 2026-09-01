@@ -30,10 +30,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         key(Modifiers::COMMAND, Key::Num0, Action::ResetZoom);
         key(Modifiers::COMMAND, Key::End, Action::ScrollToBottom);
     });
-    // Escape backs out of whatever is on top: a dialog, a reply, then the
-    // settings page.
-    // An open menu takes Escape itself; taking it here would leave the
-    // menu up and act on whatever is underneath.
+    // Escape cancels the topmost state. Menus handle Escape themselves.
     let menu_open = egui::Popup::is_any_open(ctx);
     let escape =
         !menu_open && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
@@ -56,14 +53,13 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.push(Action::Search(String::new()));
         }
     }
-    // While recording, Enter sends the voice message: the field is not
-    // there to take it.
+    // Enter sends a recording because the text field is hidden.
     if app.recording.is_some()
         && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter))
     {
         actions.push(Action::SendRecording);
     }
-    // Alt+Up/Down walk the chat list without leaving the composer.
+    // Alt+Up/Down switches chats without leaving the composer.
     let step = ctx.input_mut(|input| {
         if input.consume_key(Modifiers::ALT, Key::ArrowDown) {
             1
@@ -90,7 +86,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     app.actions.extend(actions);
 }
 
-/// The shortcuts, for the dialog that lists them.
+/// Shortcuts shown in the help dialog.
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+F / Ctrl+K", "Search chats"),
     ("Alt+↑ / Alt+↓", "Previous / next chat"),
@@ -106,12 +102,11 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl++ / Ctrl+-", "Zoom in / out"),
     ("Ctrl+0", "Reset zoom"),
     ("Ctrl+/", "This list"),
-    ("Ctrl+W", "Close the window (FastsApp stays in the tray)"),
+    ("Ctrl+W", "Close the window (FastsApp remains in the tray)"),
     ("Ctrl+Q", "Quit"),
 ];
 
-/// A shortcut as the platform writes it: the Command key stands in for
-/// Ctrl on macOS, and Option for Alt.
+/// Uses Command and Option labels on macOS.
 pub fn label(keys: &str) -> String {
     if cfg!(target_os = "macos") {
         keys.replace("Ctrl", "⌘").replace("Alt", "⌥")

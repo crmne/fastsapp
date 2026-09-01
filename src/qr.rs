@@ -1,12 +1,8 @@
-//! The pairing QR code, painted rather than rasterized.
-//!
-//! WhatsApp's linking string is a few hundred characters, so the code is a
-//! large one; painting it as rectangles keeps it crisp at any zoom and
-//! costs nothing at build time.
+//! Vector-painted pairing QR code for sharp output at any zoom.
 
 use egui::{Color32, Rect, Ui, pos2, vec2};
 
-/// The quiet zone the QR specification asks for, in modules.
+/// QR quiet-zone width in modules.
 const QUIET: usize = 4;
 
 pub struct Qr {
@@ -26,12 +22,10 @@ impl Qr {
         Some(Self { width, dark })
     }
 
-    /// Paints the code centred in `rect`, as large as fits, with a white
-    /// quiet zone so any scanner reads it against any background.
+    /// Paints the largest centered code that fits `rect`, including a white quiet zone.
     pub fn paint(&self, ui: &Ui, rect: Rect, dark: Color32, light: Color32) {
         let total = self.width + 2 * QUIET;
-        // Whole device pixels per module: fractional modules leave hairline
-        // seams between rows that a phone camera can misread.
+        // Use whole device pixels per module to avoid seams.
         let ppp = ui.ctx().pixels_per_point();
         let module = ((rect.width().min(rect.height()) / total as f32) * ppp).floor() / ppp;
         if module <= 0.0 {
@@ -71,7 +65,7 @@ mod tests {
             .expect("encodes");
         assert!(qr.width >= 21);
         assert_eq!(qr.dark.len(), qr.width * qr.width);
-        // The finder pattern's corner module is always dark.
+        // The finder-pattern corner is always dark.
         assert!(qr.dark[0]);
     }
 }

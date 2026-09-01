@@ -1,13 +1,11 @@
-; The Windows installer, built with Inno Setup 6.3 or later from a release
-; binary (the release workflow does this on every tag):
+; Windows installer built from a release binary with Inno Setup 6.3 or newer:
 ;
 ;   iscc /DVersion=0.1.0 /DArch=x86_64 /DBinary=...\fastsapp.exe ^
 ;        /DOutputDir=dist packaging\windows\fastsapp.iss
 ;
-; Arch is x86_64 or aarch64, as in the Rust target triple, so the installer
-; is named like the zip next to it. It needs no administrator rights: the
-; program goes to the user's own Programs folder with a Start menu entry,
-; and a running copy is closed before an update replaces it.
+; Arch matches the Rust target: x86_64 or aarch64. Installation uses the
+; current user's Programs folder and does not need administrator rights.
+; Updates close a running copy before replacing it.
 
 #ifndef Version
   #error Version must be defined on the ISCC command line

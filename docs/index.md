@@ -1,12 +1,12 @@
 ---
 layout: home
 title: FastsApp
-description: A fast, native WhatsApp client for Linux, macOS, and Windows, written in Rust.
+description: A native WhatsApp client for Linux, macOS, and Windows, written in Rust.
 permalink: /
 hero:
   name: FastsApp
   text: WhatsApp, native and fast
-  tagline: A lightweight WhatsApp client with your full chats, voice messages, attachments, and notifications on Linux, macOS, and Windows.
+  tagline: A small WhatsApp client for chats, voice messages, attachments, and notifications on Linux, macOS, and Windows.
   actions:
     - theme: brand
       text: Download
@@ -26,29 +26,28 @@ hero:
 features:
   - icon: ⚡
     title: Lightweight
-    details: A native binary with no embedded browser engine. It starts in well under a second and stays comfortable with years of chats.
+    details: A native binary with no browser engine. It starts in well under a second and handles years of chats.
   - icon: 🎤
     title: Voice messages
-    details: They play where they are, waveform and all, and the send button records one when there is nothing typed. Opus in, Opus out, nothing to install.
+    details: Play, seek, and record voice messages in the chat. OGG/Opus support is built in.
   - icon: 🖼️
-    title: Everything in place
-    details: Photos, GIFs, stickers, documents, polls, locations, and link previews render in the conversation; attachments wait in the composer for a caption.
+    title: Attachments
+    details: Photos, GIFs, stickers, documents, polls, locations, and link previews appear in the chat. Add captions before sending files.
   - icon: 🔔
-    title: Stays out of the way
-    details: Closing the window keeps messages arriving from the tray, and notifications carry the sender's picture. Mute any chat and the phone follows.
+    title: Background mode
+    details: Closing the window keeps FastsApp linked in the tray. Notifications show the chat picture, and muted chats stay quiet.
   - icon: ⌨️
-    title: Keyboard-first
-    details: Search, chat switching, replies, and recording all have shortcuts; text anywhere can be swept and copied, WhatsApp's format included.
+    title: Keyboard shortcuts
+    details: Search, switch chats, reply, and record with shortcuts. Select and copy text, including across messages.
   - icon: 🔓
     title: Open source
-    details: MIT-licensed Rust built with egui and whatsapp-rust. How it links to your phone is documented in full.
+    details: MIT-licensed Rust built with egui and whatsapp-rust. The linking process is documented.
     link: https://github.com/crmne/fastsapp
     link_text: Read the source
 ---
 
 <style>
-  /* The hero image slot is sized for a square logo; the screenshot needs the
-     room. Page-scoped overrides, so the theme stays untouched. */
+  /* Override the square hero slot to fit the screenshot. */
   .VPHero .image-container {
     width: 100% !important;
     height: auto !important;

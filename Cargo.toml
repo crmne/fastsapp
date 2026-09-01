@@ -4,7 +4,7 @@ version = "0.9.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
-description = "A fast, lightweight, native WhatsApp client built with Rust and egui"
+description = "A native WhatsApp client built with Rust and egui"
 repository = "https://github.com/crmne/fastsapp"
 keywords = ["whatsapp", "chat", "egui", "messaging"]
 categories = ["gui"]
@@ -19,15 +19,15 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-# Content hashes for saved stickers; already in the tree through wacore.
+# Hashes saved stickers by content. Already included through wacore.
 sha2 = "0.11"
-# Signal sticker pack decryption (HKDF -> AES-256-CBC + HMAC); all four
-# already in the tree through wacore at these exact versions.
+# Decrypts Signal sticker packs. All four crates are already included through
+# wacore at these versions.
 aes = "0.9"
 cbc = { version = "0.2", features = ["alloc", "block-padding"] }
 hkdf = "0.13"
 hmac = "0.13"
-# Reading .wastickers archives, which are plain zips.
+# Reads .wastickers zip archives.
 zip = { version = "5", default-features = false, features = ["deflate"] }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -35,95 +35,83 @@ serde_json = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 directories = "6"
-# The whole UI. glow keeps the binary and the dependency tree small; wgpu is
-# not needed for a 2D chat client.
+# UI framework. glow avoids the larger wgpu dependency.
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
 egui = "0.36"
 egui_extras = { version = "0.36", features = ["file", "image", "svg", "webp", "gif"] }
-# Reading what a system font covers, so the app can borrow a face for a script
-# Inter cannot draw. skrifa is the parser epaint already rasterizes with, and
-# the version has to track epaint's or the binary compiles two copies of it;
-# memmap2 keeps the probe to the few pages of each font that answer the
-# question.
+# Finds system fonts for scripts not covered by Inter. Keep skrifa aligned with
+# epaint to avoid compiling two versions. memmap2 limits font scans to the
+# required pages.
 skrifa = "0.44"
 memmap2 = "0.9"
-# Decoding received pictures and stickers; WhatsApp sends JPEG, PNG, WebP.
+# Decodes JPEG, PNG, WebP, and GIF images.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
-# The WhatsApp Web protocol: pairing, Signal encryption, history sync, media.
-# Pinned to a commit rather than the crates.io release: 0.7.0 on crates.io
-# turns on a `simd` feature by default whose `portable_simd` needs a nightly
-# compiler, while this commit has dropped it and builds on stable. The
-# default features bring the Tokio WebSocket transport, the ureq HTTP client
-# for media, and the SQLite device store; `signal` (Ctrl+C handling) is left
-# out because the window owns shutdown.
+# WhatsApp Web protocol: pairing, encryption, history sync, and media. Version
+# 0.7.0 on crates.io enables `simd`, which needs nightly Rust. This commit builds
+# on stable. Selected features provide Tokio transport, ureq media downloads,
+# and the SQLite device store. The window handles shutdown instead of `signal`.
 whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "1ace865716726daec8d0f00335453fcb8de35d1b", default-features = false, features = ["sqlite-storage", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
-# The message archive. WhatsApp replays history once, when the device is
-# linked, so the app keeps its own copy. `bundled` compiles the same SQLite
-# the device store already links, so nothing new is built.
+# Local message archive. `bundled` uses the same SQLite build as the device
+# store.
 rusqlite = { version = "0.40", features = ["bundled"] }
 qrcode = { version = "0.14", default-features = false }
-# Fetching profile pictures from the URL WhatsApp hands out. The same crate
-# and TLS stack the library's media client already links, so nothing new is
-# compiled.
+# Downloads profile pictures. The protocol library already includes this crate
+# and TLS stack.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 jiff = "0.2"
-# Grapheme clusters, so a flag or a family emoji is one unit; already in
-# the tree through egui.
+# Treats joined emoji as one grapheme. Already included through egui.
 unicode-segmentation = "1"
-# Opening a downloaded attachment with whatever the desktop uses for it.
+# Opens downloaded attachments in their default desktop apps.
 open = "5"
-# Sending: the file picker, images on the clipboard (already linked by
-# egui-winit for text), and the MIME type of a chosen file (already linked
-# by egui_extras).
+# File picker, clipboard images, and MIME detection for attachments. Clipboard
+# text support is already included through egui-winit, and MIME detection
+# through egui_extras.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 mime_guess2 = "2"
-# Names, groups, and shortcodes of every emoji, for the picker's search.
+# Emoji names, groups, and shortcodes for picker search.
 emojis = "0.9"
 
-# The one drawing of the mark, rasterised for the window, the tray, and the
-# notifications; already in the build through egui_extras's SVG support.
+# Rasterizes the SVG logo for windows, the tray, and notifications. Already
+# included through egui_extras.
 resvg = { version = "0.45", default-features = false }
 
-# Desktop notifications through the desktop's own service: pure Rust over
-# D-Bus on Linux, the system frameworks elsewhere.
+# Desktop notifications through D-Bus on Linux and system frameworks elsewhere.
 notify-rust = { version = "4", default-features = false, features = ["z"] }
 openh264 = "0.9"
 mp4 = "0.14"
 rodio = { version = "0.22", default-features = false, features = ["playback", "recording", "mp3", "mp4", "wav", "vorbis"] }
 opus = "0.4"
 ogg = "0.9"
-# Encoding animated WebP, which image cannot: Signal packs carry their
-# animated stickers as APNG and WhatsApp wants them as animated WebP.
+# Converts animated Signal APNG stickers to the animated WebP used by WhatsApp.
 webp-animation = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# The status-notifier tray item, pure Rust over D-Bus.
+# Linux status-notifier tray item over D-Bus.
 ksni = { version = "0.3", features = ["blocking"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-# The tray item on Windows and macOS.
+# Windows and macOS tray item.
 tray-icon = { version = "0.24", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Serving AppKit while no window exists: the status item and the Dock
-# reopen callback live on the main thread.
+# Pumps AppKit without a window. The status item and Dock reopen callback must
+# stay on the main thread.
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
-# The tray thread's message loop.
+# Windows tray-thread message loop.
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
-# Authoring tiny APNGs in the sticker-import tests; already in the tree
-# through image.
+# Creates small APNGs in sticker-import tests. Already included through image.
 png = "0.18"
 
 [features]
-# Sample data and screenshot flags; never part of a release build.
+# Sample data, layout tests, and screenshots. Not used in release builds.
 demo = []
 
 [profile.release]
@@ -132,8 +120,7 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
-# Signal decryption and immediate-mode layout are too slow at opt-level 0 to
-# audition the app in development. Keep every dependency optimized while the
-# application crate itself stays incremental.
+# Optimize dependencies in development for usable decryption and UI layout.
+# Keep the application crate incremental.
 [profile.dev.package."*"]
 opt-level = 2

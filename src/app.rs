@@ -1,7 +1,7 @@
 //! Application state and the frame loop.
 //!
-//! Views draw from this state and push [`Action`]s; the app applies them
-//! after drawing, talks to the backend, and folds its events back in.
+//! Views queue [`Action`]s while drawing. The app applies them after the frame
+//! and processes backend events.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -19,24 +19,20 @@ use crate::single_instance::{ControlCommand, Guard};
 use crate::theme::Palette;
 use crate::tray::{TrayCommand, TrayService};
 
-/// How many messages a chat opens with, and loads per scroll to the top.
+/// Initial and incremental message-page size.
 pub const PAGE: usize = 60;
-/// How long to leave the phone alone after it answered a request for
-/// older messages, so scrolling does not hammer it.
+/// Minimum delay between phone history requests.
 const PHONE_COOLDOWN: Duration = Duration::from_secs(6);
-/// WhatsApp lets a message be changed for this long after sending.
+/// WhatsApp message-edit window.
 pub const EDIT_WINDOW: Duration = Duration::from_secs(15 * 60);
-/// And taken back from everyone for this long.
+/// WhatsApp revoke-for-everyone window.
 pub const REVOKE_WINDOW: Duration = Duration::from_secs(2 * 24 * 60 * 60);
 
-/// A trackpad gesture that pauses this long has ended; the next movement
-/// picks its axis afresh.
+/// Pause after which a trackpad gesture selects a new axis.
 const SCROLL_GESTURE_GAP: Duration = Duration::from_millis(150);
-/// How far short Linux trackpad deltas land of what other apps scroll.
+/// Linux trackpad scroll multiplier.
 const TRACKPAD_SCALE: f32 = 1.8;
-/// The glide's exponential decay time, in seconds; the speed below which a
-/// lift starts no glide; and the speed at which a glide stops, points per
-/// second.
+/// Trackpad glide decay, minimum start speed, and stop speed.
 const GLIDE_DECAY: f32 = 0.35;
 const GLIDE_START: f32 = 120.0;
 const GLIDE_STOP: f32 = 40.0;
@@ -46,32 +42,29 @@ enum ScrollAxis {
     Horizontal,
     Vertical,
 }
-/// Silence after the last keystroke before the other side is told we
-/// stopped typing.
+/// Delay after the last keystroke before clearing typing state.
 const COMPOSING_TIMEOUT: Duration = Duration::from_secs(4);
-/// How long "typing…" stays on screen if the other side never says it
-/// stopped.
+/// Typing-state timeout when no stop event arrives.
 const TYPING_TIMEOUT: Duration = Duration::from_secs(12);
 
-/// The loaded part of a chat's history.
+/// Loaded chat history and paging state.
 #[derive(Default)]
 pub struct Conversation {
     pub messages: Vec<Message>,
-    /// The archive has nothing older than the first message here.
+    /// Whether the local archive has no earlier messages.
     pub complete: bool,
     pub loading_older: bool,
-    /// The first page was asked for.
+    /// Whether the initial page was requested.
     pub requested: bool,
-    /// The phone is being asked for what came before the archive.
+    /// Whether a phone history request is active.
     pub fetching_phone: bool,
-    /// The phone said there is nothing older, or cannot be asked.
+    /// Whether phone history is exhausted or unavailable.
     pub phone_exhausted: bool,
-    /// When the phone last answered, for the cooldown.
+    /// Last phone response time for request throttling.
     pub phone_answered: Option<Instant>,
-    /// Requests the phone answered with nothing, in a row; each doubles
-    /// the wait before the next.
+    /// Consecutive empty phone responses used for backoff.
     pub phone_misses: u32,
-    /// Older messages arrived since the phone was last asked.
+    /// Whether messages arrived after the latest phone request.
     pub phone_delivered: bool,
 }
 
@@ -122,81 +115,77 @@ pub struct App {
     zoom_applied: bool,
 
     pub link: LinkStatus,
-    /// History is being replayed after linking.
+    /// Whether link-time history sync is active.
     pub syncing: bool,
     pub sync_percent: Option<u32>,
     pub me: Option<String>,
     pub me_name: Option<String>,
-    /// Our "about" line.
+    /// Account about text.
     pub me_about: Option<String>,
 
-    /// Newest activity first, as the backend sends them.
+    /// Chats ordered by latest activity.
     pub chats: Vec<Chat>,
     pub contacts: HashMap<String, Contact>,
     pub conversations: HashMap<ChatId, Conversation>,
     pub open_chat: Option<ChatId>,
-    /// What is typed in each chat's composer, kept while switching chats.
+    /// Composer drafts by chat.
     pub drafts: HashMap<ChatId, String>,
     pub composer: String,
-    /// The message the composer is replying to, in the open chat.
+    /// Reply target in the open chat.
     pub reply_to: Option<String>,
-    /// The message of ours the composer is changing, in the open chat.
+    /// Outgoing message being edited.
     pub editing: Option<String>,
     composing: bool,
     last_keystroke: Option<Instant>,
     pub search: String,
-    /// Archived messages matching the search, newest first.
+    /// Message search results, newest first.
     pub search_hits: Vec<Message>,
-    /// Who is typing in each chat, and since when.
+    /// Active typers and their latest event time by chat.
     pub typing: HashMap<ChatId, Vec<(String, Instant)>>,
     pub presence: HashMap<String, Presence>,
-    /// The account's own privacy has read receipts off, as WhatsApp said
-    /// on connect; whatsapp-rust then sends none in direct chats no
-    /// matter our own toggle.
+    /// Whether account privacy disables direct-chat read receipts.
     pub account_receipts_off: bool,
     avatars: HashMap<String, Option<PathBuf>>,
     avatar_requests: HashSet<String>,
-    /// The large pictures, for info dialogs.
+    /// Full-size profile pictures for info dialogs.
     avatars_full: HashMap<String, Option<PathBuf>>,
     avatar_full_requests: HashSet<String>,
-    /// Files are being dragged over the window.
+    /// Whether files are being dragged over the window.
     pub dropping: bool,
-    /// The emoji/GIF/sticker picker, when open.
+    /// Open emoji, GIF, or sticker picker tab.
     pub picker: Option<PickerTab>,
-    /// Where the picker hangs from: the composer's smiley button.
+    /// Picker anchor at the composer button.
     pub picker_anchor: Option<egui::Rect>,
     pub picker_search: String,
-    /// The picker just opened: its search field takes the focus once.
+    /// Whether the newly opened picker should focus search.
     pub picker_focus: bool,
-    /// Attachments staged in the composer, sent with the next message as
-    /// their caption.
+    /// Attachments pending in the composer.
     pub pending: Vec<Pending>,
-    /// Voice messages and audio files sounding in their bubble.
+    /// In-chat audio player.
     pub player: Player,
-    /// The microphone, while a voice message is being recorded.
+    /// Active voice recorder.
     pub recording: Option<Recorder>,
-    /// Voice messages whose sender has been told they were played.
+    /// Voice messages with a sent played receipt.
     played_told: HashSet<String>,
-    /// Every message body drawn this frame, in order, for rebuilding a
-    /// copied selection that spans messages (see `transcript`).
+    /// Message bodies registered for transcript copy formatting.
     pub copy_rows: std::sync::Arc<std::sync::Mutex<Vec<crate::transcript::Row>>>,
-    /// Where the message list was last frame, for the selection leash.
+    /// Previous message-list rect used by the selection hook.
     pub selection_view: std::sync::Arc<std::sync::Mutex<Option<egui::Rect>>>,
     pub gif_query: String,
     pub gif_results: Vec<Gif>,
-    /// A GIF search is on its way.
+    /// Whether a GIF search is active.
     pub gif_pending: bool,
     pub gif_error: Option<GifError>,
     pub stickers: Vec<PathBuf>,
-    /// The stickers the user chose to keep, newest save first.
+    /// Saved stickers, newest first.
     pub stickers_saved: Vec<PathBuf>,
-    /// The packs imported from links and archives, newest first.
+    /// Imported sticker packs, newest first.
     pub sticker_packs: Vec<StickerPack>,
-    /// The sticker list was asked for and has not come back yet.
+    /// Whether the sticker list is loading.
     pub stickers_pending: bool,
-    /// A pack import is on its way.
+    /// Whether a sticker pack import is active.
     pub sticker_import_pending: bool,
-    /// The signal.art link typed or pasted into the sticker tab.
+    /// signal.art link in the sticker tab.
     pub sticker_link: String,
     scroll_lock: Option<(ScrollAxis, Instant)>,
     scroll_from_trackpad: bool,
@@ -207,52 +196,47 @@ pub struct App {
 
     pub page: Page,
     pub dialog: Option<Dialog>,
-    /// The first name and surname being typed in the info card's
-    /// contact editor.
+    /// Contact-name editor buffers.
     pub contact_edit: Option<(String, String)>,
-    /// The number and name typed in the new-contact dialog, and whether
-    /// WhatsApp is being asked about the number right now.
+    /// New-contact buffers and lookup state.
     pub new_contact_phone: String,
     pub new_contact_name: String,
     pub new_contact_last: String,
     pub new_contact_pending: bool,
-    /// The number typed in the pair-with-phone dialog.
+    /// Phone number entered for pairing.
     pub pair_phone: String,
     pub sidebar_visible: bool,
     pub show_archived: bool,
     pub toasts: Vec<Toast>,
     pub actions: Vec<Action>,
-    /// The conversation view should show its newest message this frame.
+    /// Whether to scroll the conversation to its newest message.
     pub scroll_to_bottom: bool,
-    /// The conversation view was at its end last frame, so new messages
-    /// may pull it along.
+    /// Whether the conversation was at the bottom last frame.
     pub at_bottom: bool,
-    /// A message the conversation view should bring into view: the one
-    /// that was at the top before older ones were loaded, or a quoted one.
+    /// Message id to scroll into view.
     pub scroll_anchor: Option<String>,
     pub focus_composer: bool,
     pub focus_search: bool,
     pub quit_requested: bool,
     pub window_focused: bool,
-    /// Repaints the window when something arrives from another thread.
+    /// Cross-thread window repaint handle.
     waker: Waker,
     tray: Option<TrayService>,
-    /// No window exists; the app lives in the tray.
+    /// Whether the app is running without a window.
     pub window_hidden: bool,
-    /// The window should close but the process should stay in the tray.
+    /// Whether window close should keep the process running.
     pub hide_intent: bool,
-    /// Something asked for a window while there is none.
+    /// Whether a headless app should create a window.
     pub wants_show: bool,
-    /// What other launches asked for, when this process holds the instance.
+    /// Requests received from later launches.
     control_commands: Option<std::sync::Arc<std::sync::Mutex<Vec<ControlCommand>>>>,
-    /// Chats whose notification was clicked.
+    /// Chat ids from clicked notifications.
     notification_opens: std::sync::Arc<std::sync::Mutex<Vec<ChatId>>>,
 }
 
-/// An attachment staged in the composer, waiting for its caption.
+/// Attachment pending in the composer.
 pub enum Pending {
-    /// A picture off the clipboard, as straight RGBA, and its preview once
-    /// made.
+    /// Clipboard image as straight-alpha RGBA and optional preview.
     Picture {
         width: usize,
         height: usize,
@@ -263,7 +247,7 @@ pub enum Pending {
 }
 
 impl Pending {
-    /// Whether the file is a picture the composer can show as one.
+    /// Whether the composer can preview the file as an image.
     pub fn is_picture_file(path: &std::path::Path) -> bool {
         mime_guess2::from_path(path)
             .first()
@@ -271,10 +255,10 @@ impl Pending {
     }
 }
 
-/// What a process wants of the app beyond the window.
+/// Process-level app services.
 #[derive(Clone, Copy, Debug)]
 pub struct AppOptions {
-    /// Register the system-tray item.
+    /// Registers the system-tray item.
     pub tray: bool,
 }
 
@@ -295,13 +279,12 @@ impl App {
         app
     }
 
-    /// Other launches reach this process through the instance guard.
+    /// Single-instance guard used by later launches.
     pub fn set_remote_control(&mut self, guard: &Guard) {
         self.control_commands = Some(guard.commands());
     }
 
-    /// An app with no connection, for the demo mode and tests. Events can
-    /// be fed through the returned sender.
+    /// Creates a disconnected app and event sender for demos and tests.
     pub fn headless(dirs: AppDirs, settings: Settings) -> (Self, std::sync::mpsc::Sender<Event>) {
         let (backend, events) = Backend::detached();
         (
@@ -406,8 +389,7 @@ impl App {
         }
     }
 
-    /// The window is gone but the process stays: the link, the archive,
-    /// and the tray keep going until Show or Quit.
+    /// Updates the linked app while no window exists.
     pub fn window_gone(&mut self) {
         self.window_hidden = true;
         self.hide_intent = false;
@@ -417,8 +399,7 @@ impl App {
         }
     }
 
-    /// Whether closing the window keeps the app in the tray rather than
-    /// quitting.
+    /// Whether window close keeps the app in the tray.
     pub fn hides_to_tray(&self) -> bool {
         self.tray.is_some() && self.settings.keep_running_in_background
     }
@@ -453,7 +434,7 @@ impl App {
         }
     }
 
-    /// A clicked notification opens its chat, in a window if need be.
+    /// Opens chats from clicked notifications, creating a window when needed.
     fn handle_notification_opens(&mut self) {
         let opened: Vec<ChatId> = std::mem::take(
             &mut *self
@@ -467,8 +448,7 @@ impl App {
         }
     }
 
-    /// Tells the desktop about a message that arrived while the reader was
-    /// not looking at that chat.
+    /// Sends a desktop notification for an unseen incoming message.
     fn maybe_notify(&mut self, chat_id: &str, message: &Message) {
         if !self.settings.notifications {
             return;
@@ -477,8 +457,7 @@ impl App {
             return;
         };
         let now = crate::util::now();
-        // Muted chats stay quiet, and a backlog drained on reconnect is not
-        // news.
+        // Skip muted chats and delayed reconnect backlogs.
         if chat.muted(now) || now - message.timestamp > 60 {
             return;
         }
@@ -493,9 +472,8 @@ impl App {
         let sender = self.display_name_or(&message.sender, message.sender_name.as_deref());
         let (title, body) =
             crate::notify::lines(&name, is_group, &sender, &self.message_text(message));
-        // The chat's picture (the person, or the group), else the sender's.
-        // What is on disk serves even before the chat list has shown the
-        // chat in this run; asking for one not here yet serves next time.
+        // Prefer the chat picture, then the sender picture. Cached files work
+        // before the chat list loads; new requests help later notifications.
         let sender = message.sender.clone();
         let picture = self
             .avatar(chat_id)
@@ -513,10 +491,9 @@ impl App {
         );
     }
 
-    /// Once per window, before the first frame.
+    /// Initializes a newly created window.
     pub fn attach(&mut self, ctx: &egui::Context) {
-        // A copy that swept across messages gets each message's clock,
-        // date, and writer put back; registered once per context.
+        // Register transcript copy formatting once per egui context.
         ctx.add_plugin(crate::transcript::CopyAnnotator {
             rows: std::sync::Arc::clone(&self.copy_rows),
         });
@@ -530,11 +507,9 @@ impl App {
             std::sync::Arc::clone(&self.selection_view),
         ));
         crate::theme::install(ctx);
-        // Three lines per wheel notch is what egui ships; a chat of short
-        // rows wants the pace every other client scrolls at.
+        // Use a faster wheel speed for short chat rows.
         ctx.options_mut(|options| options.input_options.line_scroll_speed = 120.0);
-        // The colour emoji font is a few megabytes to read and index; do
-        // it while the first frames go by rather than in one of them.
+        // Load and index the color emoji font outside the frame loop.
         std::thread::Builder::new()
             .name("emoji-font".into())
             .spawn(crate::emoji::warm_up)
@@ -553,7 +528,7 @@ impl App {
         self.link.is_connected()
     }
 
-    /// The device is linked: history may be showing even while offline.
+    /// Whether the device has linked data, including while offline.
     pub fn is_linked(&self) -> bool {
         matches!(
             self.link,
@@ -573,17 +548,13 @@ impl App {
         self.open_chat.as_deref().and_then(|id| self.chat(id))
     }
 
-    /// The name to show for a sender: the address book's, the name they
-    /// chose for themselves (with a tilde, as WhatsApp does), the phone
-    /// number, or "Unknown".
+    /// Resolves an address-book, push, phone-number, or fallback name.
     pub fn display_name(&self, id: &str) -> String {
         self.display_name_or(id, None)
     }
 
-    /// One name for a person, the same everywhere: from the address book,
-    /// or what they call themselves on WhatsApp, as the setting says, the
-    /// other source filling in. `hint` is a name a message itself carried,
-    /// for someone the contacts know nothing about. Ourselves are "You".
+    /// Resolves a consistent display name using settings and an optional
+    /// message-provided fallback. Our own id becomes "You".
     pub fn display_name_or(&self, id: &str, hint: Option<&str>) -> String {
         if self.me.as_deref() == Some(id) {
             return "You".to_owned();
@@ -591,7 +562,7 @@ impl App {
         self.person_name(id, hint)
     }
 
-    /// A person's name in a mention: our own name rather than "You".
+    /// Resolves a mention name without replacing our own name with "You".
     pub fn mention_name(&self, id: &str) -> String {
         if self.me.as_deref() == Some(id) {
             return self
@@ -603,8 +574,7 @@ impl App {
         self.person_name(id, None)
     }
 
-    /// The name a chat is listed under: a group's own, a person's as the
-    /// setting says.
+    /// Resolves the chat-list title.
     pub fn chat_title(&self, chat: &Chat) -> String {
         if chat.is_group() || self.me.as_deref() == Some(chat.id.as_str()) {
             return chat.name.clone();
@@ -638,7 +608,7 @@ impl App {
         }
     }
 
-    /// The people a message names, with their names, for the markup.
+    /// Resolves message mentions for markup.
     pub fn mention_list(&self, message: &Message) -> Vec<crate::markup::Mention> {
         message
             .mentions
@@ -650,8 +620,7 @@ impl App {
             .collect()
     }
 
-    /// `@user` tokens in a plain text as names, for previews that come
-    /// without a message's mention list. Unknown users stay as they are.
+    /// Resolves `@user` tokens in previews without mention metadata.
     pub fn resolve_mention_tokens(&self, text: &str) -> String {
         let mut out = String::with_capacity(text.len());
         let mut rest = text;
@@ -679,7 +648,7 @@ impl App {
         out
     }
 
-    /// A message as one line of plain text with names for mentions.
+    /// One-line plain-text message summary with resolved mentions.
     pub fn message_text(&self, message: &Message) -> String {
         match &message.content {
             Content::Text { text, .. } => crate::markup::plain(text, &self.mention_list(message)),
@@ -687,8 +656,7 @@ impl App {
         }
     }
 
-    /// Whether a direct chat's name comes from the address book, rather
-    /// than from what the other side calls themselves.
+    /// Whether a direct chat uses a saved address-book name.
     pub fn is_saved_contact(&self, id: &str) -> bool {
         self.contacts.get(id).is_some_and(|contact| {
             contact
@@ -698,10 +666,7 @@ impl App {
         })
     }
 
-    /// The members of a group as WhatsApp lists them under its name: first
-    /// names, then the numbers of people without one, ourselves last.
-    /// The members of a group as (id, name): people with names first, in
-    /// alphabetical order, then bare numbers, and ourselves last.
+    /// Group members sorted by name, then phone number, with our id last.
     pub fn participant_list(&self, chat: &Chat) -> Vec<(String, String)> {
         let me = self.me.as_deref();
         let mut named = Vec::new();
@@ -757,8 +722,7 @@ impl App {
         names.join(", ")
     }
 
-    /// The chats the list shows: matching the search, archived or not,
-    /// pinned first.
+    /// Visible chats filtered by search and archive state, with pinned first.
     pub fn visible_chats(&self) -> Vec<&Chat> {
         let needle = self.search.trim().to_lowercase();
         let mut chats: Vec<&Chat> = self
@@ -783,8 +747,7 @@ impl App {
         chats
     }
 
-    /// Contacts matching the search that have no chat yet: the people one
-    /// could start talking to. Individuals only, sorted by name.
+    /// Matching individual contacts without an existing chat, sorted by name.
     pub fn matching_contacts(&self) -> Vec<&Contact> {
         let needle = self.search.trim().to_lowercase();
         if needle.is_empty() {
@@ -825,9 +788,7 @@ impl App {
             .sum()
     }
 
-    /// The profile picture of a chat or contact, asking the backend for it
-    /// the first time.
-    /// A picture already fetched in an earlier run, straight from disk.
+    /// Returns or requests a cached profile picture.
     fn cached_avatar(&self, id: &str) -> Option<PathBuf> {
         let path = self.dirs.avatar_file(id, false);
         path.metadata()
@@ -836,8 +797,7 @@ impl App {
             .map(|_| path)
     }
 
-    /// Files an avatar that already exists on disk, as the demo does for
-    /// its made-up people.
+    /// Registers an existing profile picture, used by demo data.
     pub fn adopt_avatar(&mut self, id: &str, path: PathBuf) {
         self.avatars.insert(id.to_owned(), Some(path));
     }
@@ -855,8 +815,7 @@ impl App {
         None
     }
 
-    /// The large profile picture of a chat or contact, asking the backend
-    /// for it the first time.
+    /// Returns or requests a full-size profile picture.
     pub fn avatar_full(&mut self, id: &str) -> Option<PathBuf> {
         if let Some(known) = self.avatars_full.get(id) {
             return known.clone();
@@ -870,22 +829,21 @@ impl App {
         None
     }
 
-    /// Whether a message of ours is still young enough to change.
+    /// Whether an outgoing message is still editable.
     pub fn can_edit(&self, message: &Message) -> bool {
         message.from_me
             && matches!(message.content, Content::Text { .. })
             && crate::util::now() - message.timestamp <= EDIT_WINDOW.as_secs() as i64
     }
 
-    /// Whether a message of ours can still be taken back from everyone.
+    /// Whether an outgoing message can still be revoked for everyone.
     pub fn can_revoke(&self, message: &Message) -> bool {
         message.from_me
             && !matches!(message.content, Content::Revoked)
             && crate::util::now() - message.timestamp <= REVOKE_WINDOW.as_secs() as i64
     }
 
-    /// Who is typing in a chat right now: each typer's id (for their
-    /// picture) and name.
+    /// Active typers in a chat as id and display name.
     pub fn typing_in(&self, chat: &str) -> Vec<(String, String)> {
         self.typing
             .get(chat)
@@ -913,8 +871,7 @@ impl App {
                         if self.chat(&open).is_none() {
                             self.open_chat = None;
                         } else {
-                            // The chat kept from last time shows its
-                            // archive right away, connected or not.
+                            // Show archived messages immediately, including offline.
                             self.ensure_loaded(&open);
                         }
                     }
@@ -938,8 +895,7 @@ impl App {
                     } else if was_empty {
                         conversation.complete = complete;
                     }
-                    // The archive holds nothing for this chat (history sync
-                    // brought only its name): ask the phone straight away.
+                    // Request phone history when sync created a chat without messages.
                     let bare = !older && complete && conversation.messages.is_empty();
                     if self.open_chat.as_deref() == Some(chat.as_str()) {
                         if !older && (self.at_bottom || was_empty) {
@@ -948,10 +904,7 @@ impl App {
                         if bare {
                             self.fetch_older(&chat);
                         }
-                        // A waiting anchor (a search hit in a chat that was
-                        // not loaded): the first page is in, chase it into
-                        // the archive. Only on that first page, so a hit
-                        // deleted from the archive cannot chase forever.
+                        // After the first page, load toward a pending search anchor once.
                         if !older
                             && let Some(anchor) = self.scroll_anchor.clone()
                             && let Some(conversation) = self.conversations.get_mut(&chat)
@@ -1065,7 +1018,7 @@ impl App {
                 } => self.handle_media(&chat, &message, result),
                 Event::Syncing(syncing) => {
                     if self.syncing && !syncing {
-                        self.toast("History is in");
+                        self.toast("History loaded");
                     }
                     self.syncing = syncing;
                     if !syncing {
@@ -1084,8 +1037,7 @@ impl App {
                         conversation.phone_misses = (conversation.phone_misses + 1).min(7);
                     }
                     conversation.phone_delivered = false;
-                    // Whatever the phone sent is in the archive, even when
-                    // it came late: page the archive again before asking.
+                    // Page the archive again after phone history arrives.
                     conversation.complete = false;
                 }
                 Event::ReceiptsPrivacy { disabled } => self.account_receipts_off = disabled,
@@ -1170,11 +1122,9 @@ impl App {
                 media.state = MediaState::Idle;
             }
             Err(error) => {
-                // WhatsApp keeps a file for a while only; a 403 or 404 is
-                // the server saying it is gone, not a fault here. Said in
-                // the bubble, where the file is, never as a toast.
+                // Show expired-file failures in the bubble, not as a toast.
                 let notice = if error.contains("403") || error.contains("404") {
-                    "No longer on WhatsApp's servers".to_owned()
+                    "No longer available on WhatsApp's servers".to_owned()
                 } else {
                     error
                 };
@@ -1218,8 +1168,7 @@ impl App {
         });
     }
 
-    /// Asks the phone for what came before the archive, if it has not said
-    /// there is nothing and was not asked a moment ago.
+    /// Requests older phone history when available and outside the cooldown.
     pub fn fetch_older(&mut self, chat: &str) {
         let Some(conversation) = self.conversations.get_mut(chat) else {
             return;
@@ -1227,8 +1176,7 @@ impl App {
         if conversation.fetching_phone || conversation.phone_exhausted {
             return;
         }
-        // Only a linked, connected phone can answer; asking again after an
-        // empty answer waits twice as long each time.
+        // Back off after empty responses. Only a connected phone can answer.
         if !matches!(self.link, LinkStatus::Connected) {
             return;
         }
@@ -1252,7 +1200,7 @@ impl App {
         if let Some(known) = self.chat_mut(chat) {
             known.unread = 0;
         }
-        // The archive's count clears either way; receipts are a setting.
+        // Clear local unread state regardless of receipt settings.
         self.backend.send(Command::MarkRead {
             chat: chat.to_owned(),
             receipts: self.settings.send_read_receipts,
@@ -1263,8 +1211,7 @@ impl App {
         if self.open_chat.as_deref() != Some(id.as_str()) {
             if let Some(previous) = self.open_chat.take() {
                 let draft = std::mem::take(&mut self.composer);
-                // An edit in progress is dropped, not kept as a draft that
-                // would send the old text again.
+                // Discard an unfinished edit instead of keeping it as a draft.
                 if self.editing.take().is_some() || draft.trim().is_empty() {
                     self.drafts.remove(&previous);
                 } else {
@@ -1298,8 +1245,7 @@ impl App {
         }
     }
 
-    /// The composer changed: tell the other side we are typing, once, and
-    /// again after a pause.
+    /// Updates typing state after composer changes.
     pub fn note_keystroke(&mut self) {
         self.last_keystroke = Some(Instant::now());
         if !self.composing
@@ -1352,9 +1298,7 @@ impl App {
         self.at_bottom = true;
     }
 
-    /// Sends files to the open chat.
-    /// Puts files into the composer, to go out with the next message as
-    /// their caption.
+    /// Adds files to the open chat's composer.
     fn stage_files(&mut self, paths: Vec<PathBuf>) {
         if self.open_chat.is_none() {
             self.toast_error("Open a chat first");
@@ -1366,7 +1310,7 @@ impl App {
         self.focus_composer = true;
     }
 
-    /// Sends what is staged, the caption going with the first item.
+    /// Sends pending files, attaching the caption to the first.
     fn send_pending(&mut self, chat: ChatId, caption: String) {
         let caption = Some(caption.trim().to_owned()).filter(|text| !text.is_empty());
         let mut caption = caption;
@@ -1512,7 +1456,7 @@ impl App {
             }
             Action::OpenMessage { chat, message } => {
                 self.open_chat(chat.clone());
-                // Not the end of the chat: the hit itself.
+                // Keep the search result, not the chat end, in view.
                 self.scroll_to_bottom = false;
                 self.at_bottom = false;
                 self.scroll_anchor = Some(message.clone());
@@ -1521,9 +1465,7 @@ impl App {
                     && !conversation.loading_older
                     && let Some(oldest) = conversation.messages.first()
                 {
-                    // Older than what is loaded: bring the archive up to it.
-                    // A chat still waiting for its first page chases the
-                    // anchor when that page lands (see Event::Messages).
+                    // Load older archive pages toward the search result.
                     conversation.loading_older = true;
                     self.backend.send(Command::LoadUntil {
                         chat,
@@ -1729,7 +1671,7 @@ impl App {
             }
             Action::SendGif(gif) => {
                 if let Some(chat) = self.open_chat.clone() {
-                    self.toast("Sending the GIF…");
+                    self.toast("Sending GIF…");
                     self.backend.send(Command::SendGif { chat, gif });
                     self.picker = None;
                     self.scroll_to_bottom = true;
@@ -1741,7 +1683,7 @@ impl App {
                 height,
                 rgba,
             } => {
-                // Staged, not sent: a caption may follow.
+                // Stage the files so the user can add a caption.
                 if self.open_chat.is_some() {
                     self.pending.push(Pending::Picture {
                         width,
@@ -1837,7 +1779,7 @@ impl App {
                     && !conversation.loading_older
                     && let Some(oldest) = conversation.messages.first()
                 {
-                    // Older than what is loaded: bring the archive up to it.
+                    // Load older archive pages toward the target.
                     conversation.loading_older = true;
                     self.backend.send(Command::LoadUntil {
                         chat,
@@ -1870,7 +1812,9 @@ impl App {
             Action::PairWithPhone(phone) => {
                 let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
                 if digits.len() < 7 {
-                    self.toast_error("Enter the number with its country code, digits only");
+                    self.toast_error(
+                        "Enter the phone number with its country code, using digits only",
+                    );
                 } else {
                     self.backend.send(Command::PairWithPhone(digits));
                 }
@@ -1886,7 +1830,7 @@ impl App {
             }
             Action::ShowWindow => {
                 if self.window_hidden {
-                    // No window exists; the loop in `main` creates one.
+                    // The headless loop in `main` will create the window.
                     self.wants_show = true;
                 } else {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -1898,8 +1842,7 @@ impl App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
-            // The same as the window's own close button: `frame_ui` sees the
-            // request and keeps the app in the tray when asked to.
+            // Route through the configured window-close behavior.
             Action::CloseWindow => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
     }
@@ -1923,7 +1866,7 @@ impl App {
         });
     }
 
-    /// Everything that happens whether or not the window is showing.
+    /// Processes app state shared by windowed and headless modes.
     pub fn background_frame(&mut self, ctx: &egui::Context) {
         self.handle_tray();
         self.handle_control_commands();
@@ -1934,8 +1877,7 @@ impl App {
         self.apply_actions(ctx);
     }
 
-    /// Playback and recording move on their own: pick up what changed and
-    /// keep the frames coming while they do.
+    /// Polls audio state and schedules repaints while it changes.
     fn tick_audio(&mut self) {
         if let Err(error) = self.player.poll() {
             self.toast_error(error);
@@ -1949,8 +1891,7 @@ impl App {
         }
     }
 
-    /// Plays or pauses a clip; the first time an incoming voice message is
-    /// played, its sender is told, as the phone would.
+    /// Plays or pauses audio and sends the first played receipt when needed.
     fn play_voice(&mut self, message: String, path: PathBuf) {
         if let Err(error) = self.player.toggle(&message, &path) {
             self.toast_error(error);
@@ -1981,8 +1922,7 @@ impl App {
         });
     }
 
-    /// Stops the microphone and sends what it heard, unless it was only a
-    /// slip: the phone drops anything under a second too.
+    /// Stops and sends a recording unless it is under one second.
     fn send_recording(&mut self) {
         let Some(recorder) = self.recording.take() else {
             return;
@@ -2017,7 +1957,7 @@ impl App {
             .unwrap_or_else(|p| p.into_inner()) = None;
         self.apply_theme(ctx);
         let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
-        // Coming back to the window is reading what arrived meanwhile.
+        // Mark messages received while hidden as read on window return.
         if focused
             && !self.window_focused
             && self.page == Page::Chats
@@ -2027,8 +1967,7 @@ impl App {
             self.mark_read(&open);
         }
         self.window_focused = focused;
-        // Closing the window keeps the app in the tray when asked to; the
-        // window still goes, and the loop in `main` carries on without it.
+        // Close the window and continue headless when background mode is enabled.
         if ctx.input(|input| input.viewport().close_requested())
             && !self.quit_requested
             && self.hides_to_tray()
@@ -2044,7 +1983,7 @@ impl App {
         }
     }
 
-    /// Puts text into the composer at its cursor, or at the end.
+    /// Inserts text at the composer cursor or end.
     fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
         let id = egui::Id::new("composer-text");
         let at = egui::TextEdit::load_state(ctx, id)
@@ -2069,8 +2008,7 @@ impl App {
         }
     }
 
-    /// Files dragged onto the window go to the open chat; a picture pasted
-    /// while writing does too.
+    /// Handles dropped files and pasted images for the open chat.
     fn take_drops_and_pastes(&mut self, ctx: &egui::Context) {
         let (dropped, hovering, paste) = ctx.input(|input| {
             let dropped: Vec<PathBuf> = input
@@ -2086,14 +2024,12 @@ impl App {
         if !dropped.is_empty() {
             self.actions.push(Action::SendFiles(dropped));
         }
-        // Into the composer, or with nothing else focused; a search field
-        // or a dialog's text keeps its own paste.
+        // Handle image paste only when the composer or no field has focus.
         let composing = ctx.memory(|memory| {
             memory.has_focus(egui::Id::new("composer-text")) || memory.focused().is_none()
         });
         if paste && composing && self.open_chat.is_some() {
-            // egui pastes text on its own; a picture on the clipboard is
-            // ours to notice.
+            // egui handles text paste; the app handles clipboard images.
             if let Some(image) = clipboard_image() {
                 self.actions.push(Action::PasteImage {
                     width: image.0,
@@ -2104,8 +2040,7 @@ impl App {
         }
     }
 
-    /// Keeps a scroll gesture on one axis, scales Linux trackpad deltas up
-    /// to what other apps scroll, and lets a lifted gesture glide.
+    /// Locks trackpad scrolling to one axis, scales Linux deltas, and adds glide.
     fn lock_scroll_axis(&mut self, ctx: &egui::Context) {
         let (raw, from_trackpad, ended) = ctx.input(|input| {
             let mut sum = egui::Vec2::ZERO;
@@ -2202,20 +2137,15 @@ impl App {
         self.backend.shutdown();
     }
 
-    /// The media of a message in a loaded chat, for views.
+    /// Returns attachment state for a loaded message.
     pub fn media_of(&self, chat: &str, id: &str) -> Option<&Media> {
         self.conversations.get(chat)?.message(id)?.content.media()
     }
 }
 
-/// Whether the paste shortcut was used this frame. egui's platform layer
-/// swallows the key press of Ctrl+V (Cmd+V on macOS) and turns it into a
-/// `Paste` event only when the clipboard holds text, so a picture on the
-/// clipboard shows no press at all; the release still comes through,
-/// carrying the modifiers it was made with.
-/// The two fields WhatsApp's contact sync carries, out of the editor's
-/// two boxes: the full name joins them, the first name stands alone (it
-/// is the short name WhatsApp shows). No first name, no contact.
+/// Detects paste from the key release. egui consumes the press and emits a
+/// `Paste` event only for text, so image paste has no key-press event.
+/// Builds WhatsApp's full and short contact names. A first name is required.
 fn compose_name(first: &str, last: &str) -> (Option<String>, Option<String>) {
     let first = first.trim();
     let last = last.trim();
@@ -2247,7 +2177,7 @@ pub fn wants_paste(input: &egui::InputState) -> bool {
     })
 }
 
-/// A picture on the clipboard, as (width, height, straight RGBA).
+/// Clipboard image as width, height, and straight-alpha RGBA.
 fn clipboard_image() -> Option<(usize, usize, Vec<u8>)> {
     let mut clipboard = arboard::Clipboard::new().ok()?;
     let image = clipboard.get_image().ok()?;
@@ -2258,7 +2188,7 @@ fn clipboard_image() -> Option<(usize, usize, Vec<u8>)> {
 }
 
 impl Delivery {
-    /// Whether the message is ours and still on its way.
+    /// Whether an outgoing message is still pending.
     pub fn in_flight(self) -> bool {
         matches!(self, Delivery::Pending)
     }
@@ -2353,7 +2283,7 @@ mod tests {
             full_name: Some(name.into()),
             push_name: None,
         };
-        // Already a chat: shows under Chats, not Contacts.
+        // Exclude contacts that already have chats.
         app.contacts.insert(
             "491700000001@s.whatsapp.net".into(),
             contact("491700000001@s.whatsapp.net", "Ada Lovelace"),
@@ -2362,12 +2292,12 @@ mod tests {
             "491700000001@s.whatsapp.net".into(),
             "Ada Lovelace".into(),
         ));
-        // No chat yet: the one to offer.
+        // Include contacts without chats.
         app.contacts.insert(
             "491700000002@s.whatsapp.net".into(),
             contact("491700000002@s.whatsapp.net", "Adele Goldberg"),
         );
-        // A group id and ourselves never show as contacts.
+        // Exclude groups and our own id.
         app.contacts
             .insert("12345@g.us".into(), contact("12345@g.us", "Adventurers"));
         app.contacts.insert(
@@ -2381,7 +2311,7 @@ mod tests {
             .filter_map(|contact| contact.display_name())
             .collect();
         assert_eq!(names, vec!["Adele Goldberg"]);
-        // Digits find people by phone.
+        // Match phone-number digits.
         app.search = "491700000002".into();
         assert_eq!(app.matching_contacts().len(), 1);
         app.search = String::new();

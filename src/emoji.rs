@@ -1,13 +1,8 @@
-//! Colour emoji.
+//! Color emoji from the desktop's bitmap emoji font.
 //!
-//! epaint draws text from monochrome outlines, so an emoji comes out as a
-//! grey silhouette from the face egui bundles. Every desktop carries a
-//! colour emoji font as bitmaps (Noto Color Emoji on Linux, Apple Color
-//! Emoji on macOS), and this module borrows it: text is laid out with each
-//! emoji sequence replaced by a placeholder drawn in transparent ink, and
-//! the font's picture is painted over the placeholder afterwards. Flags,
-//! skin tones, and joined sequences resolve through the font's own ligature
-//! table, the same way a browser finds them.
+//! Layout replaces each emoji sequence with a transparent placeholder, then
+//! paints the bitmap over it. The font's ligature table resolves flags, skin
+//! tones, and joined sequences.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,31 +19,27 @@ use skrifa::raw::tables::gsub::{ExtensionSubtable, LigatureSubstFormat1, Substit
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use unicode_segmentation::UnicodeSegmentation;
 
-/// The character that stands in for an emoji during layout. It comes from
-/// the monochrome emoji face egui bundles, where it is a full square, so a
-/// sequence of any length takes exactly one emoji's room.
+/// Full-square placeholder used for each emoji sequence during layout.
 pub const PLACEHOLDER: char = '\u{2B1B}';
 
-/// Pictures are kept this wide; text never asks for more than about 40px.
+/// Cached emoji bitmap size.
 const TEXTURE_WIDTH: u32 = 72;
 
 struct Font {
     bytes: Vec<u8>,
     index: u32,
-    /// A glyph sequence to the glyph the font draws for it.
+    /// Maps a glyph sequence to its ligature glyph.
     ligatures: HashMap<Vec<u32>, u32>,
 }
 
 static FONT: OnceLock<Option<Font>> = OnceLock::new();
 
-/// Whether a colour emoji font was found. Without one, text keeps the
-/// monochrome glyphs.
+/// Whether a color emoji font is available.
 pub fn available() -> bool {
     font().is_some()
 }
 
-/// Loads the font now rather than at the first emoji, which would stall a
-/// frame.
+/// Loads the emoji font before the first frame needs it.
 pub fn warm_up() {
     let _ = font();
 }
@@ -81,7 +72,7 @@ fn load() -> Option<Font> {
     })
 }
 
-/// The colour emoji font this desktop carries, and the face inside it.
+/// Desktop color emoji font and selected face.
 fn find() -> Option<(PathBuf, u32)> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if cfg!(target_os = "macos") {
@@ -106,7 +97,7 @@ fn find() -> Option<(PathBuf, u32)> {
     if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
         return Some((path, 0));
     }
-    // A distribution may file it anywhere under the font root.
+    // Search all font directories because distributions use different paths.
     for root in ["/usr/share/fonts", "/usr/local/share/fonts"] {
         if let Some(path) = search(&PathBuf::from(root), 0) {
             return Some((path, 0));
@@ -135,7 +126,7 @@ fn search(dir: &std::path::Path, depth: usize) -> Option<PathBuf> {
     None
 }
 
-/// Every ligature the font defines, keyed by the glyphs it replaces.
+/// Font ligatures keyed by their input glyphs.
 fn read_ligatures(font: &FontRef<'_>) -> HashMap<Vec<u32>, u32> {
     let mut map = HashMap::new();
     let Ok(gsub) = font.gsub() else {
@@ -196,8 +187,7 @@ impl Font {
         FontRef::from_index(&self.bytes, self.index).ok()
     }
 
-    /// The glyph the font draws for a sequence, resolving joined sequences,
-    /// flags, and skin tones through its ligatures.
+    /// Resolves a sequence to its final glyph through font ligatures.
     fn glyph(&self, font: &FontRef<'_>, cluster: &[char]) -> Option<GlyphId> {
         let charmap = font.charmap();
         let sequence = |chars: &[char]| -> Option<u32> {
@@ -223,7 +213,7 @@ impl Font {
         {
             return Some(GlyphId::new(glyph));
         }
-        // An unknown joined sequence: show as much of it as the font knows.
+        // Fall back to the known part of an unsupported joined sequence.
         while stripped.len() > 1 {
             stripped.pop();
             while stripped.last().is_some_and(|c| *c == '\u{200D}') {
@@ -272,7 +262,7 @@ impl Font {
     }
 }
 
-/// Textures already uploaded, per egui context.
+/// Uploaded emoji textures for each egui context.
 #[derive(Clone, Default)]
 struct Cache(Arc<Mutex<HashMap<String, Option<TextureHandle>>>>);
 
@@ -299,7 +289,7 @@ fn texture(ctx: &egui::Context, cluster: &str) -> Option<TextureHandle> {
     handle
 }
 
-/// A run of text, or one emoji sequence.
+/// Plain text or one emoji sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Piece<'a> {
     Text(&'a str),
@@ -327,25 +317,20 @@ pub fn pieces(text: &str) -> Vec<Piece<'_>> {
     pieces
 }
 
-/// Whether a grapheme cluster is drawn as a picture: a character with
-/// emoji presentation, or anything asked for one with a variation
-/// selector, keycap, or joiner.
+/// Whether a grapheme cluster needs an emoji bitmap.
 pub fn is_emoji(cluster: &str) -> bool {
     let Some(first) = cluster.chars().next() else {
         return false;
     };
     if (first as u32) < 0xA9 {
-        // A digit, '#' or '*' is only an emoji as a keycap.
+        // Digits, `#`, and `*` are emoji only in keycap sequences.
         return cluster.contains('\u{20E3}');
     }
     if is_presentation(first) {
         return true;
     }
-    // A character that is text by default becomes a picture when the
-    // sequence asks (a variation selector, joiner, or skin tone), but only
-    // if it is one of the symbols that can be pictures: the letters of
-    // scripts that use joiners in ordinary words (Devanagari, Bengali,
-    // Sinhala, Malayalam) stay text.
+    // Variation selectors, emoji modifiers, and joiners can request emoji
+    // presentation. Keep joiner-using writing systems as text.
     let capable = matches!(first, '\u{A9}' | '\u{AE}')
         || ('\u{2000}'..='\u{33FF}').contains(&first)
         || ('\u{1F000}'..='\u{1FAFF}').contains(&first);
@@ -359,7 +344,7 @@ fn is_skin_tone(c: char) -> bool {
     ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
 }
 
-/// Characters that are pictures by default, from Unicode's emoji data.
+/// Characters with default emoji presentation in Unicode data.
 fn is_presentation(c: char) -> bool {
     let code = c as u32;
     if (0x1F000..=0x1FAFF).contains(&code) {
@@ -378,7 +363,7 @@ fn is_presentation(c: char) -> bool {
     )
 }
 
-/// How many emoji a text is, when it is nothing but emoji (and spaces).
+/// Counts emoji when the input contains only emoji and spaces.
 pub fn only_emoji(text: &str) -> Option<usize> {
     let mut count = 0;
     for piece in pieces(text) {
@@ -391,8 +376,7 @@ pub fn only_emoji(text: &str) -> Option<usize> {
     (count > 0).then_some(count)
 }
 
-/// Appends text to a layout job, routing each emoji through a placeholder
-/// and remembering which sequence it stands for.
+/// Appends text with placeholders and records their emoji sequences.
 pub fn append(
     job: &mut LayoutJob,
     placements: &mut Vec<String>,
@@ -420,9 +404,8 @@ pub fn append(
     job.text[start..].chars().count()
 }
 
-/// Paints the pictures over a laid-out galley's placeholders.
-/// Paints one emoji's picture centred in `rect`, or the sequence in the
-/// monochrome face when no picture exists for it.
+/// Paints emoji bitmaps over a galley's placeholders.
+/// Falls back to monochrome text when no bitmap exists.
 pub fn paint_cluster(ui: &egui::Ui, cluster: &str, rect: Rect) {
     let painter = ui.painter();
     match texture(ui.ctx(), cluster) {
@@ -453,10 +436,8 @@ pub fn paint_cluster(ui: &egui::Ui, cluster: &str, rect: Rect) {
     }
 }
 
-/// A layout job for text being edited: the text is kept character for
-/// character (a galley that differs from the buffer breaks the cursor), the
-/// emoji are styled invisible, and each one's place is answered so the
-/// editor can paint the pictures over them.
+/// Builds an editor layout without changing character offsets. Emoji glyphs
+/// are transparent and returned for bitmap overlay.
 pub fn editor_job(
     text: &str,
     format: &egui::TextFormat,
@@ -545,7 +526,7 @@ mod tests {
             ]
         );
         assert_eq!(pieces("plain"), vec![Piece::Text("plain")]);
-        // A flag is two regional indicators; a family is joined with ZWJ.
+        // Cover regional-indicator flags and ZWJ family sequences.
         assert_eq!(pieces("🇩🇪"), vec![Piece::Emoji("🇩🇪")]);
         assert_eq!(pieces("👨‍👩‍👧"), vec![Piece::Emoji("👨‍👩‍👧")]);
         assert_eq!(pieces("👍🏽!"), vec![Piece::Emoji("👍🏽"), Piece::Text("!")]);
@@ -614,7 +595,7 @@ mod script_tests {
 
     #[test]
     fn joiners_in_ordinary_words_are_not_emoji() {
-        // Sinhala "Sri", Bengali "rya", Malayalam chillu: all carry a ZWJ.
+        // These writing-system clusters use ZWJ but are not emoji.
         for word in [
             "\u{0DC1}\u{0DCA}\u{200D}\u{0DBB}\u{0DD3}",
             "\u{09B0}\u{200D}\u{09CD}\u{09AF}",

@@ -14,28 +14,27 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Start with sample chats and no WhatsApp connection (for screenshots).
+    /// Start with offline sample chats.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo: bool,
 
-    /// What to show in demo mode: `chat`, `empty`, `settings`, `login`,
+    /// Demo view: `chat`, `empty`, `settings`, `login`,
     /// `pair`, `shortcuts`, `about`, `info`, `light`, or a comma-separated
     /// mix such as `chat,light`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_page: Option<String>,
 
-    /// Write a PNG of the demo window to this path and exit. Implies
-    /// `--demo`.
+    /// Save the demo window as a PNG and exit. Implies `--demo`.
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "PATH")]
     demo_shot: Option<std::path::PathBuf>,
-    /// Window size for a screenshot run, as WxH logical points.
+    /// Screenshot window size as WxH logical points.
     #[arg(long, value_name = "WxH")]
     demo_size: Option<String>,
 
-    /// How long to wait before the shot is taken, so fonts and icons are in.
+    /// Delay before taking the screenshot, in milliseconds.
     #[cfg(feature = "demo")]
     #[arg(long, value_name = "MS", default_value_t = 1500)]
     demo_shot_delay: u64,
@@ -52,9 +51,8 @@ fn main() -> eframe::Result<()> {
     let dirs_ready = dirs.ensure();
     let mut logger =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter));
-    // Launched from a desktop, stderr goes nowhere; keep the run's log where
-    // a bug report can find it. A demo run keeps to stderr: it must not
-    // replace the log of a real session that may be running alongside.
+    // Write desktop-session logs to disk. Demo runs use stderr so they do not
+    // replace a live session's log.
     #[cfg(feature = "demo")]
     let demo_run = cli.demo || cli.demo_shot.is_some();
     #[cfg(not(feature = "demo"))]
@@ -79,9 +77,7 @@ fn main() -> eframe::Result<()> {
     let demo = cli.demo || cli.demo_shot.is_some();
     #[cfg(not(feature = "demo"))]
     let demo = false;
-    // A second launch surfaces the instance already running instead of
-    // fighting it for the link. Held for the lifetime of the process; a
-    // demo run is a throwaway next to the real one and stays out of it.
+    // Keep one linked instance. Demo runs do not participate.
     let instance = if demo {
         None
     } else {
@@ -115,10 +111,8 @@ fn main() -> eframe::Result<()> {
     });
     let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(app)));
 
-    // The application (the link, the archive, the tray) outlives any
-    // window. Closing to the tray destroys the window, and this loop
-    // creates a new one when the tray, a notification, or another launch
-    // asks for it. Plain window lifecycle, portable across desktops.
+    // The link, archive, and tray outlive windows. Recreate a window when the
+    // tray, notification, or another launch requests one.
     loop {
         let creator_slot = std::sync::Arc::clone(&slot);
         let creator_waker = waker.clone();
@@ -154,8 +148,7 @@ fn main() -> eframe::Result<()> {
             break;
         }
 
-        // Tray life: no window, but the link, the archive, and the tray
-        // keep going until Show or Quit.
+        // Keep updating link, archive, and tray while no window exists.
         let headless = egui::Context::default();
         slot.lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -191,7 +184,7 @@ fn main() -> eframe::Result<()> {
     Ok(())
 }
 
-/// Every log line goes to stderr and to the log file.
+/// Logger that writes to stderr and the current-run log file.
 struct Tee(std::fs::File);
 
 impl std::io::Write for Tee {
@@ -207,7 +200,7 @@ impl std::io::Write for Tee {
     }
 }
 
-/// Records every panic in `path` before the process dies of it.
+/// Writes panics to `path` before process exit.
 fn log_panics(path: std::path::PathBuf) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -230,8 +223,7 @@ fn log_panics(path: std::path::PathBuf) {
     }));
 }
 
-/// The window size a screenshot run asked for (`--demo-size WxH`), so the
-/// pictures need no compositor rule to come out right.
+/// Parses `--demo-size WxH`.
 fn demo_size_arg() -> Option<[f32; 2]> {
     let value = std::env::args()
         .skip_while(|arg| arg != "--demo-size")
@@ -248,23 +240,16 @@ fn native_options() -> eframe::NativeOptions {
         .with_inner_size(demo_size)
         .with_min_inner_size([720.0, 480.0])
         .with_icon(app_icon())
-        // macOS: no title bar strip above the app. The content runs to the
-        // top edge and the traffic lights float over it; the interface
-        // leaves room for them with `theme::titlebar_inset`. Nothing
-        // changes elsewhere.
+        // macOS uses a full-size content view under the traffic lights.
         .with_fullsize_content_view(true)
         .with_titlebar_shown(false)
         .with_title_shown(false);
     eframe::NativeOptions {
         viewport,
-        // A screenshot run must come up at the size it asked for; the
-        // restored size of the user's last window would override it.
+        // Do not restore window size during fixed-size screenshot runs.
         persist_window: std::env::args().all(|arg| arg != "--demo" && arg != "--demo-shot"),
-        // A Wayland compositor stops sending frame callbacks to a window on
-        // a hidden workspace; waiting for vsync there would block the event
-        // loop, leave the compositor's pings unanswered, and Hyprland then
-        // offers to terminate the app. Repaints are event-driven, so
-        // nothing spins without vsync.
+        // Disable vsync because hidden Wayland windows may stop receiving frame
+        // callbacks and block the event loop. Repainting is event-driven.
         glow_options: eframe::egui_glow::GlowConfiguration {
             vsync: false,
             ..Default::default()
@@ -273,8 +258,7 @@ fn native_options() -> eframe::NativeOptions {
     }
 }
 
-/// The eframe adapter around the long-lived [`app::App`]: delegates frames
-/// and, when the window goes away, hands the state back for the next one.
+/// eframe adapter that returns the long-lived [`app::App`] when a window closes.
 struct Shell {
     app: Option<app::App>,
     slot: std::sync::Arc<std::sync::Mutex<Option<app::App>>>,
@@ -288,7 +272,7 @@ impl Drop for Shell {
     }
 }
 
-/// A screenshot the window still owes us.
+/// Pending screenshot request.
 #[cfg(feature = "demo")]
 #[derive(Clone)]
 struct Shot {
@@ -336,11 +320,8 @@ impl Shell {
 }
 
 impl eframe::App for Shell {
-    /// egui's memory (scroll positions, pending scroll animations, text
-    /// cursors) is not worth keeping across runs, and a pending animation
-    /// restored from a previous run's clock would hold a chat short of its
-    /// end until that clock is reached. The window's size and place are
-    /// kept regardless.
+    /// Does not persist egui interaction state across windows. Window size and
+    /// position are still persisted.
     fn persist_egui_memory(&self) -> bool {
         false
     }
@@ -351,9 +332,7 @@ impl eframe::App for Shell {
         }
         #[cfg(feature = "demo")]
         {
-            // The compositor may float the window at whatever size it
-            // remembers; a screenshot run insists on the one it was asked
-            // for until it has it.
+            // Keep requesting the configured screenshot size until it is applied.
             if self.shot.is_some()
                 && let Some([w, h]) = demo_size_arg()
             {
@@ -372,8 +351,7 @@ impl eframe::App for Shell {
         }
     }
 
-    /// The window is closing; the app may live on in the tray, so only what
-    /// must not be lost is written now.
+    /// Saves essential state before the window closes.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if let Some(app) = self.app.as_mut() {
             app.save_state();

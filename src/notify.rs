@@ -1,17 +1,12 @@
-//! Desktop notifications for messages that arrive while the reader is away:
-//! the window hidden, unfocused, or showing another chat.
+//! Desktop notifications when the app is hidden, unfocused, or on another chat.
 //!
-//! They go through the desktop's own notification service (D-Bus on Linux,
-//! Notification Center on macOS, toasts on Windows), so they look and behave
-//! like every other app's. Showing one can block briefly, and on Linux
-//! waiting for a click blocks until the notification is gone, so each is
-//! handled on its own thread.
+//! Delivery uses the platform notification service. Each notification runs on
+//! its own thread because delivery and click handling can block.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// The title and body for a message: the chat's name, and in a group the
-/// sender before the text, since the title does not say who wrote it.
+/// Builds the notification title and body, including the group sender.
 pub fn lines(chat_name: &str, is_group: bool, sender: &str, summary: &str) -> (String, String) {
     let body = if is_group {
         format!("{sender}: {summary}")
@@ -21,9 +16,8 @@ pub fn lines(chat_name: &str, is_group: bool, sender: &str, summary: &str) -> (S
     (chat_name.to_owned(), body)
 }
 
-/// Shows one, with the person's or the group's picture when there is one
-/// on disk. A click on it (where the desktop reports clicks) puts `chat`
-/// into `opened` and wakes the app, which then shows that chat.
+/// Shows a notification with an optional chat picture. Clicking it queues the
+/// chat id and wakes the app on platforms that report clicks.
 pub fn show(
     title: String,
     body: String,
@@ -81,7 +75,7 @@ fn deliver(
 ) {
     let mut notification = notify_rust::Notification::new();
     notification.appname("FastsApp").summary(title).body(body);
-    // Windows shows it; macOS shows the app's own icon regardless.
+    // Windows uses the image; macOS always uses the app icon.
     if let Some(picture) = picture {
         notification.image_path(&picture.to_string_lossy());
     }
@@ -94,7 +88,7 @@ fn deliver(
 mod tests {
     use super::*;
 
-    /// Shows one on this desktop, with the first cached picture if any:
+    /// Shows a test notification with an optional cached picture:
     /// `cargo test --all-features shows_one -- --ignored --nocapture`.
     #[test]
     #[ignore = "shows a real notification"]

@@ -1,5 +1,4 @@
-//! The linking screen: the QR code, or the pairing code, until the phone
-//! accepts this computer.
+//! Phone linking with a QR code or pairing code.
 
 use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke, Vec2};
 
@@ -18,9 +17,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let top = theme::blend(palette.window, palette.accent, 0.10);
             super::widgets::paint_vertical_gradient(ui, rect, top, palette.window);
             let card_width = 460.0_f32.min(rect.width() - 24.0);
-            // The card is as tall as what it holds, which differs between the
-            // QR code, the pairing code, and an error; it is centred on the
-            // height it had last frame, and a first frame corrects itself.
+            // Center the card using its previous height. Its content determines
+            // the next frame's height.
             let height_id = ui.id().with("login-card-height");
             let known_height = ui
                 .ctx()
@@ -60,7 +58,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     theme::text(ui, "FastsApp", theme::bold(28.0), palette.text);
                     theme::text(
                         ui,
-                        "A fast, native WhatsApp client.",
+                        "A native WhatsApp client.",
                         theme::regular(14.5),
                         palette.secondary,
                     );
@@ -83,18 +81,18 @@ fn body(app: &mut App, ui: &mut egui::Ui) {
             busy(ui, palette.accent, "Connecting to WhatsApp…");
         }
         LinkStatus::Connected | LinkStatus::Disconnected { .. } => {
-            busy(ui, palette.accent, "Linked; waiting for your chats…");
+            busy(ui, palette.accent, "Linked. Waiting for your chats…");
         }
         LinkStatus::LoggedOut => {
             theme::icon(ui, Icon::Smartphone, 28.0, palette.warning);
             theme::paragraph(
                 ui,
-                "This computer was unlinked from your phone. A new code is on its way.",
+                "This computer was unlinked from your phone. Requesting a new code.",
                 theme::regular(14.0),
                 palette.text,
             );
             ui.add_space(8.0);
-            busy(ui, palette.accent, "Asking for a new code…");
+            busy(ui, palette.accent, "Requesting a new code…");
         }
         LinkStatus::Failed(message) => {
             theme::icon(ui, Icon::CircleAlert, 28.0, palette.danger);
@@ -122,7 +120,7 @@ fn body(app: &mut App, ui: &mut egui::Ui) {
                 busy(
                     ui,
                     palette.accent,
-                    &format!("Asking WhatsApp for a code for +{phone}…"),
+                    &format!("Requesting a code for +{phone}…"),
                 );
             } else if let Some(qr) = qr {
                 qr_view(app, ui, &qr);
@@ -134,7 +132,7 @@ fn body(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(18.0);
     theme::paragraph(
         ui,
-        "Unofficial client. WhatsApp's terms may not allow it; use at your own risk.",
+        "Unofficial client. Using it may be against WhatsApp's terms of service.",
         theme::regular(11.5),
         palette.dim,
     );

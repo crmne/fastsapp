@@ -1,5 +1,4 @@
-//! Sample data for screenshots and headless tests: a linked account with a
-//! handful of chats, and nothing on the wire.
+//! Offline sample data for screenshots and headless UI tests.
 
 use std::collections::HashMap;
 
@@ -24,8 +23,7 @@ struct Sample {
     lines: &'static [(bool, &'static str)],
 }
 
-/// A small JPEG, the kind WhatsApp sends ahead of a picture, drawn here
-/// rather than shipped: a soft gradient with a dark shape.
+/// Generates a small JPEG attachment preview.
 pub fn sample_thumbnail(seed: u32) -> Vec<u8> {
     let (width, height) = (64u32, 48u32);
     let mut image = image::RgbImage::new(width, height);
@@ -184,7 +182,7 @@ fn media(mime: &str, size: u64, width: Option<u32>, height: Option<u32>) -> Medi
     }
 }
 
-/// A waveform with the shape of speech, for voice messages in the demo.
+/// Generates a speech-like demo waveform.
 fn demo_waveform() -> Vec<u8> {
     (0..crate::voice::BARS)
         .map(|index| {
@@ -223,11 +221,7 @@ fn message(chat: &str, id: &str, from_me: bool, timestamp: i64, content: Content
     }
 }
 
-/// A larger sample picture on disk, so the view's real picture path is
-/// exercised, plus a two-frame animated sticker.
-/// Paints a little picture for every sample person and group: nobody real,
-/// just landscapes, silhouettes, and shapes in each id's own hue, so the
-/// list looks like a lived-in WhatsApp rather than a wall of initials.
+/// Writes sample attachments and generated profile pictures to disk.
 fn plant_avatars(app: &mut App) {
     let dir = crate::paths::AppDirs::discover().avatar_cache_dir();
     if std::fs::create_dir_all(&dir).is_err() {
@@ -255,7 +249,7 @@ fn plant_avatars(app: &mut App) {
     }
 }
 
-/// One 128px picture, chosen and tinted by the id.
+/// Generates one 128-pixel id-colored profile picture.
 fn painted_avatar(id: &str) -> image::RgbImage {
     let hue = crate::util::hue(id);
     let motif = (crate::util::hue(&format!("motif-{id}")) as u32) % 4;
@@ -265,7 +259,7 @@ fn painted_avatar(id: &str) -> image::RgbImage {
         let y = py as f32 / side as f32;
         match motif {
             0 => {
-                // A landscape: sky, a low sun, two mountains.
+                // Landscape.
                 let sky = tint(hue, 0.35, 0.92 - y * 0.25);
                 let sun = ((x - 0.68) * (x - 0.68) + (y - 0.30) * (y - 0.30)).sqrt() < 0.13;
                 let near = y > 0.62 + (x - 0.30).abs() * 0.9;
@@ -281,7 +275,7 @@ fn painted_avatar(id: &str) -> image::RgbImage {
                 }
             }
             1 => {
-                // A silhouette where a portrait would be.
+                // Portrait silhouette.
                 let head = ((x - 0.5) * (x - 0.5) + (y - 0.40) * (y - 0.40)).sqrt() < 0.17;
                 let shoulders = {
                     let dx = (x - 0.5) / 0.34;
@@ -295,7 +289,7 @@ fn painted_avatar(id: &str) -> image::RgbImage {
                 }
             }
             2 => {
-                // Overlapping discs.
+                // Overlapping circles.
                 let a = ((x - 0.35) * (x - 0.35) + (y - 0.38) * (y - 0.38)).sqrt() < 0.26;
                 let b = ((x - 0.66) * (x - 0.66) + (y - 0.62) * (y - 0.62)).sqrt() < 0.30;
                 match (a, b) {
@@ -306,7 +300,7 @@ fn painted_avatar(id: &str) -> image::RgbImage {
                 }
             }
             _ => {
-                // A leaf against the light.
+                // Leaf silhouette.
                 let leaf = {
                     let dx = (x - 0.5) / 0.24;
                     let dy = (y - 0.48) / 0.36;
@@ -324,7 +318,7 @@ fn painted_avatar(id: &str) -> image::RgbImage {
     })
 }
 
-/// A colour from hue (degrees), saturation, and value, as pixels.
+/// Converts HSV to pixel color.
 fn tint(hue: f32, saturation: f32, value: f32) -> image::Rgb<u8> {
     let hue = hue.rem_euclid(360.0) / 60.0;
     let chroma = value * saturation;
@@ -392,10 +386,10 @@ fn sample_files(app: &App) -> (std::path::PathBuf, std::path::PathBuf) {
     (photo, sticker)
 }
 
-/// Fills the app with the sample account and opens its first chat.
+/// Loads the sample account and opens its first chat.
 pub fn populate(app: &mut App) {
     app.backend.set_offline(true);
-    // Nothing answers a download here; attachments stay as they arrive.
+    // Demo mode has no backend to handle downloads.
     app.settings.auto_download = false;
     app.link = LinkStatus::Connected;
     app.me = Some(ME.to_owned());
@@ -418,7 +412,7 @@ pub fn populate(app: &mut App) {
             },
         );
     }
-    // A contact with no chat yet, so a search can offer to start one.
+    // Include a contact without a chat for search results.
     app.contacts.insert(
         "12025550137@s.whatsapp.net".to_owned(),
         Contact {
@@ -437,7 +431,7 @@ pub fn populate(app: &mut App) {
         let mut conversation = Conversation {
             complete: true,
             requested: true,
-            // There is no phone to ask.
+            // Demo mode has no phone connection.
             phone_exhausted: true,
             ..Default::default()
         };
@@ -488,13 +482,12 @@ pub fn populate(app: &mut App) {
     }
 
     plant_avatars(app);
-    // The first chat gets the full range of what a bubble can hold.
+    // Cover every supported bubble type in the first chat.
     let (photo, sticker) = sample_files(app);
     let ada = SAMPLES[0].id;
     let base = app.chats[0].last_activity;
     let older = base - 60 * 60 * 30;
-    // The richest messages come last, so a screenshot of the chat's end
-    // shows them.
+    // Put representative messages at the end for screenshots.
     let latest = vec![
         {
             let mut row = message(
@@ -678,7 +671,7 @@ pub fn populate(app: &mut App) {
     conversation.messages.splice(0..0, extra);
     conversation.messages.extend(latest);
 
-    // The group gets a picture, a reply with a mention, and a poll.
+    // Cover a group image, mentioned reply, and poll.
     let group = SAMPLES[1].id;
     let group_base = app.chats[1].last_activity;
     let (jonas, mira, tom) = (group_members[0], group_members[1], group_members[2]);
@@ -752,7 +745,7 @@ pub fn populate(app: &mut App) {
         .messages
         .extend(group_extra);
 
-    // The chat rows follow their conversations' last message.
+    // Sync chat-row previews with each conversation's last message.
     for chat in &mut app.chats {
         if let Some(last) = app
             .conversations
@@ -781,7 +774,7 @@ pub fn populate(app: &mut App) {
         },
     );
     app.open_chat = Some(ada.to_owned());
-    // An open chat has been read.
+    // Mark the open chat as read.
     if let Some(chat) = app.chats.iter_mut().find(|chat| chat.id == ada) {
         chat.unread = 0;
     }
@@ -789,7 +782,7 @@ pub fn populate(app: &mut App) {
     app.focus_composer = false;
 }
 
-/// Applies `--demo-page`: which surface to show.
+/// Applies the UI state selected by `--demo-page`.
 pub fn apply_flags(app: &mut App, page: Option<&str>) {
     let Some(page) = page else {
         return;
@@ -847,8 +840,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     .join("\n");
                 app.focus_composer = true;
             }
-            // The group with two people typing at once, for the stacked
-            // pictures and the dots.
+            // Show two simultaneous group typers.
             "typers" => {
                 let group = SAMPLES[1].id;
                 app.open_chat = Some(group.to_owned());
@@ -890,7 +882,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.search_hits = hits;
             }
             "voice" => {
-                // A real clip, so the player has something to play.
+                // Use a valid clip for playback tests.
                 let tone: Vec<f32> = (0..crate::voice::RATE * 6)
                     .map(|i| {
                         let t = i as f32 / crate::voice::RATE as f32;
@@ -974,12 +966,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     })
                     .collect();
             }
-            // What the picker says when GIPHY turns the key away.
+            // Show the rejected GIPHY key state.
             "gifs-badkey" => {
                 app.picker = Some(crate::model::PickerTab::Gifs);
                 app.settings.giphy_key = "demo".into();
                 app.gif_error = Some(crate::model::GifError {
-                    message: "GIPHY refused the API key (error 401).".into(),
+                    message: "GIPHY rejected the API key (error 401).".into(),
                     bad_key: true,
                 });
             }
@@ -1011,7 +1003,7 @@ fn sample_qr() -> String {
         .to_owned()
 }
 
-/// Names of every chat in the sample, for tests.
+/// Names of all sample chats.
 pub fn sample_ids() -> Vec<&'static str> {
     SAMPLES.iter().map(|sample| sample.id).collect()
 }
@@ -1041,8 +1033,7 @@ mod tests {
         app
     }
 
-    /// Lays the window out a few times without a display; any panic in a
-    /// view surfaces here.
+    /// Lays out several frames without a display to catch view panics.
     fn render(app: &mut App, ctx: &egui::Context) {
         for _ in 0..3 {
             let input = egui::RawInput {
@@ -1057,7 +1048,7 @@ mod tests {
                 app.background_frame(&ctx);
                 app.frame_ui(ui);
             });
-            // No renderer takes the font atlas off our hands here.
+            // Headless tests must apply font-atlas updates themselves.
             output.textures_delta.clear();
         }
     }
@@ -1130,7 +1121,7 @@ mod tests {
         }
     }
 
-    /// Runs one frame with the given input events.
+    /// Runs one frame with input events.
     fn frame_with(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
         let mut output = ctx.run_ui(
             egui::RawInput {
@@ -1193,9 +1184,7 @@ mod tests {
             render(&mut app, &ctx);
         }
         let chat = sample_ids()[0].to_owned();
-        // The last message: a link preview card fills its top, and the
-        // card takes clicks for itself, which is what used to keep the
-        // menu from opening.
+        // Test right-click through an inner link-preview response.
         let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
         let rect = ctx
             .read_response(id)
@@ -1225,10 +1214,7 @@ mod tests {
 
     #[test]
     fn bubble_hit_rects_follow_the_layout() {
-        // The chat opens at its end, which moves every message a long way
-        // from where the first frame laid it out; the rect a right-click is
-        // checked against must follow, not stay where the message was first
-        // drawn.
+        // Ensure the right-click rect follows messages after initial scrolling.
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
@@ -1253,8 +1239,7 @@ mod tests {
             render(&mut app, &ctx);
         }
         assert!(app.at_bottom, "opens at the end");
-        // Content that arrives after the open (a tall message) must not
-        // leave the view short of the end.
+        // Keep the view pinned when content grows after opening.
         let chat = sample_ids()[0].to_owned();
         let when = crate::util::now();
         let tall = message(
@@ -1274,7 +1259,7 @@ mod tests {
         }
         assert!(app.at_bottom, "still at the end after content grew");
         assert!(app.scroll_to_bottom, "and still pinned");
-        // A wheel up is the reader taking over.
+        // Wheel input releases automatic bottom pinning.
         frame_with(
             &mut app,
             &ctx,
@@ -1293,9 +1278,7 @@ mod tests {
 
     #[test]
     fn a_paste_is_seen_on_the_key_release() {
-        // The platform layer never delivers the press of Ctrl+V (it becomes
-        // a text paste, or nothing, for a picture); the release is what
-        // there is.
+        // Platforms may deliver only the Ctrl+V key release for image paste.
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
@@ -1394,8 +1377,7 @@ mod tests {
         }
     }
 
-    /// Part of a message can be swept with the pointer and copied, like any
-    /// text on a page.
+    /// Message text can be selected and copied.
     #[test]
     fn message_text_can_be_swept_and_copied() {
         let mut app = app();
@@ -1404,7 +1386,7 @@ mod tests {
         render(&mut app, &ctx);
         render(&mut app, &ctx);
         let chat = sample_ids()[0].to_owned();
-        // Whichever message body the view has on screen.
+        // Use a currently visible message body.
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
         let rect = ["ada-format", "ada-link", "ada-reply", "ada-tall"]
             .iter()
@@ -1451,9 +1433,7 @@ mod tests {
         assert!(!copied.trim().is_empty(), "{copied:?}");
     }
 
-    /// A drag that leaves the window keeps selecting: the pointer is
-    /// leashed to the view's edge, the list scrolls past it, and the copy
-    /// spans messages that were never on screen together.
+    /// Selection continues and scrolls after the pointer leaves the window.
     #[test]
     fn a_drag_out_of_the_window_keeps_selecting() {
         let mut app = app();
@@ -1462,7 +1442,7 @@ mod tests {
         render(&mut app, &ctx);
         render(&mut app, &ctx);
         let chat = sample_ids()[0].to_owned();
-        // Scroll away from the end first, so there is somewhere to go.
+        // Scroll away from the end before extending the selection.
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
         let ids: Vec<String> = app.conversations[&chat]
             .messages
@@ -1499,8 +1479,7 @@ mod tests {
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        // Out of the window entirely, below it, plus a spurious PointerGone
-        // like the platform sends on leaving.
+        // Simulate leaving the window with a PointerGone event.
         let centre = app
             .selection_view
             .lock()
@@ -1541,8 +1520,7 @@ mod tests {
             copied.matches("] ").count() >= 2,
             "the selection should span messages: {copied:?}"
         );
-        // The start scrolled off the screen long before the copy; it must
-        // be in it regardless.
+        // The copied text must include the off-screen selection start.
         let opening: String = start_text.chars().take(12).collect();
         assert!(
             copied.contains(opening.trim_end()),
@@ -1550,8 +1528,7 @@ mod tests {
         );
     }
 
-    /// Holding a drag near the top of the list scrolls it upward, even
-    /// though the list starts stuck to its end.
+    /// Dragging near the top scrolls up from a bottom-pinned list.
     #[test]
     fn a_held_drag_at_the_top_edge_scrolls_the_list_up() {
         let mut app = app();
@@ -1574,9 +1551,7 @@ mod tests {
             .filter_map(|id| rect_of(&ctx, id).map(|rect| (id.clone(), rect.top())))
             .collect();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
-        // Where the message view actually is: the app stores it each frame
-        // for the selection leash, and on macOS the titlebar inset moves it
-        // down, so no fixed coordinate serves every platform.
+        // Use the frame's stored message-view rect because platform insets vary.
         let view = app
             .selection_view
             .lock()
@@ -1615,7 +1590,7 @@ mod tests {
         assert!(!app.scroll_to_bottom, "heading up releases the pin");
     }
 
-    /// A selection dragged to the edge scrolls; in the middle it does not.
+    /// Selection scrolls only near a view edge.
     #[test]
     fn a_drag_at_the_edge_scrolls_and_in_the_middle_does_not() {
         use crate::ui::conversation::edge_scroll;
@@ -1636,18 +1611,14 @@ mod tests {
         );
     }
 
-    /// A copy that runs across messages carries each one's clock, date,
-    /// and writer, the way the phone hands a selection on.
+    /// Multi-message copies include WhatsApp-style timestamps and senders.
     #[test]
     fn a_copy_across_messages_names_each_writer() {
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
         render(&mut app, &ctx);
-        // The sample pictures decode on egui's loader threads; one landing
-        // mid-sweep costs the frame a pass and with it the selection's
-        // extension, so let them settle before the drag (this test flaked
-        // for months without the pause).
+        // Let asynchronous sample-image decoding finish before dragging.
         std::thread::sleep(std::time::Duration::from_millis(300));
         render(&mut app, &ctx);
         let chat = sample_ids()[0].to_owned();
@@ -1706,8 +1677,7 @@ mod tests {
         assert!(copied.lines().count() >= 2, "{copied:?}");
     }
 
-    /// Own bubbles right-align, which once stretched the voice row across
-    /// the whole bubble width with the button flung to the far side.
+    /// Voice controls keep their width and order in right-aligned bubbles.
     #[test]
     fn an_own_voice_message_keeps_its_bubble_narrow() {
         let mut app = app();
