@@ -1,5 +1,5 @@
 title: FastsApp
-fastsapp_version: "0.10.1"
+fastsapp_version: "0.11.0"
 description: A native WhatsApp client for Linux, macOS, and Windows, written in Rust.
 lang: en-US
 timezone: Europe/Berlin
