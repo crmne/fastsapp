@@ -846,6 +846,20 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     .join("\n");
                 app.focus_composer = true;
             }
+            "mention" => {
+                let group = SAMPLES[1].id;
+                app.open_chat = Some(group.to_owned());
+                app.composer = "@mi".to_owned();
+                app.mention_start = Some(0);
+                app.mention_selected = 0;
+                app.focus_composer = true;
+            }
+            "emoji-complete" => {
+                app.composer = "hello :gri".to_owned();
+                app.emoji_start = Some(6);
+                app.emoji_selected = 0;
+                app.focus_composer = true;
+            }
             // Show two simultaneous group typers.
             "typers" => {
                 let group = SAMPLES[1].id;
@@ -1106,6 +1120,8 @@ mod tests {
             "picker",
             "stickers",
             "typing",
+            "mention",
+            "emoji-complete",
             "typers",
             "nosidebar",
             "search",
@@ -1180,6 +1196,186 @@ mod tests {
             vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
         );
         assert_eq!(app.composer, "", "Enter sends");
+    }
+
+    #[test]
+    fn colon_starts_emoji_autocomplete_in_the_composer() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+
+        frame_with(&mut app, &ctx, vec![egui::Event::Text(":".into())]);
+        render(&mut app, &ctx);
+
+        assert_eq!(app.composer, ":");
+        assert_eq!(app.emoji_start, Some(0));
+        assert_eq!(app.picker, None);
+        assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))));
+    }
+
+    #[test]
+    fn emoji_autocomplete_selects_with_the_keyboard() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+
+        frame_with(&mut app, &ctx, vec![egui::Event::Text(":".into())]);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("gri".into())]);
+        render(&mut app, &ctx);
+        assert_eq!(app.composer, ":gri");
+        assert_eq!(app.emoji_selected, 0, "a new query selects its first match");
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::ArrowDown, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.emoji_selected, 1);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        render(&mut app, &ctx);
+
+        assert!(!app.composer.is_empty() && !app.composer.contains(':'));
+        assert!(app.emoji_start.is_none());
+        assert_eq!(app.picker, None);
+        assert_eq!(app.settings.recent_emoji.first(), Some(&app.composer));
+        assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))));
+    }
+
+    #[test]
+    fn enter_keeps_its_normal_behavior_when_no_emoji_matches() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+
+        frame_with(&mut app, &ctx, vec![egui::Event::Text(":".into())]);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("notarealemojiquery".into())],
+        );
+        render(&mut app, &ctx);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+
+        assert!(app.composer.is_empty(), "Enter sends the literal text");
+        assert!(app.emoji_start.is_none());
+    }
+
+    #[test]
+    fn escape_dismisses_emoji_autocomplete_without_changing_text() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+
+        frame_with(&mut app, &ctx, vec![egui::Event::Text(":".into())]);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("gri".into())]);
+        render(&mut app, &ctx);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+        );
+        render(&mut app, &ctx);
+
+        assert_eq!(app.composer, ":gri");
+        assert!(app.emoji_start.is_none());
+        assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))));
+    }
+
+    #[test]
+    fn space_ends_emoji_autocomplete_as_literal_text() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+
+        frame_with(&mut app, &ctx, vec![egui::Event::Text(":".into())]);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("gri".into())]);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text(" ".into())]);
+
+        assert_eq!(app.composer, ":gri ");
+        assert!(app.emoji_start.is_none());
+    }
+
+    #[test]
+    fn configured_send_shortcut_bypasses_emoji_autocomplete() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.settings.enter_sends = false;
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+
+        frame_with(&mut app, &ctx, vec![egui::Event::Text(":".into())]);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("gri".into())]);
+        render(&mut app, &ctx);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::COMMAND)],
+        );
+
+        assert!(app.composer.is_empty(), "Ctrl+Enter still sends");
+        assert!(app.emoji_start.is_none());
+    }
+
+    #[test]
+    fn escape_returns_from_search_to_the_composer() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::K, egui::Modifiers::COMMAND)],
+        );
+        render(&mut app, &ctx);
+        assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("chat-search"))));
+
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("ada".into())]);
+        assert_eq!(app.search, "ada");
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+        );
+        render(&mut app, &ctx);
+
+        assert!(app.search.is_empty());
+        assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))));
+    }
+
+    #[test]
+    fn at_sign_selects_a_group_member_without_leaving_the_composer() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.actions
+            .push(crate::model::Action::OpenChat(SAMPLES[1].id.into()));
+        render(&mut app, &ctx);
+
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("@".into())]);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("mi".into())]);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+
+        assert_eq!(app.composer, "@Mira ");
+        assert!(app.mention_start.is_none());
+        assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))));
     }
 
     #[test]

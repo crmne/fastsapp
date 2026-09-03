@@ -888,6 +888,26 @@ impl Archive {
         Ok(changed > 0)
     }
 
+    /// Replaces an edited text body and its mention metadata.
+    pub fn set_edited_text(
+        &self,
+        chat: &str,
+        id: &str,
+        content: &Content,
+        mentions: &[crate::model::MentionRef],
+    ) -> Result<bool> {
+        let changed = self.connection.execute(
+            "UPDATE messages SET content = ?3, mentions = ?4, edited = 1 WHERE chat = ?1 AND id = ?2",
+            params![
+                chat,
+                id,
+                serde_json::to_string(content).unwrap_or_default(),
+                serde_json::to_string(mentions).unwrap_or_default(),
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Upserts a reaction, or removes it when the emoji is empty.
     pub fn set_reaction(
         &self,

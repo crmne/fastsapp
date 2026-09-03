@@ -128,9 +128,21 @@ pub struct App {
     pub contacts: HashMap<String, Contact>,
     pub conversations: HashMap<ChatId, Conversation>,
     pub open_chat: Option<ChatId>,
+    /// Chat row to reveal after keyboard navigation.
+    pub scroll_chat_into_view: Option<ChatId>,
     /// Composer drafts by chat.
     pub drafts: HashMap<ChatId, String>,
+    draft_mentions: HashMap<ChatId, Vec<ComposerMention>>,
     pub composer: String,
+    composer_mentions: Vec<ComposerMention>,
+    /// Byte offset of the `:` starting the active emoji query.
+    pub emoji_start: Option<usize>,
+    /// Keyboard-highlighted emoji in suggestions or the full picker.
+    pub emoji_selected: usize,
+    /// Byte offset of the `@` starting the active mention query.
+    pub mention_start: Option<usize>,
+    /// Keyboard-highlighted member in the mention suggestions.
+    pub mention_selected: usize,
     /// Reply target in the open chat.
     pub reply_to: Option<String>,
     /// Outgoing message being edited.
@@ -249,6 +261,12 @@ pub enum Pending {
     File(PathBuf),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ComposerMention {
+    id: String,
+    name: String,
+}
+
 impl Pending {
     /// Whether the composer can preview the file as an image.
     pub fn is_picture_file(path: &std::path::Path) -> bool {
@@ -321,8 +339,15 @@ impl App {
             contacts: HashMap::new(),
             conversations: HashMap::new(),
             open_chat,
+            scroll_chat_into_view: None,
             drafts: HashMap::new(),
+            draft_mentions: HashMap::new(),
             composer: String::new(),
+            composer_mentions: Vec::new(),
+            emoji_start: None,
+            emoji_selected: 0,
+            mention_start: None,
+            mention_selected: 0,
             reply_to: None,
             editing: None,
             composing: false,
@@ -524,6 +549,7 @@ impl App {
         self.window_hidden = false;
         self.hide_intent = false;
         self.wants_show = false;
+        self.refocus_composer(ctx);
         if let Some(tray) = &mut self.tray {
             tray.attach();
         }
@@ -697,6 +723,34 @@ impl App {
             named.push((me.to_owned(), "You".to_owned()));
         }
         named
+    }
+
+    /// Group members matching the active composer mention query.
+    pub fn mention_candidates(&self, chat: &Chat, query: &str) -> Vec<(String, String)> {
+        if !chat.is_group() {
+            return Vec::new();
+        }
+        let needle = query.trim().to_lowercase();
+        let digits: String = query.chars().filter(char::is_ascii_digit).collect();
+        self.participant_list(chat)
+            .into_iter()
+            .filter(|(id, name)| {
+                if self.me.as_deref() == Some(id) {
+                    return false;
+                }
+                if needle.is_empty() {
+                    return true;
+                }
+                name.trim_start_matches('~')
+                    .to_lowercase()
+                    .contains(&needle)
+                    || (!digits.is_empty()
+                        && id
+                            .split('@')
+                            .next()
+                            .is_some_and(|user| user.contains(&digits)))
+            })
+            .collect()
     }
 
     pub fn participant_names(&self, chat: &Chat) -> String {
@@ -1226,15 +1280,24 @@ impl App {
                 // Discard an unfinished edit instead of keeping it as a draft.
                 if self.editing.take().is_some() || draft.trim().is_empty() {
                     self.drafts.remove(&previous);
+                    self.draft_mentions.remove(&previous);
+                    self.composer_mentions.clear();
                 } else {
                     self.drafts.insert(previous.clone(), draft);
+                    self.draft_mentions.insert(
+                        previous.clone(),
+                        std::mem::take(&mut self.composer_mentions),
+                    );
                 }
                 self.stop_composing(&previous);
             }
             self.composer = self.drafts.remove(&id).unwrap_or_default();
+            self.composer_mentions = self.draft_mentions.remove(&id).unwrap_or_default();
             self.reply_to = None;
             self.editing = None;
         }
+        self.emoji_start = None;
+        self.mention_start = None;
         self.open_chat = Some(id.clone());
         self.page = Page::Chats;
         self.scroll_to_bottom = true;
@@ -1254,6 +1317,23 @@ impl App {
         if self.settings.last_chat.as_deref() != Some(id.as_str()) {
             self.settings.last_chat = Some(id);
             self.mark_settings_dirty();
+        }
+    }
+
+    /// Returns keyboard focus to the open conversation when no search or
+    /// overlay is active.
+    fn refocus_composer(&mut self, ctx: &egui::Context) {
+        let search_focused = ctx.memory(|memory| memory.has_focus(egui::Id::new("chat-search")));
+        if self.page == Page::Chats
+            && self.dialog.is_none()
+            && self.picker.is_none()
+            && self.recording.is_none()
+            && self.open_chat.is_some()
+            && self.search.trim().is_empty()
+            && !self.focus_search
+            && !search_focused
+        {
+            self.focus_composer = true;
         }
     }
 
@@ -1288,6 +1368,9 @@ impl App {
         if text.is_empty() {
             return;
         }
+        let (text, mentions) = self.encode_composer_mentions(&chat, text);
+        self.emoji_start = None;
+        self.mention_start = None;
         self.stop_composing(&chat);
         if let Some(id) = self.editing.take() {
             if let Some(message) = self
@@ -1297,17 +1380,61 @@ impl App {
             {
                 message.content = Content::text(text.clone());
                 message.edited = true;
+                message.mentions = mention_refs(&mentions);
             }
-            self.backend.send(Command::EditText { chat, id, text });
+            self.backend.send(Command::EditText {
+                chat,
+                id,
+                text,
+                mentions,
+            });
             return;
         }
         self.backend.send(Command::SendText {
             chat,
             text,
             quoting,
+            mentions,
         });
         self.scroll_to_bottom = true;
         self.at_bottom = true;
+    }
+
+    /// Replaces selected display-name mentions with WhatsApp's `@user`
+    /// tokens and returns the JIDs for message context.
+    fn encode_composer_mentions(&mut self, chat: &str, mut text: String) -> (String, Vec<String>) {
+        let participants = self
+            .chat(chat)
+            .map(|chat| chat.participants.clone())
+            .unwrap_or_default();
+        let selected = std::mem::take(&mut self.composer_mentions);
+        let mut mentions = Vec::new();
+        for mention in selected {
+            if !participants.iter().any(|id| id == &mention.id) {
+                continue;
+            }
+            let Some(user) = mention.id.split('@').next().filter(|user| !user.is_empty()) else {
+                continue;
+            };
+            let shown = format!("@{}", mention.name);
+            if let Some(at) = find_named_mention(&text, &shown) {
+                text.replace_range(at..at + shown.len(), &format!("@{user}"));
+                if !mentions.iter().any(|id| id == &mention.id) {
+                    mentions.push(mention.id);
+                }
+            }
+        }
+        // Preserve mentions in an edited draft that already contains wire
+        // tokens, even when it did not originate in this composer session.
+        for id in participants {
+            let Some(user) = id.split('@').next().filter(|user| !user.is_empty()) else {
+                continue;
+            };
+            if contains_mention_token(&text, user) && !mentions.iter().any(|known| known == &id) {
+                mentions.push(id);
+            }
+        }
+        (text, mentions)
     }
 
     /// Adds files to the open chat's composer.
@@ -1324,8 +1451,13 @@ impl App {
 
     /// Sends pending files, attaching the caption to the first.
     fn send_pending(&mut self, chat: ChatId, caption: String) {
-        let caption = Some(caption.trim().to_owned()).filter(|text| !text.is_empty());
+        let caption = caption.trim().to_owned();
+        let (caption, mentions) = self.encode_composer_mentions(&chat, caption);
+        let caption = Some(caption).filter(|text| !text.is_empty());
         let mut caption = caption;
+        let mut mentions = mentions;
+        self.emoji_start = None;
+        self.mention_start = None;
         let mut files = Vec::new();
         for item in std::mem::take(&mut self.pending) {
             match item {
@@ -1341,6 +1473,7 @@ impl App {
                         height: height as u32,
                         rgba: std::sync::Arc::try_unwrap(rgba).unwrap_or_else(|arc| (*arc).clone()),
                         caption: caption.take(),
+                        mentions: std::mem::take(&mut mentions),
                     });
                 }
                 Pending::File(path) => files.push(path),
@@ -1351,6 +1484,7 @@ impl App {
                 chat,
                 paths: files,
                 caption: caption.take(),
+                mentions,
             });
         }
         self.reply_to = None;
@@ -1376,6 +1510,7 @@ impl App {
             chat,
             paths,
             caption: None,
+            mentions: Vec::new(),
         });
         self.scroll_to_bottom = true;
         self.at_bottom = true;
@@ -1461,8 +1596,14 @@ impl App {
     fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::Open(page) => {
+                let opens_chats = page == Page::Chats;
                 self.page = page;
                 self.dialog = None;
+                self.emoji_start = None;
+                self.mention_start = None;
+                if opens_chats {
+                    self.refocus_composer(ctx);
+                }
             }
             Action::OpenChat(id) => self.open_chat(id),
             Action::StartChat { id, name } => {
@@ -1500,10 +1641,16 @@ impl App {
                     self.stop_composing(&chat);
                     let draft = std::mem::take(&mut self.composer);
                     if self.editing.take().is_none() && !draft.trim().is_empty() {
-                        self.drafts.insert(chat, draft);
+                        self.drafts.insert(chat.clone(), draft);
+                        self.draft_mentions
+                            .insert(chat, std::mem::take(&mut self.composer_mentions));
+                    } else {
+                        self.composer_mentions.clear();
                     }
                 }
                 self.reply_to = None;
+                self.emoji_start = None;
+                self.mention_start = None;
             }
             Action::SendText {
                 chat,
@@ -1563,12 +1710,18 @@ impl App {
                     self.editing = Some(id);
                     self.reply_to = None;
                     self.composer = text;
+                    self.composer_mentions.clear();
+                    self.emoji_start = None;
+                    self.mention_start = None;
                     self.focus_composer = true;
                 }
             }
             Action::CancelEdit => {
                 if self.editing.take().is_some() {
                     self.composer.clear();
+                    self.composer_mentions.clear();
+                    self.emoji_start = None;
+                    self.mention_start = None;
                 }
             }
             Action::DeleteForEveryone(id) => {
@@ -1619,8 +1772,14 @@ impl App {
                     self.recording = Some(Recorder::start(self.waker.clone()));
                 }
             }
-            Action::CancelRecording => self.recording = None,
-            Action::SendRecording => self.send_recording(),
+            Action::CancelRecording => {
+                self.recording = None;
+                self.refocus_composer(ctx);
+            }
+            Action::SendRecording => {
+                self.send_recording();
+                self.refocus_composer(ctx);
+            }
             Action::SetMuted(chat, until) => {
                 if let Some(known) = self.chat_mut(&chat) {
                     known.muted_until = until;
@@ -1628,12 +1787,16 @@ impl App {
                 self.backend.send(Command::SetMuted(chat, until));
             }
             Action::TogglePicker(tab) => {
+                self.emoji_start = None;
+                self.mention_start = None;
                 if self.picker == Some(tab) {
                     self.picker = None;
+                    self.refocus_composer(ctx);
                 } else {
                     self.picker = Some(tab);
                     self.picker_search.clear();
                     self.picker_focus = tab == PickerTab::Emoji;
+                    self.emoji_selected = 0;
                     if tab == PickerTab::Stickers {
                         self.stickers_pending = self.stickers.is_empty()
                             && self.stickers_saved.is_empty()
@@ -1645,15 +1808,66 @@ impl App {
                     }
                 }
             }
-            Action::ClosePicker => self.picker = None,
+            Action::ClosePicker => {
+                self.picker = None;
+                self.refocus_composer(ctx);
+            }
             Action::InsertEmoji(emoji) => {
                 self.insert_in_composer(ctx, &emoji);
-                self.settings.recent_emoji.retain(|known| *known != emoji);
-                self.settings.recent_emoji.insert(0, emoji);
-                self.settings.recent_emoji.truncate(36);
-                self.mark_settings_dirty();
+                self.remember_emoji(&emoji);
                 self.focus_composer = true;
             }
+            Action::InsertEmojiCompletion { emoji, start, end } => {
+                let starts_with_colon = start
+                    .checked_add(1)
+                    .is_some_and(|after| self.composer.get(start..after) == Some(":"));
+                if starts_with_colon
+                    && start <= end
+                    && self.composer.is_char_boundary(start)
+                    && self.composer.is_char_boundary(end)
+                {
+                    self.composer.replace_range(start..end, &emoji);
+                    let cursor = self.composer[..start].chars().count() + emoji.chars().count();
+                    self.set_composer_cursor(ctx, cursor);
+                    self.remember_emoji(&emoji);
+                    self.focus_composer = true;
+                }
+                self.emoji_start = None;
+            }
+            Action::CloseEmojiSuggestions => {
+                self.emoji_start = None;
+                self.focus_composer = true;
+            }
+            Action::InsertMention {
+                id,
+                name,
+                start,
+                end,
+            } => {
+                let member = self.current_chat().is_some_and(|chat| {
+                    chat.is_group() && chat.participants.iter().any(|known| known == &id)
+                });
+                let mention_at = start
+                    .checked_add(1)
+                    .is_some_and(|after| self.composer.get(start..after) == Some("@"));
+                if member
+                    && start <= end
+                    && self.composer.is_char_boundary(start)
+                    && self.composer.is_char_boundary(end)
+                    && mention_at
+                {
+                    let mention = format!("@{name}");
+                    let inserted = format!("{mention} ");
+                    self.composer.replace_range(start..end, &inserted);
+                    self.composer_mentions.push(ComposerMention { id, name });
+                    let cursor = self.composer[..start + inserted.len()].chars().count();
+                    self.set_composer_cursor(ctx, cursor);
+                    self.focus_composer = true;
+                }
+                self.emoji_start = None;
+                self.mention_start = None;
+            }
+            Action::CloseMentions => self.mention_start = None,
             Action::SaveSticker(path) => {
                 self.backend.send(Command::SaveSticker { path });
                 self.toast("Sticker saved");
@@ -1679,6 +1893,7 @@ impl App {
                     self.picker = None;
                     self.scroll_to_bottom = true;
                     self.at_bottom = true;
+                    self.refocus_composer(ctx);
                 }
             }
             Action::SearchGifs(query) => {
@@ -1697,6 +1912,7 @@ impl App {
                     self.picker = None;
                     self.scroll_to_bottom = true;
                     self.at_bottom = true;
+                    self.refocus_composer(ctx);
                 }
             }
             Action::PasteImage {
@@ -1740,6 +1956,8 @@ impl App {
                 self.backend.send(Command::SetPinned(chat, pinned));
             }
             Action::ShowDialog(dialog) => {
+                self.emoji_start = None;
+                self.mention_start = None;
                 if dialog == Dialog::PairWithPhone {
                     self.pair_phone.clear();
                 }
@@ -1755,6 +1973,7 @@ impl App {
             Action::CloseDialog => {
                 self.dialog = None;
                 self.contact_edit = None;
+                self.refocus_composer(ctx);
             }
             Action::EditContact(prefill) => {
                 self.contact_edit = Some(crate::util::split_name(&prefill));
@@ -1786,9 +2005,15 @@ impl App {
             Action::FocusSearch => {
                 self.sidebar_visible = true;
                 self.page = Page::Chats;
+                self.focus_composer = false;
                 self.focus_search = true;
+                self.emoji_start = None;
+                self.mention_start = None;
             }
-            Action::FocusComposer => self.focus_composer = true,
+            Action::FocusComposer => {
+                self.focus_search = false;
+                self.focus_composer = true;
+            }
             Action::ScrollToBottom => self.scroll_to_bottom = true,
             Action::ScrollTo(id) => {
                 self.scroll_to_bottom = false;
@@ -1978,14 +2203,17 @@ impl App {
             .unwrap_or_else(|p| p.into_inner()) = None;
         self.apply_theme(ctx);
         let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        let regained_focus = focused && !self.window_focused;
         // Mark messages received while hidden as read on window return.
-        if focused
-            && !self.window_focused
+        if regained_focus
             && self.page == Page::Chats
             && let Some(open) = self.open_chat.clone()
             && self.chat(&open).is_some_and(|chat| chat.unread > 0)
         {
             self.mark_read(&open);
+        }
+        if regained_focus {
+            self.refocus_composer(ctx);
         }
         self.window_focused = focused;
         // Close the window and continue headless when background mode is enabled.
@@ -2018,15 +2246,26 @@ impl App {
             .nth(at)
             .map_or(self.composer.len(), |(byte, _)| byte);
         self.composer.insert_str(byte, text);
+        self.set_composer_cursor(ctx, at + text.chars().count());
+    }
+
+    fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
+        let id = egui::Id::new("composer-text");
         if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
-            let after = at + text.chars().count();
             state
                 .cursor
                 .set_char_range(Some(egui::text::CCursorRange::one(
-                    egui::text::CCursor::new(after),
+                    egui::text::CCursor::new(at),
                 )));
             egui::TextEdit::store_state(ctx, id, state);
         }
+    }
+
+    fn remember_emoji(&mut self, emoji: &str) {
+        self.settings.recent_emoji.retain(|known| known != emoji);
+        self.settings.recent_emoji.insert(0, emoji.to_owned());
+        self.settings.recent_emoji.truncate(36);
+        self.mark_settings_dirty();
     }
 
     /// Handles dropped files and pasted images for the open chat.
@@ -2182,6 +2421,46 @@ fn compose_name(first: &str, last: &str) -> (Option<String>, Option<String>) {
     };
     let short = (!first.is_empty()).then(|| first.to_owned());
     (Some(full), short)
+}
+
+fn contains_mention_token(text: &str, user: &str) -> bool {
+    let token = format!("@{user}");
+    let mut rest = text;
+    while let Some(at) = rest.find(&token) {
+        let after = &rest[at + token.len()..];
+        if after
+            .chars()
+            .next()
+            .is_none_or(|character| !character.is_ascii_digit())
+        {
+            return true;
+        }
+        rest = &rest[at + 1..];
+    }
+    false
+}
+
+fn find_named_mention(text: &str, token: &str) -> Option<usize> {
+    text.match_indices(token).find_map(|(at, _)| {
+        let after = &text[at + token.len()..];
+        after
+            .chars()
+            .next()
+            .is_none_or(|character| !character.is_alphanumeric())
+            .then_some(at)
+    })
+}
+
+fn mention_refs(ids: &[String]) -> Vec<crate::model::MentionRef> {
+    ids.iter()
+        .filter_map(|id| {
+            let user = id.split('@').next()?.to_owned();
+            (!user.is_empty()).then(|| crate::model::MentionRef {
+                user,
+                id: id.clone(),
+            })
+        })
+        .collect()
 }
 
 pub fn wants_paste(input: &egui::InputState) -> bool {
@@ -2381,6 +2660,101 @@ mod tests {
         app.open_chat("1@s.whatsapp.net".into());
         assert_eq!(app.composer, "hello ada");
         assert_eq!(app.settings.last_chat.as_deref(), Some("1@s.whatsapp.net"));
+    }
+
+    #[test]
+    fn selected_mentions_become_wire_tokens_and_context_jids() {
+        let mut app = app();
+        let chat_id = "123@g.us";
+        let member = "491702222222@s.whatsapp.net";
+        let mut chat = Chat::new(chat_id.into(), "Group".into());
+        chat.participants.push(member.into());
+        app.chats.push(chat);
+        app.composer_mentions.push(ComposerMention {
+            id: member.into(),
+            name: "Mira Example".into(),
+        });
+
+        let (text, mentions) = app.encode_composer_mentions(chat_id, "hello @Mira Example".into());
+
+        assert_eq!(text, "hello @491702222222");
+        assert_eq!(mentions, vec![member]);
+    }
+
+    #[test]
+    fn existing_wire_mentions_survive_an_edit() {
+        let mut app = app();
+        let chat_id = "123@g.us";
+        let member = "491702222222@s.whatsapp.net";
+        let mut chat = Chat::new(chat_id.into(), "Group".into());
+        chat.participants.push(member.into());
+        app.chats.push(chat);
+
+        let (text, mentions) = app.encode_composer_mentions(chat_id, "still @491702222222!".into());
+
+        assert_eq!(text, "still @491702222222!");
+        assert_eq!(mentions, vec![member]);
+    }
+
+    #[test]
+    fn editing_a_selected_name_drops_its_mention() {
+        let mut app = app();
+        let chat_id = "123@g.us";
+        let member = "491702222222@s.whatsapp.net";
+        let mut chat = Chat::new(chat_id.into(), "Group".into());
+        chat.participants.push(member.into());
+        app.chats.push(chat);
+        app.composer_mentions.push(ComposerMention {
+            id: member.into(),
+            name: "Mira".into(),
+        });
+
+        let (text, mentions) = app.encode_composer_mentions(chat_id, "hello @Miranda".into());
+
+        assert_eq!(text, "hello @Miranda");
+        assert!(mentions.is_empty());
+    }
+
+    #[test]
+    fn returning_to_a_conversation_refocuses_the_composer() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.open_chat = Some("1@s.whatsapp.net".into());
+        app.page = Page::Settings;
+
+        app.apply(Action::Open(Page::Chats), &ctx);
+
+        assert!(app.focus_composer);
+    }
+
+    #[test]
+    fn recreating_the_window_refocuses_the_composer() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.open_chat = Some("1@s.whatsapp.net".into());
+
+        app.attach(&ctx);
+
+        assert!(app.focus_composer);
+    }
+
+    #[test]
+    fn returning_to_a_conversation_does_not_interrupt_search() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.open_chat = Some("1@s.whatsapp.net".into());
+        app.page = Page::Settings;
+        app.search = "ada".into();
+
+        app.apply(Action::Open(Page::Chats), &ctx);
+
+        assert!(!app.focus_composer);
+
+        app.search.clear();
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("chat-search")));
+        app.dialog = Some(Dialog::About);
+        app.apply(Action::CloseDialog, &ctx);
+        assert!(!app.focus_composer);
     }
 
     #[test]

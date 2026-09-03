@@ -518,6 +518,21 @@ pub enum Action {
     ClosePicker,
     /// Inserts an emoji at the composer cursor.
     InsertEmoji(String),
+    /// Replaces an active `:query` with its selected emoji.
+    InsertEmojiCompletion {
+        emoji: String,
+        start: usize,
+        end: usize,
+    },
+    CloseEmojiSuggestions,
+    /// Replaces the active `@` query with a selected group member.
+    InsertMention {
+        id: String,
+        name: String,
+        start: usize,
+        end: usize,
+    },
+    CloseMentions,
     SendSticker(PathBuf),
     /// Saves a sticker for the picker.
     SaveSticker(PathBuf),

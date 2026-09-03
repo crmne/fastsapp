@@ -20,7 +20,7 @@ struct Cli {
     demo: bool,
 
     /// Demo view: `chat`, `empty`, `settings`, `login`,
-    /// `pair`, `shortcuts`, `about`, `info`, `light`, or a comma-separated
+    /// `pair`, `shortcuts`, `about`, `info`, `mention`, `light`, or a comma-separated
     /// mix such as `chat,light`.
     #[cfg(feature = "demo")]
     #[arg(long)]

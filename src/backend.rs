@@ -52,6 +52,7 @@ pub enum Command {
         chat: ChatId,
         text: String,
         quoting: Option<String>,
+        mentions: Vec<String>,
     },
     /// Updates our typing state in a chat.
     Composing {
@@ -109,6 +110,7 @@ pub enum Command {
         chat: ChatId,
         id: String,
         text: String,
+        mentions: Vec<String>,
     },
     Revoke {
         chat: ChatId,
@@ -125,6 +127,7 @@ pub enum Command {
         chat: ChatId,
         paths: Vec<PathBuf>,
         caption: Option<String>,
+        mentions: Vec<String>,
     },
     /// Sends a clipboard image as straight-alpha RGBA.
     SendImage {
@@ -133,6 +136,7 @@ pub enum Command {
         height: u32,
         rgba: Vec<u8>,
         caption: Option<String>,
+        mentions: Vec<String>,
     },
     /// Syncs chat mute state. `Some(0)` is indefinite and `None` unmutes.
     SetMuted(ChatId, Option<i64>),

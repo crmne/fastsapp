@@ -32,6 +32,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     });
     // Escape cancels the topmost state. Menus handle Escape themselves.
     let menu_open = egui::Popup::is_any_open(ctx);
+    let search_focused = ctx.memory(|memory| memory.has_focus(egui::Id::new("chat-search")));
     let escape =
         !menu_open && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
     if escape {
@@ -41,6 +42,10 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.push(Action::CancelRecording);
         } else if app.picker.is_some() {
             actions.push(Action::ClosePicker);
+        } else if app.emoji_start.is_some() {
+            actions.push(Action::CloseEmojiSuggestions);
+        } else if app.mention_start.is_some() {
+            actions.push(Action::CloseMentions);
         } else if !app.pending.is_empty() {
             actions.push(Action::ClearPending);
         } else if app.editing.is_some() {
@@ -49,8 +54,13 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.push(Action::CancelReply);
         } else if app.page == Page::Settings {
             actions.push(Action::Open(Page::Chats));
-        } else if !app.search.is_empty() {
-            actions.push(Action::Search(String::new()));
+        } else if search_focused || !app.search.is_empty() {
+            if !app.search.is_empty() {
+                actions.push(Action::Search(String::new()));
+            }
+            if app.open_chat.is_some() {
+                actions.push(Action::FocusComposer);
+            }
         }
     }
     // Enter sends a recording because the text field is hidden.
@@ -80,7 +90,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                 Some(index) => (index as i64 + step).rem_euclid(visible.len() as i64) as usize,
                 None => 0,
             };
-            actions.push(Action::OpenChat(visible[next].id.clone()));
+            let next = visible[next].id.clone();
+            app.scroll_chat_into_view = Some(next.clone());
+            actions.push(Action::OpenChat(next));
         }
     }
     app.actions.extend(actions);
@@ -93,7 +105,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Enter", "Send (Shift+Enter for a new line)"),
     (
         "Escape",
-        "Close dialog, cancel recording, edit, reply, or search",
+        "Dismiss suggestions, cancel the current action, or return from search",
     ),
     ("Ctrl+V", "Paste text, or send a picture from the clipboard"),
     ("Ctrl+B", "Show or hide the chat list"),

@@ -158,20 +158,61 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
     }
     let row_height = theme::ROW_HEIGHT;
     let total = chats.len() + usize::from(show_archive_row);
-    egui::ScrollArea::vertical()
+    let mut scroll_area = egui::ScrollArea::vertical()
         .id_salt("chat-list")
-        .auto_shrink([false, false])
-        .show_rows(ui, row_height, total, |ui, range| {
-            for index in range {
-                if show_archive_row && index == 0 {
-                    archive_row(app, ui, archived);
-                    continue;
-                }
-                let chat = &chats[index - usize::from(show_archive_row)];
-                // Key by chat so an open menu survives list reordering.
-                ui.push_id(("chat", &chat.id), |ui| row(app, ui, chat));
+        .auto_shrink([false, false]);
+    let target_row = app.scroll_chat_into_view.as_ref().and_then(|target| {
+        chats
+            .iter()
+            .position(|chat| chat.id == *target)
+            .map(|index| index + usize::from(show_archive_row))
+    });
+    if let Some(target_row) = target_row {
+        let id = ui.make_persistent_id(egui::IdSalt::new("chat-list"));
+        let current = egui::scroll_area::State::load(ui.ctx(), id)
+            .unwrap_or_default()
+            .offset
+            .y;
+        let offset = row_scroll_offset(
+            current,
+            ui.available_height(),
+            target_row,
+            row_height,
+            ui.spacing().item_spacing.y,
+        );
+        scroll_area = scroll_area.vertical_scroll_offset(offset);
+        app.scroll_chat_into_view = None;
+    }
+    scroll_area.show_rows(ui, row_height, total, |ui, range| {
+        for index in range {
+            if show_archive_row && index == 0 {
+                archive_row(app, ui, archived);
+                continue;
             }
-        });
+            let chat = &chats[index - usize::from(show_archive_row)];
+            // Key by chat so an open menu survives list reordering.
+            ui.push_id(("chat", &chat.id), |ui| row(app, ui, chat));
+        }
+    });
+}
+
+/// Returns the smallest offset that fully reveals a fixed-height row.
+fn row_scroll_offset(
+    current: f32,
+    viewport_height: f32,
+    row: usize,
+    row_height: f32,
+    spacing: f32,
+) -> f32 {
+    let top = row as f32 * (row_height + spacing);
+    let bottom = top + row_height;
+    if top < current {
+        top
+    } else if bottom > current + viewport_height {
+        (bottom - viewport_height).max(0.0)
+    } else {
+        current
+    }
 }
 
 /// Search results grouped into chats, messages, and contacts.
@@ -197,7 +238,14 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
             if !chats.is_empty() {
                 section(ui, &palette, "Chats");
                 for chat in &chats {
-                    ui.push_id(("chat", &chat.id), |ui| row(app, ui, chat));
+                    let reveal = app.scroll_chat_into_view.as_deref() == Some(chat.id.as_str());
+                    let response = ui
+                        .push_id(("chat", &chat.id), |ui| row(app, ui, chat))
+                        .inner;
+                    if reveal {
+                        response.scroll_to_me(None);
+                        app.scroll_chat_into_view = None;
+                    }
                 }
             }
             if !hits.is_empty() {
@@ -429,7 +477,7 @@ fn archive_row(app: &mut App, ui: &mut egui::Ui, count: usize) {
     }
 }
 
-fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
+fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     let palette = app.palette;
     let title = app.chat_title(chat);
     let selected = app.open_chat.as_deref() == Some(chat.id.as_str());
@@ -586,6 +634,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             ui.set_min_width(190.0);
             context_menu(app, ui, chat, &menu_palette);
         });
+    response
 }
 
 fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette) {
@@ -639,5 +688,67 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     if widgets::menu_item(ui, palette, Some(Icon::Info), "Info") {
         app.actions
             .push(Action::ShowDialog(Dialog::ChatInfo(chat.id.clone())));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paths::AppDirs;
+    use crate::settings::Settings;
+
+    #[test]
+    fn alt_navigation_scrolls_the_destination_chat_into_view() {
+        let root = std::env::temp_dir().join(format!(
+            "fastsapp-chat-list-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let (mut app, _events) = App::headless(AppDirs::under(&root), Settings::default());
+        let mut first = String::new();
+        let mut last = String::new();
+        for index in 0..24 {
+            let id = format!("49170000{index:04}@s.whatsapp.net");
+            let mut chat = Chat::new(id.clone(), format!("Chat {index:02}"));
+            chat.last_activity = 100 - i64::from(index);
+            if index == 0 {
+                first.clone_from(&id);
+            }
+            last.clone_from(&id);
+            app.chats.push(chat);
+        }
+        app.open_chat = Some(first);
+
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(360.0, 240.0))),
+            events: vec![egui::Event::Key {
+                key: egui::Key::ArrowUp,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::ALT,
+            }],
+            ..Default::default()
+        };
+        let mut offset = 0.0;
+        let mut output = ctx.run_ui(input, |ui| {
+            super::super::keys::handle(&mut app, ui.ctx());
+            let scroll_id = ui.make_persistent_id(egui::IdSalt::new("chat-list"));
+            list(&mut app, ui);
+            offset = egui::scroll_area::State::load(ui.ctx(), scroll_id)
+                .expect("chat-list scroll state")
+                .offset
+                .y;
+        });
+        output.textures_delta.clear();
+
+        assert!(
+            app.actions.contains(&Action::OpenChat(last)),
+            "Alt+Up wraps to the last visible chat"
+        );
+        assert!(app.scroll_chat_into_view.is_none(), "reveal was consumed");
+        assert!(offset > 0.0, "the list moved down to reveal the last row");
     }
 }

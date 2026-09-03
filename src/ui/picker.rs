@@ -20,7 +20,10 @@ const CELL: f32 = 40.0;
 /// An emoji-grid heading or row.
 enum Row {
     Header(&'static str),
-    Emoji(Vec<&'static str>),
+    Emoji {
+        first: usize,
+        values: Vec<&'static str>,
+    },
 }
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
@@ -140,9 +143,15 @@ fn group_name(group: emojis::Group) -> &'static str {
 fn rows_for(app: &App, columns: usize) -> Vec<Row> {
     let query = app.picker_search.trim().to_lowercase();
     let mut rows = Vec::new();
-    let chunk = |rows: &mut Vec<Row>, list: Vec<&'static str>| {
+    let mut next = 0;
+    let mut chunk = |rows: &mut Vec<Row>, list: Vec<&'static str>| {
         for part in list.chunks(columns) {
-            rows.push(Row::Emoji(part.to_vec()));
+            let first = next;
+            next += part.len();
+            rows.push(Row::Emoji {
+                first,
+                values: part.to_vec(),
+            });
         }
     };
     if !query.is_empty() {
@@ -182,11 +191,66 @@ fn rows_for(app: &App, columns: usize) -> Vec<Row> {
     rows
 }
 
+fn take_plain_key(ui: &mut egui::Ui, key: Key) -> bool {
+    ui.input_mut(|input| {
+        let mut taken = false;
+        input.events.retain(|event| {
+            if taken {
+                return true;
+            }
+            let matches = matches!(
+                event,
+                egui::Event::Key {
+                    key: found,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if *found == key && *modifiers == Modifiers::NONE
+            );
+            taken |= matches;
+            !matches
+        });
+        taken
+    })
+}
+
+fn move_emoji_selection(selected: usize, count: usize, columns: usize, key: Key) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    let selected = selected.min(count - 1);
+    match key {
+        Key::ArrowLeft => selected.saturating_sub(1),
+        Key::ArrowRight => (selected + 1).min(count - 1),
+        Key::ArrowUp if selected >= columns => selected - columns,
+        Key::ArrowDown if selected + columns < count => selected + columns,
+        _ => selected,
+    }
+}
+
 fn emoji_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
+    let newly_opened = app.picker_focus;
+    let search_active =
+        app.picker_focus || ui.memory(|memory| memory.has_focus(egui::Id::new("emoji-search")));
+    let movement = search_active
+        .then(|| {
+            [
+                Key::ArrowLeft,
+                Key::ArrowRight,
+                Key::ArrowUp,
+                Key::ArrowDown,
+            ]
+            .into_iter()
+            .find(|key| take_plain_key(ui, *key))
+        })
+        .flatten();
+    let submit = search_active && take_plain_key(ui, Key::Enter);
     let mut search = app.picker_search.clone();
     let response = search_box(ui, palette, "emoji-search", &mut search, "Search emoji");
-    if search != app.picker_search {
+    let query_changed = search != app.picker_search;
+    if query_changed {
         app.picker_search = search;
+        app.emoji_selected = 0;
     }
     if app.picker_focus {
         app.picker_focus = false;
@@ -197,67 +261,146 @@ fn emoji_tab(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     let columns = ((width / CELL).floor() as usize).max(1);
     let cell = width / columns as f32;
     let rows = rows_for(app, columns);
+    let emoji_count = rows
+        .iter()
+        .map(|row| match row {
+            Row::Header(_) => 0,
+            Row::Emoji { values, .. } => values.len(),
+        })
+        .sum();
+    if let Some(key) = movement {
+        app.emoji_selected = move_emoji_selection(app.emoji_selected, emoji_count, columns, key);
+    } else if emoji_count == 0 {
+        app.emoji_selected = 0;
+    } else {
+        app.emoji_selected = app.emoji_selected.min(emoji_count - 1);
+    }
     let row_height = CELL;
-    let mut picked = None;
+    let mut picked = (submit && emoji_count > 0).then(|| {
+        rows.iter()
+            .filter_map(|row| match row {
+                Row::Header(_) => None,
+                Row::Emoji { values, .. } => Some(values.as_slice()),
+            })
+            .flatten()
+            .nth(app.emoji_selected)
+            .copied()
+            .expect("emoji selection is in range")
+            .to_owned()
+    });
     // `show_rows` must use the same zero spacing as the grid.
     ui.spacing_mut().item_spacing = Vec2::ZERO;
-    egui::ScrollArea::vertical()
+    let scroll_id = ui.make_persistent_id("emoji-grid");
+    let mut grid = egui::ScrollArea::vertical()
         .id_salt("emoji-grid")
-        .auto_shrink([false, false])
-        .show_rows(ui, row_height, rows.len(), |ui, range| {
-            for row in &rows[range] {
-                match row {
-                    Row::Header(label) => {
-                        let (rect, _) = ui.allocate_exact_size(
-                            vec2(ui.available_width(), row_height),
-                            Sense::hover(),
-                        );
-                        ui.painter().text(
-                            pos2(rect.left() + 4.0, rect.bottom() - 8.0),
-                            Align2::LEFT_BOTTOM,
-                            *label,
-                            theme::semibold(12.5),
-                            palette.secondary,
-                        );
-                    }
-                    Row::Emoji(list) => {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = Vec2::ZERO;
-                            for emoji in list {
-                                let (rect, response) =
-                                    ui.allocate_exact_size(vec2(cell, row_height), Sense::click());
-                                if ui.is_rect_visible(rect) {
-                                    if response.hovered() {
-                                        ui.painter().rect_filled(
-                                            rect.shrink(2.0),
-                                            6.0,
-                                            palette.surface_hover,
-                                        );
-                                    }
-                                    let line = widgets::line(
-                                        ui,
-                                        emoji,
-                                        theme::regular(24.0),
-                                        palette.text,
-                                        cell,
-                                        1,
+        .auto_shrink([false, false]);
+    if newly_opened || query_changed {
+        grid = grid.vertical_scroll_offset(0.0);
+    } else if movement.is_some()
+        && let Some(row) = rows.iter().position(|row| match row {
+            Row::Header(_) => false,
+            Row::Emoji { first, values } => {
+                (*first..*first + values.len()).contains(&app.emoji_selected)
+            }
+        })
+    {
+        let current =
+            egui::scroll_area::State::load(ui.ctx(), scroll_id).map_or(0.0, |state| state.offset.y);
+        let visible = ui.available_height();
+        let top = row as f32 * row_height;
+        let bottom = top + row_height;
+        let target = if top < current {
+            top
+        } else if bottom > current + visible {
+            bottom - visible
+        } else {
+            current
+        };
+        grid = grid.vertical_scroll_offset(target.max(0.0));
+    }
+    grid.show_rows(ui, row_height, rows.len(), |ui, range| {
+        for row in &rows[range] {
+            match row {
+                Row::Header(label) => {
+                    let (rect, _) = ui.allocate_exact_size(
+                        vec2(ui.available_width(), row_height),
+                        Sense::hover(),
+                    );
+                    ui.painter().text(
+                        pos2(rect.left() + 4.0, rect.bottom() - 8.0),
+                        Align2::LEFT_BOTTOM,
+                        *label,
+                        theme::semibold(12.5),
+                        palette.secondary,
+                    );
+                }
+                Row::Emoji { first, values } => {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::ZERO;
+                        for (offset, emoji) in values.iter().enumerate() {
+                            let selected = *first + offset == app.emoji_selected;
+                            let (rect, response) =
+                                ui.allocate_exact_size(vec2(cell, row_height), Sense::click());
+                            if ui.is_rect_visible(rect) {
+                                if selected {
+                                    ui.painter().rect_filled(
+                                        rect.shrink(2.0),
+                                        6.0,
+                                        palette.accent.gamma_multiply(0.22),
                                     );
-                                    line.paint(ui, rect.center() - line.size() / 2.0, palette.text);
+                                    ui.painter().rect_stroke(
+                                        rect.shrink(2.0),
+                                        6.0,
+                                        Stroke::new(1.0, palette.accent),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                } else if response.hovered() {
+                                    ui.painter().rect_filled(
+                                        rect.shrink(2.0),
+                                        6.0,
+                                        palette.surface_hover,
+                                    );
                                 }
-                                if response
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    picked = Some((*emoji).to_owned());
-                                }
+                                let line = widgets::line(
+                                    ui,
+                                    emoji,
+                                    theme::regular(24.0),
+                                    palette.text,
+                                    cell,
+                                    1,
+                                );
+                                line.paint(ui, rect.center() - line.size() / 2.0, palette.text);
                             }
-                        });
-                    }
+                            if response
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                app.emoji_selected = *first + offset;
+                                picked = Some((*emoji).to_owned());
+                            }
+                        }
+                    });
                 }
             }
-        });
+        }
+    });
     if let Some(emoji) = picked {
         app.actions.push(Action::InsertEmoji(emoji));
+    }
+}
+
+#[cfg(test)]
+mod emoji_tests {
+    use super::*;
+
+    #[test]
+    fn arrows_move_through_the_emoji_grid() {
+        assert_eq!(move_emoji_selection(0, 25, 10, Key::ArrowRight), 1);
+        assert_eq!(move_emoji_selection(1, 25, 10, Key::ArrowDown), 11);
+        assert_eq!(move_emoji_selection(11, 25, 10, Key::ArrowLeft), 10);
+        assert_eq!(move_emoji_selection(10, 25, 10, Key::ArrowUp), 0);
+        assert_eq!(move_emoji_selection(20, 25, 10, Key::ArrowDown), 20);
+        assert_eq!(move_emoji_selection(24, 25, 10, Key::ArrowRight), 24);
     }
 }
 

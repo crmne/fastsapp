@@ -1814,7 +1814,8 @@ impl Worker {
                 chat,
                 text,
                 quoting,
-            } => self.send_text(chat, text, quoting),
+                mentions,
+            } => self.send_text(chat, text, quoting, mentions),
             Command::Composing { chat, composing } => {
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
                     return;
@@ -1842,7 +1843,12 @@ impl Worker {
             }
             Command::Download { chat, message } => self.download(chat, message),
             Command::FetchAvatar { id, full } => self.fetch_avatar(id, full),
-            Command::EditText { chat, id, text } => self.edit_text(chat, id, text),
+            Command::EditText {
+                chat,
+                id,
+                text,
+                mentions,
+            } => self.edit_text(chat, id, text, mentions),
             Command::Revoke { chat, id } => self.revoke(chat, id),
             Command::DeleteLocal { chat, id } => {
                 if let Ok(true) = self.archive.delete_message(&chat, &id) {
@@ -1868,8 +1874,9 @@ impl Worker {
                 chat,
                 paths,
                 caption,
+                mentions,
             } => {
-                self.send_files(chat, paths, caption);
+                self.send_files(chat, paths, caption, mentions);
             }
             Command::SendImage {
                 chat,
@@ -1877,7 +1884,8 @@ impl Worker {
                 height,
                 rgba,
                 caption,
-            } => self.send_pasted_image(chat, width, height, rgba, caption),
+                mentions,
+            } => self.send_pasted_image(chat, width, height, rgba, caption, mentions),
             Command::Outbound { chat, row, raw } => self.outbound(chat, *row, raw),
             Command::SendSticker { chat, path } => self.send_sticker(chat, path),
             Command::SaveSticker { path } => match self.save_sticker(&path) {
@@ -2269,32 +2277,35 @@ impl Worker {
         }
     }
 
-    fn send_text(&mut self, chat: ChatId, text: String, quoting: Option<String>) {
+    fn send_text(
+        &mut self,
+        chat: ChatId,
+        text: String,
+        quoting: Option<String>,
+        mentions: Vec<String>,
+    ) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
         };
         let mut quoted_row = None;
-        let message = match quoting.as_deref().and_then(|id| {
+        let context = quoting.as_deref().and_then(|id| {
             let raw = self.archive.raw(&chat, id).ok().flatten()?;
             let quoted = wa::Message::decode_from_slice(&raw).ok()?;
             let row = self.archive.message(&chat, id).ok().flatten()?;
-            Some((quoted, row))
-        }) {
-            Some((quoted, row)) => {
-                let sender = Self::jid_of(&row.sender).unwrap_or_else(|| jid.clone());
-                let context = whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info(
-                    row.id.clone(),
-                    &sender,
-                    &jid,
-                    &jid,
-                    &quoted,
-                );
-                quoted_row = Some(row);
-                wa::Message::text_with_context(text.clone(), context)
-            }
-            None => wa::Message::text(text.clone()),
-        };
+            let sender = Self::jid_of(&row.sender).unwrap_or_else(|| jid.clone());
+            let context = whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info(
+                row.id.clone(),
+                &sender,
+                &jid,
+                &jid,
+                &quoted,
+            );
+            quoted_row = Some(row);
+            Some(context)
+        });
+        let message = outgoing_text(text.clone(), context, &mentions);
+        let mentions = self.mentions_of(&mentions);
         let id = client.generate_message_id();
         let row = Message {
             id: id.clone(),
@@ -2322,7 +2333,7 @@ impl Worker {
             }),
             reactions: Vec::new(),
             edited: false,
-            mentions: Vec::new(),
+            mentions,
             forwarded: false,
             thumbnail: None,
         };
@@ -2987,22 +2998,24 @@ impl Worker {
         }
     }
 
-    fn edit_text(&mut self, chat: ChatId, id: String, text: String) {
+    fn edit_text(&mut self, chat: ChatId, id: String, text: String, mentions: Vec<String>) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
         };
         let content = Content::text(text.clone());
-        if let Ok(true) = self.archive.set_content(&chat, &id, &content, true) {
+        let mention_rows = self.mentions_of(&mentions);
+        if let Ok(true) = self
+            .archive
+            .set_edited_text(&chat, &id, &content, &mention_rows)
+        {
             self.emit_message(&chat, &id);
             self.emit_chat(&chat);
         }
+        let message = outgoing_text(text, None, &mentions);
         let commands = self.commands.clone();
         tokio::spawn(async move {
-            if let Err(error) = client
-                .edit_message(jid, id.clone(), wa::Message::text(text))
-                .await
-            {
+            if let Err(error) = client.edit_message(jid, id.clone(), message).await {
                 let _ = commands.send(Command::Sent {
                     chat,
                     id: String::new(),
@@ -3038,7 +3051,13 @@ impl Worker {
         });
     }
 
-    fn send_files(&mut self, chat: ChatId, paths: Vec<PathBuf>, caption: Option<String>) {
+    fn send_files(
+        &mut self,
+        chat: ChatId,
+        paths: Vec<PathBuf>,
+        caption: Option<String>,
+        mentions: Vec<String>,
+    ) {
         for (index, path) in paths.into_iter().enumerate() {
             let Some(client) = self.client.clone() else {
                 self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
@@ -3050,6 +3069,11 @@ impl Worker {
             let me = self.me();
             // Attach the caption to the first file.
             let caption = if index == 0 { caption.clone() } else { None };
+            let mentions = if index == 0 {
+                mentions.clone()
+            } else {
+                Vec::new()
+            };
             tokio::spawn(async move {
                 let outcome = async {
                     let bytes = tokio::fs::read(&path)
@@ -3063,7 +3087,7 @@ impl Worker {
                         .map(|name| name.to_string_lossy().into_owned());
                     let prepared =
                         prepare_media(&client, bytes, &mime, file_name.as_deref(), false).await?;
-                    file_outbound(&client, &chat, &me, &dir, prepared, caption).await
+                    file_outbound(&client, &chat, &me, &dir, prepared, caption, mentions).await
                 }
                 .await;
                 match outcome {
@@ -3093,6 +3117,7 @@ impl Worker {
         height: u32,
         rgba: Vec<u8>,
         caption: Option<String>,
+        mentions: Vec<String>,
     ) {
         let Some(client) = self.client.clone() else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
@@ -3111,7 +3136,7 @@ impl Worker {
                 .await
                 .map_err(|error| error.to_string())??;
                 let prepared = prepare_media(&client, encoded, "image/jpeg", None, false).await?;
-                file_outbound(&client, &chat, &me, &dir, prepared, caption).await
+                file_outbound(&client, &chat, &me, &dir, prepared, caption, mentions).await
             }
             .await;
             match outcome {
@@ -3188,7 +3213,7 @@ impl Worker {
                 .await
                 .map_err(|error| error.to_string())??;
                 let prepared = prepare_voice(&client, bytes, seconds, waveform, context).await?;
-                file_outbound(&client, &chat, &me, &dir, prepared, None).await
+                file_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new()).await
             }
             .await;
             match outcome {
@@ -3245,7 +3270,7 @@ impl Worker {
                     .await
                     .map_err(|error| error.to_string())?;
                 let prepared = prepare_sticker(&client, bytes).await?;
-                file_outbound(&client, &chat, &me, &dir, prepared, None).await
+                file_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new()).await
             }
             .await;
             match outcome {
@@ -3295,7 +3320,7 @@ impl Worker {
                     video.width = Some(gif.width);
                     video.height = Some(gif.height);
                 }
-                file_outbound(&client, &chat, &me, &dir, prepared, None).await
+                file_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new()).await
             }
             .await;
             match outcome {
@@ -3448,6 +3473,21 @@ fn media(
 
 fn non_empty(text: &Option<String>) -> Option<String> {
     text.clone().filter(|text| !text.trim().is_empty())
+}
+
+/// Builds a text body with optional quote and mention context.
+fn outgoing_text(
+    text: String,
+    mut context: Option<wa::ContextInfo>,
+    mentions: &[String],
+) -> wa::Message {
+    if !mentions.is_empty() {
+        context.get_or_insert_default().mentioned_jid = mentions.to_vec();
+    }
+    match context {
+        Some(context) => wa::Message::text_with_context(text, context),
+        None => wa::Message::text(text),
+    }
 }
 
 /// Extracts quote and mention context from a message.
@@ -4125,6 +4165,7 @@ async fn file_outbound(
     dir: &Path,
     mut prepared: Prepared,
     caption: Option<String>,
+    mentions: Vec<String>,
 ) -> Result<(Message, Vec<u8>), String> {
     if let Some(caption) = caption.filter(|caption| !caption.trim().is_empty()) {
         match &mut prepared.content {
@@ -4142,6 +4183,12 @@ async fn file_outbound(
         if let Some(document) = prepared.message.document_message.as_option_mut() {
             document.caption = Some(caption);
         }
+    }
+    if !mentions.is_empty() {
+        prepared.message.set_context_info(wa::ContextInfo {
+            mentioned_jid: mentions.clone(),
+            ..Default::default()
+        });
     }
     let id = client.generate_message_id();
     let path = media_path(
@@ -4175,7 +4222,13 @@ async fn file_outbound(
         quoted: None,
         reactions: Vec::new(),
         edited: false,
-        mentions: Vec::new(),
+        mentions: mentions
+            .into_iter()
+            .filter_map(|id| {
+                let user = id.split('@').next()?.to_owned();
+                (!user.is_empty()).then_some(MentionRef { user, id })
+            })
+            .collect(),
         forwarded: false,
         thumbnail: prepared.thumbnail,
     };
@@ -4450,6 +4503,24 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(mentioned_of(&message), vec!["123456@lid".to_owned()]);
+    }
+
+    #[test]
+    fn outgoing_mentions_share_context_with_a_quote() {
+        let mentions = vec!["491702222222@s.whatsapp.net".to_owned()];
+        let message = outgoing_text(
+            "hello @491702222222".to_owned(),
+            Some(wa::ContextInfo {
+                stanza_id: Some("quoted".to_owned()),
+                ..Default::default()
+            }),
+            &mentions,
+        );
+
+        assert_eq!(message.text_content(), Some("hello @491702222222"));
+        let context = context_of(&message).expect("text context");
+        assert_eq!(context.stanza_id.as_deref(), Some("quoted"));
+        assert_eq!(context.mentioned_jid, mentions);
     }
 
     #[test]

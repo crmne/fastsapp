@@ -38,16 +38,22 @@ See **[fastsapp.rocks](https://fastsapp.rocks)** for downloads and guides.
   in the chat. The app normalizes quiet recordings and handles OGG/Opus
   without external tools.
 - **Send messages.** Press Enter to send text and Shift+Enter for a new line.
-  You can swap these keys in Settings. You can also reply, react, edit, delete,
-  and check when a message was sent, delivered, or read.
+  You can swap these keys in Settings. The composer is focused when you open
+  or return to a conversation; invoking search keeps focus in search, and
+  Escape clears search and returns to the composer. Type `:name` to autocomplete
+  an emoji without leaving the composer, or `@` in a group to mention a member.
+  Reply, react, edit, delete, and check when a message was sent, delivered, or
+  read.
 - **View attachments.** FastsApp downloads files up to 64 MB automatically or
   on click. Photos, stickers, GIFs, voice messages, audio, locations, contacts,
   polls, and link previews appear in the chat. Videos and documents open in
   their default desktop apps. If an attachment has expired, FastsApp asks your
   phone to upload it again.
 - **Emoji, GIF, and sticker picker.** Search emoji and GIFs, use recent emoji
-  and stickers, and save stickers with a right-click. GIF search needs a free
-  GIPHY API key unless the build includes one.
+  and stickers, and save stickers with a right-click. Emoji autocomplete and
+  picker search select their first match; use the arrow keys and Enter to
+  choose it. GIF search needs a free GIPHY API key unless the build includes
+  one.
 - **Sticker packs.** Import a pack from a `signal.art` link or `.wastickers`
   file. Animated packs remain animated. Packs are stored as WebP files on your
   computer.
@@ -70,8 +76,9 @@ See **[fastsapp.rocks](https://fastsapp.rocks)** for downloads and guides.
 - **Copy text.** Select part of a message or copy across messages in
   WhatsApp's `[time, date] Name:` format. Contact names and numbers are also
   selectable.
-- **Keyboard shortcuts.** `Ctrl+K` searches, `Alt+↑/↓` switches chats, `Esc`
-  cancels the current action, and `Ctrl+/` lists all shortcuts.
+- **Keyboard shortcuts.** `Ctrl+K` searches, `Alt+↑/↓` switches chats and
+  keeps the active chat visible in the list, `Esc` cancels the current action,
+  and `Ctrl+/` lists all shortcuts.
 - **Local storage.** Messages are stored in one SQLite file and attachments
   in the cache directory. Unlinking deletes both and removes this device from
   your phone.
