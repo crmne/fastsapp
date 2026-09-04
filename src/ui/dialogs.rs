@@ -1,6 +1,6 @@
 //! Shortcuts, account, linking, contact, and chat dialogs.
 
-use egui::{Align, CornerRadius, Frame, Layout, Margin, Stroke};
+use egui::{Align, CornerRadius, Frame, Layout, Margin, Sense, Stroke, pos2, vec2};
 
 use crate::app::App;
 use crate::model::{Action, Dialog};
@@ -33,6 +33,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::PairWithPhone => 380.0,
                 Dialog::NewContact => 380.0,
                 Dialog::ChatInfo(_) => 360.0,
+                Dialog::Forward { .. } => 420.0,
             });
             ui.spacing_mut().item_spacing.y = 8.0;
             match dialog {
@@ -42,10 +43,121 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::PairWithPhone => pair_with_phone(app, ui),
                 Dialog::NewContact => new_contact(app, ui),
                 Dialog::ChatInfo(id) => chat_info(app, ui, &id),
+                Dialog::Forward { chat, message } => forward(app, ui, &chat, &message),
             }
         });
     if response.should_close() {
         app.actions.push(Action::CloseDialog);
+    }
+}
+
+fn forward(app: &mut App, ui: &mut egui::Ui, from_chat: &str, message: &str) {
+    let palette = app.palette;
+    title(ui, app, "Forward message");
+    let width = ui.available_width();
+    let search = super::widgets::search_field(
+        ui,
+        &palette,
+        egui::Id::new("forward-search"),
+        &mut app.forward_search,
+        "Search chats",
+        width,
+    );
+    if ui.memory(|memory| memory.focused().is_none()) {
+        search.request_focus();
+    }
+    ui.add_space(4.0);
+
+    let needle = app.forward_search.trim().to_lowercase();
+    let mut chats: Vec<_> = app
+        .chats
+        .iter()
+        .filter(|chat| chat.kind != crate::model::ChatKind::Broadcast && !chat.read_only)
+        .filter(|chat| {
+            needle.is_empty()
+                || app.chat_title(chat).to_lowercase().contains(&needle)
+                || chat.phone().is_some_and(|phone| phone.contains(&needle))
+        })
+        .cloned()
+        .collect();
+    chats.sort_by_key(|chat| std::cmp::Reverse(chat.last_activity));
+
+    let row_height = 52.0;
+    let max_height = (ui.ctx().content_rect().height() - 220.0).clamp(row_height * 3.0, 420.0);
+    let mut destination = None;
+    egui::ScrollArea::vertical()
+        .id_salt("forward-chats")
+        .max_height(max_height)
+        .auto_shrink([false, true])
+        .show_rows(ui, row_height, chats.len(), |ui, range| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for chat in &chats[range] {
+                let title = app.chat_title(chat);
+                let (rect, response) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), row_height), Sense::click());
+                if ui.is_rect_visible(rect) {
+                    if response.hovered() {
+                        ui.painter().rect_filled(rect, 8.0, palette.surface_hover);
+                    }
+                    let avatar = egui::Rect::from_center_size(
+                        pos2(rect.left() + 23.0, rect.center().y),
+                        egui::Vec2::splat(38.0),
+                    );
+                    let picture = app.avatar(&chat.id);
+                    super::widgets::paint_avatar(
+                        ui,
+                        &palette,
+                        avatar,
+                        &title,
+                        &chat.id,
+                        picture.as_deref(),
+                    );
+                    let line = super::widgets::line(
+                        ui,
+                        &title,
+                        theme::medium(14.5),
+                        palette.text,
+                        rect.width() - 62.0,
+                        1,
+                    );
+                    line.paint(
+                        ui,
+                        pos2(rect.left() + 50.0, rect.center().y - line.size().y / 2.0),
+                        palette.text,
+                    );
+                    ui.painter().hline(
+                        (rect.left() + 50.0)..=rect.right(),
+                        rect.bottom() - 0.5,
+                        Stroke::new(1.0, palette.outline),
+                    );
+                }
+                if response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    destination = Some(chat.id.clone());
+                }
+            }
+        });
+    if chats.is_empty() {
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            theme::text(
+                ui,
+                "No writable chats found",
+                theme::regular(13.5),
+                palette.secondary,
+            );
+        });
+        ui.add_space(12.0);
+    }
+    if let Some(to_chat) = destination {
+        app.actions.push(Action::Forward {
+            from_chat: from_chat.to_owned(),
+            message: message.to_owned(),
+            to_chat,
+        });
     }
 }
 

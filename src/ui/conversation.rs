@@ -2183,6 +2183,16 @@ fn context_menu(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: 
     {
         actions.push(Action::Reply(message.id.clone()));
     }
+    if !matches!(
+        message.content,
+        Content::Revoked | Content::Unsupported { .. }
+    ) && widgets::menu_item(ui, &palette, Some(Icon::Forward), "Forward")
+    {
+        actions.push(Action::ShowDialog(Dialog::Forward {
+            chat: chat.clone(),
+            message: message.id.clone(),
+        }));
+    }
     let text = match &message.content {
         Content::Text { text, .. } => Some(text.clone()),
         Content::Image { caption, .. }

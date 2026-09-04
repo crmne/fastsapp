@@ -426,6 +426,11 @@ pub enum Dialog {
     /// Manually entered number for messaging or saving a contact.
     NewContact,
     ChatInfo(ChatId),
+    /// Chooses a destination for an archived message.
+    Forward {
+        chat: ChatId,
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -497,6 +502,12 @@ pub enum Action {
     /// Starts a reply to a message in the open chat.
     Reply(String),
     CancelReply,
+    /// Forwards an archived message to another chat.
+    Forward {
+        from_chat: ChatId,
+        message: String,
+        to_chat: ChatId,
+    },
     /// Loads an outgoing message into the composer for editing.
     Edit(String),
     CancelEdit,

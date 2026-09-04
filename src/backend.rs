@@ -54,6 +54,12 @@ pub enum Command {
         quoting: Option<String>,
         mentions: Vec<String>,
     },
+    /// Forwards an archived message to another chat.
+    Forward {
+        from_chat: ChatId,
+        message: String,
+        to_chat: ChatId,
+    },
     /// Updates our typing state in a chat.
     Composing {
         chat: ChatId,

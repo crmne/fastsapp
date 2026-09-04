@@ -1816,6 +1816,11 @@ impl Worker {
                 quoting,
                 mentions,
             } => self.send_text(chat, text, quoting, mentions),
+            Command::Forward {
+                from_chat,
+                message,
+                to_chat,
+            } => self.forward_message(from_chat, message, to_chat),
             Command::Composing { chat, composing } => {
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
                     return;
@@ -2347,6 +2352,68 @@ impl Worker {
                 .err()
                 .map(|error| error.to_string());
             let _ = commands.send(Command::Sent { chat, id, error });
+        });
+    }
+
+    fn forward_message(&mut self, from_chat: ChatId, message_id: String, to_chat: ChatId) {
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&to_chat)) else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            return;
+        };
+        let Ok(Some(source)) = self.archive.message(&from_chat, &message_id) else {
+            self.emit(Event::Error(
+                "This message is not stored on this computer".to_owned(),
+            ));
+            return;
+        };
+        if matches!(
+            source.content,
+            Content::Revoked | Content::Unsupported { .. }
+        ) {
+            self.emit(Event::Error("This message cannot be forwarded".to_owned()));
+            return;
+        }
+        let Ok(Some(raw)) = self.archive.raw(&from_chat, &message_id) else {
+            self.emit(Event::Error(
+                "The original message data is not available to forward".to_owned(),
+            ));
+            return;
+        };
+        let Ok(original) = wa::Message::decode_from_slice(&raw) else {
+            self.emit(Event::Error(
+                "The original message data could not be read".to_owned(),
+            ));
+            return;
+        };
+        // whatsapp-rust owns the forwarding rules: unwrap transient wrappers,
+        // strip quote chains and secrets, and retain reusable media metadata.
+        let message = *original.get_base_message().prepare_for_forward();
+        let id = client.generate_message_id();
+        let mentions = self.mentions_of(&mentioned_of(&message));
+        let thumbnail = thumbnail_of(&message).or_else(|| source.thumbnail.clone());
+        let row = forwarded_row(
+            source,
+            to_chat.clone(),
+            self.me(),
+            id.clone(),
+            crate::util::now(),
+            mentions,
+            thumbnail,
+        );
+        self.store_message(row, Some(message.encode_to_vec()), None);
+        let commands = self.commands.clone();
+        tokio::spawn(async move {
+            let options = SendOptions::default().with_message_id(id.clone());
+            let error = client
+                .send_message_with_options(jid, message, options)
+                .await
+                .err()
+                .map(|error| error.to_string());
+            let _ = commands.send(Command::Sent {
+                chat: to_chat,
+                id,
+                error,
+            });
         });
     }
 
@@ -3393,6 +3460,33 @@ impl Worker {
 }
 
 // --- free helpers ----------------------------------------------------------
+
+fn forwarded_row(
+    mut source: Message,
+    chat: ChatId,
+    sender: String,
+    id: String,
+    timestamp: i64,
+    mentions: Vec<MentionRef>,
+    thumbnail: Option<Vec<u8>>,
+) -> Message {
+    source.id = id;
+    source.chat = chat;
+    source.sender = sender;
+    source.sender_name = None;
+    source.from_me = true;
+    source.timestamp = timestamp;
+    source.status = Delivery::Pending;
+    source.delivered_at = None;
+    source.read_at = None;
+    source.quoted = None;
+    source.reactions.clear();
+    source.edited = false;
+    source.mentions = mentions;
+    source.forwarded = true;
+    source.thumbnail = thumbnail;
+    source
+}
 
 /// Fallback chat name from a phone number or bare id.
 fn fallback_name(id: &str) -> String {
@@ -4521,6 +4615,65 @@ mod tests {
         let context = context_of(&message).expect("text context");
         assert_eq!(context.stanza_id.as_deref(), Some("quoted"));
         assert_eq!(context.mentioned_jid, mentions);
+    }
+
+    #[test]
+    fn forwarded_rows_keep_content_but_reset_conversation_state() {
+        let source = Message {
+            id: "source".into(),
+            chat: "one@s.whatsapp.net".into(),
+            sender: "one@s.whatsapp.net".into(),
+            sender_name: Some("Ada".into()),
+            from_me: false,
+            timestamp: 10,
+            content: Content::text("hello"),
+            status: Delivery::Read,
+            delivered_at: Some(11),
+            read_at: Some(12),
+            quoted: Some(Quoted {
+                id: "quoted".into(),
+                sender: "two@s.whatsapp.net".into(),
+                sender_name: Some("Bob".into()),
+                summary: "earlier".into(),
+                mentions: Vec::new(),
+            }),
+            reactions: vec![Reaction {
+                sender: "two@s.whatsapp.net".into(),
+                from_me: false,
+                emoji: "👍".into(),
+            }],
+            edited: true,
+            mentions: Vec::new(),
+            forwarded: false,
+            thumbnail: Some(vec![1]),
+        };
+        let mention = MentionRef {
+            user: "3".into(),
+            id: "3@s.whatsapp.net".into(),
+        };
+
+        let forwarded = forwarded_row(
+            source,
+            "target@g.us".into(),
+            "me@s.whatsapp.net".into(),
+            "new".into(),
+            20,
+            vec![mention.clone()],
+            Some(vec![2]),
+        );
+
+        assert_eq!(forwarded.id, "new");
+        assert_eq!(forwarded.chat, "target@g.us");
+        assert_eq!(forwarded.sender, "me@s.whatsapp.net");
+        assert!(forwarded.from_me && forwarded.forwarded);
+        assert_eq!(forwarded.timestamp, 20);
+        assert_eq!(forwarded.status, Delivery::Pending);
+        assert!(forwarded.delivered_at.is_none() && forwarded.read_at.is_none());
+        assert!(forwarded.quoted.is_none() && forwarded.reactions.is_empty());
+        assert!(!forwarded.edited);
+        assert_eq!(forwarded.mentions, vec![mention]);
+        assert_eq!(forwarded.thumbnail, Some(vec![2]));
+        assert_eq!(forwarded.content, Content::text("hello"));
     }
 
     #[test]

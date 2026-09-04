@@ -20,7 +20,8 @@ layout similar to WhatsApp Web.
   messages in one SQLite file. History remains after restart, and older
   messages are fetched from your phone as you scroll.
 - **Sends common message types.** Send formatted text, replies, edits,
-  reactions, pictures, files, stickers, GIFs, and recorded voice messages.
+  reactions, forwards, pictures, files, stickers, GIFs, and recorded voice
+  messages.
   You can add captions to attachments before sending them.
 - **Plays media in the chat.** Voice messages, GIFs, and animated stickers
   play in place. The required audio and video decoders are built in.

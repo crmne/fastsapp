@@ -803,6 +803,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "info" => {
                 app.dialog = app.open_chat.clone().map(Dialog::ChatInfo);
             }
+            "forward" => {
+                app.dialog = app.open_chat.clone().map(|chat| Dialog::Forward {
+                    chat,
+                    message: "ada-format".to_owned(),
+                });
+            }
             "unlink" => app.dialog = Some(Dialog::ConfirmUnlink),
             "new-contact" => app.dialog = Some(Dialog::NewContact),
             "light" => {
@@ -1111,6 +1117,7 @@ mod tests {
             "shortcuts",
             "about",
             "info",
+            "forward",
             "unlink",
             "new-contact",
             "light",

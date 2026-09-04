@@ -42,8 +42,8 @@ See **[fastsapp.rocks](https://fastsapp.rocks)** for downloads and guides.
   or return to a conversation; invoking search keeps focus in search, and
   Escape clears search and returns to the composer. Type `:name` to autocomplete
   an emoji without leaving the composer, or `@` in a group to mention a member.
-  Reply, react, edit, delete, and check when a message was sent, delivered, or
-  read.
+  Reply, react, edit, forward, delete, and check when a message was sent,
+  delivered, or read.
 - **View attachments.** FastsApp downloads files up to 64 MB automatically or
   on click. Photos, stickers, GIFs, voice messages, audio, locations, contacts,
   polls, and link previews appear in the chat. Videos and documents open in

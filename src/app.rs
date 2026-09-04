@@ -208,6 +208,8 @@ pub struct App {
 
     pub page: Page,
     pub dialog: Option<Dialog>,
+    /// Chat filter in the forwarding destination dialog.
+    pub forward_search: String,
     /// Contact-name editor buffers.
     pub contact_edit: Option<(String, String)>,
     /// New-contact buffers and lookup state.
@@ -390,6 +392,7 @@ impl App {
             scroll_last_event: None,
             page: Page::Chats,
             dialog: None,
+            forward_search: String::new(),
             contact_edit: None,
             new_contact_phone: String::new(),
             new_contact_name: String::new(),
@@ -1696,6 +1699,19 @@ impl App {
                 self.focus_composer = true;
             }
             Action::CancelReply => self.reply_to = None,
+            Action::Forward {
+                from_chat,
+                message,
+                to_chat,
+            } => {
+                self.backend.send(Command::Forward {
+                    from_chat,
+                    message,
+                    to_chat,
+                });
+                self.dialog = None;
+                self.forward_search.clear();
+            }
             Action::Edit(id) => {
                 let text = self
                     .open_chat
@@ -1958,6 +1974,9 @@ impl App {
             Action::ShowDialog(dialog) => {
                 self.emoji_start = None;
                 self.mention_start = None;
+                if matches!(&dialog, Dialog::Forward { .. }) {
+                    self.forward_search.clear();
+                }
                 if dialog == Dialog::PairWithPhone {
                     self.pair_phone.clear();
                 }
@@ -1972,6 +1991,7 @@ impl App {
             }
             Action::CloseDialog => {
                 self.dialog = None;
+                self.forward_search.clear();
                 self.contact_edit = None;
                 self.refocus_composer(ctx);
             }
