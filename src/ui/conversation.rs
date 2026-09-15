@@ -857,7 +857,11 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                         crate::emoji::editor_job(text.as_str(), &format);
                                     job.wrap.max_width = wrap;
                                     clusters = found;
-                                    ui.fonts_mut(|fonts| fonts.layout_job(job))
+                                    let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                                    crate::bidi::restore_logical_order(std::sync::Arc::make_mut(
+                                        &mut galley,
+                                    ));
+                                    galley
                                 };
                                 let output = egui::TextEdit::multiline(&mut app.composer)
                                     .id(id)

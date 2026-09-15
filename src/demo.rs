@@ -162,6 +162,16 @@ const SAMPLES: &[Sample] = &[
         ],
     },
     Sample {
+        id: "972501234567@s.whatsapp.net",
+        name: "Yael",
+        minutes_ago: 60 * 3,
+        unread: 1,
+        pinned: false,
+        muted: false,
+        archived: false,
+        lines: &[(false, "הכלב הגדול קפץ"), (true, "OK הכלב end")],
+    },
+    Sample {
         id: "33612345678@s.whatsapp.net",
         name: "Dentist",
         minutes_ago: 60 * 24 * 12,

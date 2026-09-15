@@ -6,6 +6,7 @@ use egui::{
     Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 
+use crate::bidi;
 use crate::emoji;
 use crate::model::Delivery;
 use crate::theme::{self, Icon, Palette};
@@ -51,10 +52,8 @@ pub fn line(
         if max_rows == 1 { single } else { text },
         &format,
     );
-    Line {
-        galley: ui.painter().layout_job(job),
-        placements,
-    }
+    let galley = bidi::layout_job(ui, job);
+    Line { galley, placements }
 }
 
 /// Allocates one truncated line with color emoji.
@@ -263,7 +262,7 @@ pub fn menu_item_enabled(
             break_anywhere: true,
             overflow_character: Some('\u{2026}'),
         };
-        let galley = ui.painter().layout_job(job);
+        let galley = crate::bidi::layout_job(ui, job);
         ui.painter().galley(
             pos2(x, rect.center().y - galley.size().y / 2.0),
             galley,
