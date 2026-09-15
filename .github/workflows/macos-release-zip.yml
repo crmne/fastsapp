@@ -3,6 +3,8 @@ name: macOS Release zip
 
 on:
   workflow_dispatch:
+  push:
+    branches: [cursor/fix-rtl-word-order-e0a3]
 
 permissions:
   contents: read
