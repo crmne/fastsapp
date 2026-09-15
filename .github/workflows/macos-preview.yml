@@ -28,6 +28,19 @@ jobs:
       - name: Release binary
         run: cargo build --locked --release --features demo
       - name: App bundle
+        env:
+          PREVIEW_README: |
+            ZapFast RTL preview (ad-hoc signed, not a release).
+
+            Quick check without linking WhatsApp:
+              open ZapFast.app --args --demo
+            Then open the chat named Yael. The incoming line should read
+            הכלב הגדול קפץ (not קפץ הגדול הכלב).
+
+            If Gatekeeper blocks it: right-click the app, choose Open, confirm.
+            Or: xattr -cr ZapFast.app && open ZapFast.app --args --demo
+
+            Built with the demo feature; omit --demo to use a real linked session.
         run: |
           mkdir -p dist
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)-rtl-preview"
@@ -35,18 +48,7 @@ jobs:
             target/release/zapfast \
             dist/ZapFast.app \
             "$version"
-          python3 -c 'from pathlib import Path; Path("dist/README.txt").write_text("""ZapFast RTL preview (ad-hoc signed, not a release).
-
-Quick check without linking WhatsApp:
-  open ZapFast.app --args --demo
-Then open the chat named Yael. The incoming line should read
-הכלב הגדול קפץ (not קפץ הגדול הכלב).
-
-If Gatekeeper blocks it: right-click the app, choose Open, confirm.
-Or: xattr -cr ZapFast.app && open ZapFast.app --args --demo
-
-Built with the demo feature; omit --demo to use a real linked session.
-""")'
+          printf '%s' "$PREVIEW_README" > dist/README.txt
           ditto -c -k --keepParent dist/ZapFast.app dist/ZapFast-rtl-preview-macos.zip
       - uses: actions/upload-artifact@v7
         with:
