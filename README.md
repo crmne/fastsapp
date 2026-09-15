@@ -39,8 +39,9 @@ See **[zapfast.rocks](https://zapfast.rocks)** for downloads and guides.
   do not change that list. If the original recipients are unknown, ZapFast
   waits for the phone's aggregate status instead of guessing from one reader.
 - **WhatsApp formatting.** Bold, italic, strikethrough, code, lists, quotes,
-  mentions, and link previews are supported. Links are clickable. RTL scripts
-  such as Hebrew and Arabic keep correct word order. Emoji use the desktop's
+  mentions, and link previews are supported. Links are clickable. Hebrew and
+  Arabic RTL paragraphs keep logical word order by reordering font runs; this
+  is not a full Unicode Bidirectional Algorithm. Emoji use the desktop's
   color emoji font, with a bundled fallback, and emoji-only messages are larger.
 - **Send attachments with captions.** Paste a picture, drop files, or use the
   file picker. They stay in the composer until you send them or press Escape.
