@@ -858,7 +858,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
                                     job.wrap.max_width = wrap;
                                     clusters = found;
                                     let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-                                    crate::bidi::restore_logical_order(std::sync::Arc::make_mut(
+                                    crate::bidi::reorder_rtl_runs(std::sync::Arc::make_mut(
                                         &mut galley,
                                     ));
                                     galley

@@ -1,77 +1,125 @@
-//! Work around egui's missing bidirectional layout for RTL scripts.
+//! Paragraph-level run order for RTL scripts.
 //!
-//! egui 0.36 shapes each font run through harfrust with a guessed direction.
-//! Hebrew and Arabic runs are shaped RTL, which reverses glyph order within
-//! the run, but egui still places runs left-to-right and does not run the
-//! Unicode Bidirectional Algorithm. Inter has no Hebrew/Arabic coverage, so
-//! spaces stay on Inter while letters fall back to a script face: each word
-//! becomes its own RTL run and appears with its letters reversed.
+//! egui 0.36 shapes each font run with harfrust (within-run RTL shaping is
+//! already correct) and then places those runs left-to-right. Inter has no
+//! Hebrew/Arabic coverage, so spaces stay on Inter while letters fall back to
+//! another face. Each word is its own RTL run. Laid out LTR, the first logical
+//! word sits on the left; a Hebrew reader starting from the right reads the
+//! last word first (`הכלב הגדול קפץ` reads as `קפץ הגדול הכלב`).
 //!
-//! After layout, reverse each visible strong-RTL glyph run (and reattach its
-//! mesh) so characters paint in logical order. `LayoutJob` text is unchanged,
-//! so selection and copy keep the original string. Full paragraph-level bidi
-//! (mixed embeddings, mirroring, Arabic joining in visual order) still needs
-//! egui support; this only undoes the per-run letter reversal.
+//! After line breaking, reverse the order of runs on an RTL paragraph and
+//! leave glyphs inside each run alone. `LayoutJob` text and glyph vec order
+//! stay as laid out, so selection and copy are unchanged.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use egui::epaint::text::{Galley, Glyph};
 use egui::epaint::{Mesh, Vec2};
 
-/// Lays out `job` and restores logical order for RTL script runs.
+/// Lays out `job` and reorders RTL paragraph runs for visual word order.
 pub fn layout_job(ui: &egui::Ui, job: egui::text::LayoutJob) -> std::sync::Arc<Galley> {
     let mut galley = ui.painter().layout_job(job);
-    restore_logical_order(std::sync::Arc::make_mut(&mut galley));
+    reorder_rtl_runs(std::sync::Arc::make_mut(&mut galley));
     galley
 }
 
-/// Restores logical character order in a laid-out galley.
-pub fn restore_logical_order(galley: &mut Galley) {
+/// Places RTL-paragraph runs in visual order without touching within-run shaping.
+pub fn reorder_rtl_runs(galley: &mut Galley) {
+    if !paragraph_rtl(galley.text()) {
+        return;
+    }
     for placed in &mut galley.rows {
         let row = Arc::make_mut(&mut placed.row);
-        restore_row(&mut row.glyphs, &mut row.visuals.mesh);
+        reorder_row(&mut row.glyphs, &mut row.visuals.mesh);
         row.visuals.mesh_bounds = row.visuals.mesh.calc_bounds();
     }
 }
 
-fn restore_row(glyphs: &mut [Glyph], mesh: &mut Mesh) {
+fn reorder_row(glyphs: &mut [Glyph], mesh: &mut Mesh) {
+    let runs = split_runs(glyphs);
+    if runs.len() < 2 || !rtl_runs_placed_ltr(glyphs, &runs) {
+        return;
+    }
+
+    let packed: Vec<(f32, Vec<egui::Pos2>)> = runs
+        .iter()
+        .map(|run| {
+            let slice = &glyphs[run.clone()];
+            let origin = min_x(slice);
+            let width = slice
+                .iter()
+                .map(Glyph::max_x)
+                .fold(f32::NEG_INFINITY, f32::max)
+                - origin;
+            let rel = slice
+                .iter()
+                .map(|glyph| egui::Pos2::new(glyph.pos.x - origin, glyph.pos.y))
+                .collect();
+            (width.max(0.0), rel)
+        })
+        .collect();
+
+    let mut x = min_x(glyphs);
+    for (run, (width, rel)) in runs.iter().rev().zip(packed.iter().rev()) {
+        for (glyph, rel_pos) in glyphs[run.clone()].iter_mut().zip(rel) {
+            let new_pos = egui::Pos2::new(x + rel_pos.x, rel_pos.y);
+            let delta = new_pos.to_vec2() - glyph.pos.to_vec2();
+            glyph.pos = new_pos;
+            shift_glyph_mesh(mesh, glyph, delta);
+        }
+        x += width;
+    }
+}
+
+/// Font-split RTL words are concatenated in logical (LTR) x order. A single
+/// harfrust RTL line is already visual order; reversing that again would undo it.
+/// Glyph vec order stays LTR after we move positions, so this is also idempotent.
+fn rtl_runs_placed_ltr(glyphs: &[Glyph], runs: &[Range<usize>]) -> bool {
+    let mut xs = Vec::new();
+    for run in runs {
+        if !is_rtl_item(&glyphs[run.start]) {
+            continue;
+        }
+        let slice = &glyphs[run.clone()];
+        if !slice.iter().any(is_rtl_letter) {
+            continue;
+        }
+        xs.push(min_x(slice));
+    }
+    xs.len() >= 2 && xs.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+fn min_x(glyphs: &[Glyph]) -> f32 {
+    glyphs
+        .iter()
+        .map(|glyph| glyph.pos.x)
+        .fold(f32::INFINITY, f32::min)
+}
+
+fn split_runs(glyphs: &[Glyph]) -> Vec<Range<usize>> {
+    let mut runs = Vec::new();
     let mut index = 0;
     while index < glyphs.len() {
-        if is_visible_rtl(glyphs[index]) {
-            let start = index;
-            index += 1;
-            while index < glyphs.len() && continues_rtl_run(glyphs[index]) {
-                index += 1;
-            }
-            reverse_visible_run(&mut glyphs[start..index], mesh);
-        } else {
+        let rtl = is_rtl_item(&glyphs[index]);
+        let start = index;
+        index += 1;
+        while index < glyphs.len() && is_rtl_item(&glyphs[index]) == rtl {
             index += 1;
         }
+        runs.push(start..index);
     }
+    runs
 }
 
-fn is_visible_rtl(glyph: Glyph) -> bool {
-    glyph.advance_width > 0.01 && is_rtl(glyph.chr)
-}
-
-fn continues_rtl_run(glyph: Glyph) -> bool {
-    if glyph.advance_width <= 0.01 {
-        return false;
-    }
+/// Script run membership. Diacritics (often ~0 advance) stay with the letter;
+/// never early-out on `advance_width`.
+fn is_rtl_item(glyph: &Glyph) -> bool {
     is_rtl(glyph.chr) || is_nonspacing_mark(glyph.chr)
 }
 
-fn reverse_visible_run(glyphs: &mut [Glyph], mesh: &mut Mesh) {
-    if glyphs.len() < 2 {
-        return;
-    }
-    let positions: Vec<egui::Pos2> = glyphs.iter().map(|glyph| glyph.pos).collect();
-    glyphs.reverse();
-    for (glyph, &pos) in glyphs.iter_mut().zip(&positions) {
-        let delta = pos.to_vec2() - glyph.pos.to_vec2();
-        glyph.pos = pos;
-        shift_glyph_mesh(mesh, glyph, delta);
-    }
+fn is_rtl_letter(glyph: &Glyph) -> bool {
+    glyph.advance_width > 0.01 && is_rtl(glyph.chr) && !is_nonspacing_mark(glyph.chr)
 }
 
 fn shift_glyph_mesh(mesh: &mut Mesh, glyph: &Glyph, delta: Vec2) {
@@ -83,6 +131,24 @@ fn shift_glyph_mesh(mesh: &mut Mesh, glyph: &Glyph, delta: Vec2) {
     for vertex in &mut mesh.vertices[start..end] {
         vertex.pos += delta;
     }
+}
+
+fn paragraph_rtl(text: &str) -> bool {
+    text.chars().find_map(strong_rtl).unwrap_or(false)
+}
+
+fn strong_rtl(c: char) -> Option<bool> {
+    if is_rtl(c) && !is_nonspacing_mark(c) {
+        Some(true)
+    } else if is_ltr(c) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn is_ltr(c: char) -> bool {
+    c.is_ascii_alphabetic() || c.is_ascii_digit() || ('\u{00C0}'..='\u{024F}').contains(&c)
 }
 
 /// Strong right-to-left letters (Unicode bidi classes R and AL).
@@ -116,9 +182,7 @@ mod tests {
     use egui::{Color32, FontId, Pos2, vec2};
     use std::sync::Arc;
 
-    /// Inter plus a face that covers Hebrew/Arabic, matching the app's fallback
-    /// split (spaces stay on Inter; letters go to another font).
-    fn layout_like_app(text: &str) -> Galley {
+    fn layout_raw(text: &str) -> Galley {
         const CANDIDATES: &[&str] = &[
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -134,25 +198,22 @@ mod tests {
             .iter()
             .copied()
             .find(|path| std::path::Path::new(path).is_file())
-            .expect("install a Hebrew/Arabic-capable sans (DejaVu, Liberation, Arial) for RTL layout tests");
-        layout_with_fallback(text, path, "rtl-fallback")
-    }
-
-    fn layout_with_fallback(text: &str, fallback_path: &str, fallback_name: &str) -> Galley {
+            .expect(
+                "install a Hebrew/Arabic-capable sans (DejaVu, Liberation, Arial) for RTL layout tests",
+            );
         let ctx = egui::Context::default();
         let mut fonts = FontDefinitions::default();
         let inter = include_bytes!("../assets/fonts/InterVariable.ttf");
         fonts
             .font_data
             .insert("inter".into(), Arc::new(FontData::from_static(inter)));
-        let face = std::fs::read(fallback_path)
-            .unwrap_or_else(|error| panic!("read {fallback_path}: {error}"));
+        let face = std::fs::read(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
         fonts
             .font_data
-            .insert(fallback_name.into(), Arc::new(FontData::from_owned(face)));
+            .insert("rtl-fallback".into(), Arc::new(FontData::from_owned(face)));
         fonts.families.insert(
             FontFamily::Proportional,
-            vec!["inter".into(), fallback_name.into()],
+            vec!["inter".into(), "rtl-fallback".into()],
         );
         fonts
             .families
@@ -176,59 +237,164 @@ mod tests {
             },
         );
         output.textures_delta.clear();
-        let mut galley = galley.into_inner().expect("galley");
-        // Without the restore, Inter+script fallback reverses letters in each word.
-        let broken: String = galley.rows[0]
-            .glyphs
-            .iter()
-            .filter(|glyph| glyph.advance_width > 0.01)
-            .map(|glyph| glyph.chr)
-            .collect();
-        assert_ne!(
-            broken, text,
-            "egui RTL shaping should reverse letters before our restore"
-        );
-        if text.chars().any(is_rtl) {
-            assert_ne!(
-                broken, text,
-                "egui RTL shaping should reverse letters before our restore"
-            );
-        }
-        restore_logical_order(Arc::make_mut(&mut galley));
+        let galley = galley.into_inner().expect("galley");
         Arc::try_unwrap(galley).unwrap_or_else(|arc| (*arc).clone())
     }
 
-    fn visible_text(galley: &Galley) -> String {
-        galley.rows[0]
+    fn layout_fixed(text: &str) -> Galley {
+        let mut galley = layout_raw(text);
+        reorder_rtl_runs(&mut galley);
+        galley
+    }
+
+    /// Visible RTL letter groups in left-to-right x order (word/run metric).
+    fn rtl_words_ltr(galley: &Galley) -> Vec<Vec<char>> {
+        let glyphs = &galley.rows[0].glyphs;
+        let mut words = Vec::new();
+        for run in split_runs(glyphs) {
+            if !is_rtl_item(&glyphs[run.start]) {
+                continue;
+            }
+            let mut letters = Vec::new();
+            let mut x = f32::INFINITY;
+            for glyph in &glyphs[run] {
+                if is_rtl_letter(glyph) {
+                    x = x.min(glyph.pos.x);
+                    letters.push(glyph.chr);
+                }
+            }
+            if !letters.is_empty() {
+                words.push((x, letters));
+            }
+        }
+        words.sort_by(|a, b| a.0.total_cmp(&b.0));
+        words.into_iter().map(|(_, letters)| letters).collect()
+    }
+
+    fn sorted(letters: &[char]) -> Vec<char> {
+        let mut letters = letters.to_vec();
+        letters.sort_unstable();
+        letters
+    }
+
+    fn charset(word: &str) -> Vec<char> {
+        sorted(
+            &word
+                .chars()
+                .filter(|c| is_rtl(*c) && !is_nonspacing_mark(*c))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn visible_by_x(galley: &Galley) -> Vec<char> {
+        let mut glyphs: Vec<_> = galley.rows[0]
             .glyphs
             .iter()
             .filter(|glyph| glyph.advance_width > 0.01)
-            .map(|glyph| glyph.chr)
-            .collect()
+            .cloned()
+            .collect();
+        glyphs.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x));
+        glyphs.into_iter().map(|glyph| glyph.chr).collect()
     }
 
     #[test]
-    fn hebrew_words_keep_logical_letter_order() {
+    fn hebrew_word_order_is_ltr_before_reorder() {
         let logical = "הכלב הגדול קפץ";
-        let galley = layout_like_app(logical);
-        assert_eq!(visible_text(&galley), logical);
+        let galley = layout_raw(logical);
+        let words = rtl_words_ltr(&galley);
+        assert_eq!(
+            words.len(),
+            3,
+            "Inter fallback should split on spaces: {words:?}"
+        );
+        assert_eq!(
+            sorted(&words[0]),
+            charset("הכלב"),
+            "failure mode: first logical word is leftmost, so reading RTL hits the last word first"
+        );
+        assert_eq!(sorted(&words[2]), charset("קפץ"));
         assert_eq!(galley.text(), logical);
     }
 
     #[test]
-    fn mixed_ltr_and_hebrew_keeps_each_side_readable() {
+    fn hebrew_words_read_rtl_after_run_reorder() {
+        let logical = "הכלב הגדול קפץ";
+        let before = layout_raw(logical);
+        let before_words = rtl_words_ltr(&before);
+        let mut galley = before.clone();
+        reorder_rtl_runs(&mut galley);
+        let after = rtl_words_ltr(&galley);
+        assert_eq!(sorted(&after[0]), charset("קפץ"), "{after:?}");
+        assert_eq!(sorted(&after[1]), charset("הגדול"));
+        assert_eq!(sorted(&after[2]), charset("הכלב"));
+        let dog = before_words
+            .iter()
+            .find(|word| sorted(word) == charset("הכלב"))
+            .expect("dog");
+        let dog_after = after
+            .iter()
+            .find(|word| sorted(word) == charset("הכלב"))
+            .expect("dog after");
+        assert_eq!(
+            dog, dog_after,
+            "within-run shaping must stay (do not reverse letters inside a word)"
+        );
+        assert_eq!(galley.text(), logical);
+        reorder_rtl_runs(&mut galley);
+        assert_eq!(
+            rtl_words_ltr(&galley),
+            after,
+            "run reorder must be idempotent"
+        );
+    }
+
+    #[test]
+    fn mixed_ltr_paragraph_keeps_latin_on_the_left() {
         let text = "OK הכלב end";
-        let galley = layout_like_app(text);
-        assert_eq!(visible_text(&galley), text);
+        let galley = layout_fixed(text);
+        let visible = visible_by_x(&galley);
+        assert_eq!(visible.first().copied(), Some('O'));
+        assert_eq!(visible.last().copied(), Some('d'));
+        let words = rtl_words_ltr(&galley);
+        assert_eq!(words.len(), 1);
+        assert_eq!(sorted(&words[0]), charset("הכלב"));
         assert_eq!(galley.text(), text);
     }
 
     #[test]
-    fn arabic_letters_keep_logical_order() {
+    fn arabic_words_read_rtl_after_run_reorder() {
         let logical = "مرحبا بالعالم";
-        let galley = layout_like_app(logical);
-        assert_eq!(visible_text(&galley), logical);
+        let galley = layout_fixed(logical);
+        let words = rtl_words_ltr(&galley);
+        assert!(
+            words.len() >= 2,
+            "expected space-split Arabic runs, got {words:?}"
+        );
+        assert_eq!(sorted(words.first().unwrap()), charset("بالعالم"));
+        assert_eq!(sorted(words.last().unwrap()), charset("مرحبا"));
         assert_eq!(galley.text(), logical);
+    }
+
+    #[test]
+    fn hebrew_niqqud_stays_in_the_letter_run() {
+        let logical = "שָׁלוֹם עוֹלָם";
+        let galley = layout_fixed(logical);
+        let glyphs = &galley.rows[0].glyphs;
+        let mark_runs = split_runs(glyphs).into_iter().filter(|run| {
+            glyphs[run.clone()]
+                .iter()
+                .any(|glyph| is_nonspacing_mark(glyph.chr))
+        });
+        for run in mark_runs {
+            assert!(
+                glyphs[run].iter().any(is_rtl_letter),
+                "diacritics must stay with their letter run (no advance_width early-out)"
+            );
+        }
+        let words = rtl_words_ltr(&galley);
+        assert_eq!(words.len(), 2, "{words:?}");
+        assert_eq!(sorted(&words[0]), charset("עוֹלָם"));
+        assert_eq!(sorted(&words[1]), charset("שָׁלוֹם"));
     }
 
     #[test]
@@ -236,6 +402,10 @@ mod tests {
         assert!(is_rtl('א'));
         assert!(is_rtl('ب'));
         assert!(!is_rtl('A'));
+        assert!(!is_rtl(' '));
+        assert!(paragraph_rtl("הכלב הגדול קפץ"));
+        assert!(!paragraph_rtl("OK הכלב end"));
+        assert!(is_nonspacing_mark('\u{05B8}'));
         assert!(!is_rtl(' '));
     }
 }
