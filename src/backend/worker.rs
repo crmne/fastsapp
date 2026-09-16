@@ -90,6 +90,25 @@ async fn receipts_allowed(
     }
 }
 
+/// Log-safe summary of a link status: the QR payload, the pairing code, and
+/// the pairing phone number never reach the log, which ships in bug reports;
+/// only their presence is reported.
+fn status_summary(status: &LinkStatus) -> String {
+    match status {
+        LinkStatus::Unlinked {
+            qr,
+            pair_code,
+            pairing_phone,
+        } => format!(
+            "Unlinked {{ qr: {}, pair_code: {}, pairing_phone: {} }}",
+            qr.is_some(),
+            pair_code.is_some(),
+            pairing_phone.is_some()
+        ),
+        other => format!("{other:?}"),
+    }
+}
+
 /// Downloadable recent sticker from the phone.
 struct PhoneSticker(wa::StickerMetadata);
 
@@ -379,7 +398,7 @@ impl Worker {
 
     fn set_status(&mut self, status: LinkStatus) {
         if self.status != status {
-            log::info!("link: {status:?}");
+            log::info!("link: {}", status_summary(&status));
             self.status = status.clone();
             self.emit(Event::Link(status));
         }
@@ -4814,6 +4833,23 @@ mod tests {
         );
         assert_eq!(fallback_name("1-2@g.us"), "Group");
         assert_eq!(fallback_name("42@lid"), "42");
+    }
+
+    #[test]
+    fn link_status_summary_redacts_pairing_secrets() {
+        let status = LinkStatus::Unlinked {
+            qr: Some("2@secret-qr-payload".into()),
+            pair_code: Some("12345678".into()),
+            pairing_phone: Some("905005050505".into()),
+        };
+        let summary = status_summary(&status);
+        assert!(!summary.contains("secret-qr-payload"));
+        assert!(!summary.contains("12345678"));
+        assert!(!summary.contains("905005050505"));
+        assert!(summary.contains("qr: true"));
+        assert!(summary.contains("pair_code: true"));
+        assert!(summary.contains("pairing_phone: true"));
+        assert_eq!(status_summary(&LinkStatus::Connecting), "Connecting");
     }
 
     #[test]
